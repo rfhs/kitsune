@@ -1,0 +1,13 @@
+[Unit]
+Description=Kitsune Fox as a Service
+After=bluetooth.service
+Wants=bluetooth.service
+
+[Service]
+Type=oneshot
+ExecStart=/opt/rfctf/bin/kitsune start
+ExecStop=/opt/rfctf/bin/kitsune stop
+TimeoutStartSec=infinity
+
+[Install]
+WantedBy=multi-user.target

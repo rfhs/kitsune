@@ -1,0 +1,21 @@
+need a way to change bluetooth mac for blue_sonar style
+backburner streaming bluetooth classic audio to self
+ibeacon with changable power, beacon rate, mac, ibeacon content, website? 
+
+#make discoverable
+hciconfig hci0 iscan (noscan to disable)
+#make pairable
+hciconfig hci0 pscan (noscan to disable)
+##MUST BE DISABLED, persists over reboot
+
+#change mac
+bdaddr -i hci0 -r MAC
+hciconfig hci0 reset (mac persists reset AND requires it)
+
+#change name
+hciconfig hci0 name BLAH (name persists reset)
+
+#btle advertising
+hciconfig hci0 leadv 3 (non connectable undirected advertising)
+hciconfig hci0 leadv 0 (connectable undirected advertising)
+hciconfig hci0 noleadv (stop advertising)

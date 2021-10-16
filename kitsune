@@ -1,0 +1,48 @@
+#!/bin/sh
+
+NAME=kitsune
+LOGFILE="/var/log/${NAME}.log"
+
+bluetooth() {
+  case "${1}" in
+    start)
+      ;;
+    stop)
+      hciconfig "${bluetooth}" noscan
+      ;;
+    *)
+      printf "FATAL: bluetooth function called without start or stop.\n"
+      ;;
+}
+
+main() {
+  case "${1}" in
+    start)
+      printf "[+] Starting %s...\n" "${NAME}"
+
+      #first, shut up
+      rfkill block all
+
+      printf "[+] %s completed.\n" "${NAME}"
+      exit 0
+      ;;
+    stop)
+      printf "[+] Stopping %s...\n" "${NAME}"
+
+      #quiet, we are shutting down
+      rfkill block all
+
+      #it might be a restart, so shut everything down
+
+      printf "[+] %s stopped.\n" "${NAME}"
+      exit 0
+      ;;
+
+
+    *)
+      echo "usage: ${0} {start|stop}"
+      exit 1
+  esac
+}
+
+main "${1}" 2>&1 | tee -a "${LOGFILE}"
