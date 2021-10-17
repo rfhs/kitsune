@@ -4,10 +4,10 @@ After=bluetooth.service
 Wants=bluetooth.service
 
 [Service]
-EnvironmentFile=/opt/rfctf/conf/kitsune
+EnvironmentFile=/opt/rfctf/kitsune.conf
 Type=oneshot
-ExecStart=/opt/rfctf/bin/kitsune start
-ExecStop=/opt/rfctf/bin/kitsune stop
+ExecStart=/opt/rfctf/kitsune start
+ExecStop=/opt/rfctf/kitsune stop
 TimeoutStartSec=infinity
 
 [Install]
