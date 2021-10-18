@@ -23,3 +23,7 @@ hciconfig hci0 name BLAH (name persists reset and requires it)
 hciconfig hci0 leadv 3 (non connectable undirected advertising)
 hciconfig hci0 leadv 0 (connectable undirected advertising)
 hciconfig hci0 noleadv (stop advertising)
+
+https://stackoverflow.com/questions/21124993/is-there-a-way-to-increase-ble-advertisement-frequency-in-bluez
+https://pimylifeup.com/raspberry-pi-ibeacon/
+https://learn.adafruit.com/pibeacon-ibeacon-with-a-raspberry-pi/adding-ibeacon-data
