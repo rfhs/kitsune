@@ -165,11 +165,11 @@ main() {
     stop)
       printf "[+] Stopping Kitsune FaaS...\n"
 
-      #quiet, we are shutting down
-      rfkill block all
-
       #it might be a restart, so shut everything down
       kitsune_bluetooth stop
+
+      #quiet, we are shutting down
+      rfkill block all
 
       printf "[+] Kitsune FaaS stopped.\n"
       exit 0
