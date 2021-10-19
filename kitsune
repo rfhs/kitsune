@@ -174,10 +174,12 @@ main() {
       printf "[+] Kitsune FaaS stopped.\n"
       exit 0
       ;;
-
-
+    restart)
+      main stop 2>&1 | tee -a "${LOGFILE}"
+      main start 2>&1 | tee -a "${LOGFILE}"
+      ;;
     *)
-      echo "usage: ${0} {start|stop}"
+      echo "usage: ${0} {start|stop|restart}"
       exit 1
   esac
 }
