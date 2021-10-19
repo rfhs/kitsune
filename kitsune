@@ -49,10 +49,14 @@ ibeacon_checks() {
     exit 1
   fi
   if echo "${IBEACON_MAJOR}" | grep -qiE --color=never '[a-fA-F0-9]{4}'; then
+    true
+  else
     printf "FATAL IBEACON_MAJOR must be hex\n"
     exit 1
   fi
   if echo "${IBEACON_MINOR}" | grep -qiE --color=never '[a-fA-F0-9]{4}'; then
+    true
+  else
     printf "FATAL IBEACON_MINOR must be hex\n"
     exit 1
   fi
