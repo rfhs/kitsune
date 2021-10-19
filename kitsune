@@ -85,7 +85,8 @@ hcitool_format() {
 }
 
 hcitool_format_interval() {
-  temp_int=$(printf "scale=0; obase=16;%s / 0.625" "${IBEACON_INTERVAL_MS}"| bc -l)
+  #ignore the shellcheck warning on this line
+  temp_int=$(printf "scale=0; obase=16;${IBEACON_INTERVAL_MS} / 0.625" | bc -l)
   #this substring stuff requires bash
   case "${#temp_int}" in
     2)
