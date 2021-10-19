@@ -38,7 +38,7 @@ ibeacon_checks() {
     printf "FATAL IBEACON_PROX_UUID must be 32 hex characters (16 hex bytes)\n"
     exit 1
   fi
-  if echo "${IBEACON_PROX_UUID}" | grep -qiE --color=never '[a-f0-9]{16}'; then
+  if echo "${IBEACON_PROX_UUID}" | grep -qiE --color=never '[a-fA-F0-9]{16}'; then
     true
   else
     printf "FATAL IBEACON_PROX_UUID must be hex\n."
@@ -48,11 +48,11 @@ ibeacon_checks() {
     printf "FATAL IBEACON_MAJOR and IBEACON_MINOR must be 4 hex characters (2 hex bytes)\n"
     exit 1
   fi
-  if echo "${IBEACON_MAJOR}" | grep -qiE --color=never '[a-f0-9]{4}'; then
+  if echo "${IBEACON_MAJOR}" | grep -qiE --color=never '[a-fA-F0-9]{4}'; then
     printf "FATAL IBEACON_MAJOR must be hex\n"
     exit 1
   fi
-  if echo "${IBEACON_MINOR}" | grep -qiE --color=never '[a-f0-9]{4}'; then
+  if echo "${IBEACON_MINOR}" | grep -qiE --color=never '[a-fA-F0-9]{4}'; then
     printf "FATAL IBEACON_MINOR must be hex\n"
     exit 1
   fi
@@ -60,7 +60,7 @@ ibeacon_checks() {
     printf "FATAL IBEACON_RSSI must be 2 hex characters (1 hex byte)\n"
     exit 1
   fi
-  if echo "${IBEACON_RSSI}" | grep -qiE --color=never '[a-f0-9]{2}'; then
+  if echo "${IBEACON_RSSI}" | grep -qiE --color=never '[a-fA-F0-9]{2}'; then
     true
   else
     printf "FATAL IBEACON_RSSI must be hex\n."
