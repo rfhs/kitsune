@@ -136,10 +136,11 @@ kitsune_bluetooth() {
       fi
       ;;
     stop)
+      rfkill unblock bluetooth
       hciconfig "${BLUETOOTH_DEV}" noscan
       hciconfig "${BLUETOOTH_DEV}" noleadv
       hciconfig "${BLUETOOTH_DEV}" reset
-      rfkill block all
+      rfkill block bluetooth
       ;;
     *)
       printf "FATAL: bluetooth function called without start or stop.\n"
