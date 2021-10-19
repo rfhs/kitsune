@@ -2,6 +2,11 @@
 
 NAME=kitsune
 LOGFILE="/var/log/${NAME}.log"
+if [ -r "${NAME}.conf" ]; then
+  . "${NAME}.conf"
+elif [ -r "/opt/rfctf/${NAME}.conf" ]; then
+  . "/opt/rfctf/${NAME}.conf"
+fi
 
 bluetooth_checks() {
   #make sure BLUETOOTH_DEV exists

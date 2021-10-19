@@ -4,7 +4,6 @@ After=bluetooth.service
 Wants=bluetooth.service
 
 [Service]
-EnvironmentFile=/opt/rfctf/kitsune.conf
 Type=oneshot
 ExecStart=/opt/rfctf/kitsune start
 ExecStop=/opt/rfctf/kitsune stop
