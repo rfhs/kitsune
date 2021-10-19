@@ -1,4 +1,4 @@
-#!/bin/sh -x
+#!/bin/bash -x
 
 NAME=kitsune
 LOGFILE="/var/log/${NAME}.log"
@@ -71,6 +71,30 @@ ibeacon_checks() {
   fi
 }
 
+hcitool_format() {
+  printf "%s" "${1}" | tr 'a-z' 'A-Z' | sed 's/../ &/g;s/^ //'
+}
+
+hcitool_format_interval() {
+  temp_int=$(printf "scale=0; obase=16;%s / 0.625" "${IBEACON_INTERVAL_MS}"| bc -l)
+  #this substring stuff requires bash
+  case "${#temp_int}" in
+    2)
+      printf "%s 00 %s 00" "${temp_int}" "${temp_int}"
+      ;;
+    3)
+      printf "%s 0%s %s 0%s" "${temp_int:1}" "${temp_int:0:1}" "${temp_int:1}" "${temp_int:0:1}"
+      ;;
+    4)
+      printf "%s %s %s %s" "${temp_int:2}" "${temp_int:0:2}" "${temp_int:2}" "${temp_int:0:2}"
+      ;;
+    *)
+      printf "FATAL Failed to convert IBEACON_INTERVAL_MS to hex.\n"
+      exit 1
+      ;;
+  esac
+}
+
 kitsune_bluetooth() {
   case "${1}" in
     start)
@@ -101,6 +125,9 @@ kitsune_bluetooth() {
       #iBeacon
       if [ -n "${IBEACON_ENABLED}" ] && [ "${IBEACON_ENABLED}" = "true" ]; then
         ibeacon_checks
+        hcitool -i hci0 cmd 0x08 0x0008 1E 02 01 06 1A FF 4C 00 02 15 $(hcitool_format ${IBEACON_PROX_UUID}) $(hcitool_format ${IBEACON_MAJOR}) $(hcitool_format ${IBEACON_MINOR}) "${IBEACON_RSSI}" 00
+        hcitool -i hci0 cmd 0x08 0x0006 $(hcitool_format_interval) 03 00 00 00 00 00 00 00 00 07 00
+        hcitool -i hci0 cmd 0x08 0x000a 01
       fi
       ;;
     stop)
