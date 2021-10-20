@@ -5,6 +5,7 @@ Wants=bluetooth.service
 
 [Service]
 Type=oneshot
+RemainAfterExit=true
 ExecStart=/opt/rfctf/kitsune start
 ExecStop=/opt/rfctf/kitsune stop
 TimeoutStartSec=infinity
