@@ -105,13 +105,28 @@ hcitool_format_interval() {
   esac
 }
 
+random_mac() {
+  #first octect must be even so do that
+  maybe_even=$((${RANDOM} % 16))
+  if [ "$((${maybe_even} % 2))" -eq "1" ]; then
+    multicast_char=$((${maybe_even} - 1))
+  else
+    multicast_char=${maybe_even}
+  fi
+
+  random_mac="$(printf "%X%X:%X%X:%X%X:%X%X:%X%X:%X%X" $((${RANDOM} % 16)) ${multicast_char} $((${RANDOM} % 16)) $((${RANDOM} % 16)) $((${RANDOM} % 16)) $((${RANDOM} % 16)) $((${RANDOM} % 16)) $((${RANDOM} % 16)) $((${RANDOM} % 16)) $((${RANDOM} % 16)) $((${RANDOM} % 16)) $((${RANDOM} % 16)))"
+  printf "%s" "${random_mac}"
+}
+
 kitsune_bluetooth() {
   case "${1}" in
     start)
       bluetooth_checks
       #set mac if requested
       if [ -n "${BLUETOOTH_MAC}" ]; then
-        if echo "${BLUETOOTH_MAC}" | grep -qE '([[:xdigit:]]{2}:){5}[[:xdigit:]]{2}'; then
+        if [ "${BLUETOOTH_MAC}" = "random" ]; then
+          bdaddr -i "${BLUETOOTH_DEV}" -r "$(random_mac)"
+        elif echo "${BLUETOOTH_MAC}" | grep -qE '([[:xdigit:]]{2}:){5}[[:xdigit:]]{2}'; then
           bdaddr -i "${BLUETOOTH_DEV}" -r "${BLUETOOTH_MAC}"
         else
           printf "BLUETOOTH_MAC \"%s\" doesn\'t appear to be a valid mac address.  Ignoring.\n" "${BLUETOOTH_MAC}" 2>&1
