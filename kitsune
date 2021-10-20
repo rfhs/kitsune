@@ -130,7 +130,16 @@ kitsune_bluetooth() {
       hciconfig "${BLUETOOTH_DEV}" noscan
       #bluetooth classic came first
       if [ -n "${CLASSIC_DISCOVERABLE}" ] && [ "${CLASSIC_DISCOVERABLE}" = "true" ]; then
-        hciconfig "${BLUETOOTH_DEV}" iscan
+        if [ -n "${RESPOND_L2PING}" ] && [ "${RESPOND_L2PING}" = "true" ]; then
+          #both inquiry scan and page scan enabled
+          hciconfig "${BLUETOOTH_DEV}" piscan
+        else
+          #only inquiry scan requested
+          hciconfig "${BLUETOOTH_DEV}" iscan
+        fi
+      elif [ -n "${RESPOND_L2PING}" ] && [ "${RESPOND_L2PING}" = "true" ]; then
+        #only page scan requested
+        hciconfig "${BLUETOOTH_DEV}" pscan
       fi
       #iBeacon
       if [ -n "${IBEACON_ENABLED}" ] && [ "${IBEACON_ENABLED}" = "true" ]; then
