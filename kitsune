@@ -70,14 +70,6 @@ ibeacon_checks() {
     printf "FATAL IBEACON_RSSI must be hex\n."
     exit 1
   fi
-  if [ -z "${IBEACON_INTERVAL_MS}" ]; then
-    printf "FATAL IBEACON_INTERVAL_MS must be set.\n"
-    exit 1
-  fi
-  if [ "${IBEACON_INTERVAL_MS}" -lt 100 ] || [ $(printf "${IBEACON_INTERVAL_MS} > 40959.375\n" | bc -l) -eq 1 ]; then
-    printf "FATAL IBEACON_INTERVAL_MS must be between 100 and 40,959.375.\n"
-    exit 1
-  fi
 }
 
 hcitool_format() {
@@ -85,6 +77,18 @@ hcitool_format() {
 }
 
 hcitool_format_interval() {
+  if [ -z "${IBEACON_INTERVAL_MS}" ]; then
+    printf "WARN IBEACON_INTERVAL_MS should be set, defaulting to 100ms\n"
+    IBEACON_INTERVAL_MS=100
+  fi
+  if [ "${IBEACON_INTERVAL_MS}" -lt 100 ]; then
+    printf "WARN IBEACON_INTERVAL_MS has a minimum of 100ms, forcing minimum.\n"
+  fi
+  if [ $(printf "${IBEACON_INTERVAL_MS} > 40959.375\n" | bc -l) -eq 1 ]; then
+    printf "WARN IBEACON_INTERVAL_MS has a maximum of40,959.375, forcing maximum\n"
+    IBEACON_INTERVAL_MS=40959.375
+  fi
+
   #ignore the shellcheck warning on this line
   temp_int=$(printf "scale=0; obase=16;${IBEACON_INTERVAL_MS} / 0.625\n" | bc -l)
   #this substring stuff requires bash
@@ -214,4 +218,13 @@ main() {
   esac
 }
 
+run_check() {
+  if pgrep -af './kitsune' || pgrep -af '/opt/rfctf/kitsune'; then
+    printf "Kitsune is already running, cowardly refusing to run twice.\n"
+    exit 1
+  fi
+}
+
+run_check
+truncate -s0 "${LOGFILE}"
 main "${1}" 2>&1 | tee -a "${LOGFILE}"
