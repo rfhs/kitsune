@@ -10,11 +10,27 @@ fi
 
 bluetooth_checks() {
   #make sure BLUETOOTH_DEV exists
-  if [ -n "${BLUETOOTH_DEV}" ] && hciconfig "${BLUETOOTH_DEV}" > /dev/null 2>&1; then
-    printf "BLUETOOTH_DEV \"%s\" exists, continuing.\n" "${BLUETOOTH_DEV}"
+  #wait a few seconds for bluetooth to be up if needed
+  if [ -n "${BLUETOOTH_DEV}" ]; then
+    iter=0
+    while true; do
+      if hciconfig "${BLUETOOTH_DEV}" > /dev/null 2>&1; then
+        printf "BLUETOOTH_DEV \"%s\" exists, continuing.\n" "${BLUETOOTH_DEV}"
+        break
+      else
+        iter=$((iter + 1))
+        if [ $iter -ge 60 ]; then
+          printf "FATAL BLUETOOTH_DEV \"%s\" does not exist.\n" "${BLUETOOTH_DEV}"
+          exit 1
+        else
+          printf "DEBUG Waiting for BLUETOOTH_DEV %s seconds...\n" "${iter}"
+          sleep 1
+        fi
+      fi
+    done
   else
-    printf "FATAL BLUETOOTH_DEV \"%s\" does not exist.\n" "${BLUETOOTH_DEV}"
-    exit
+    printf "FATAL BLUETOOTH_DEV must be defined in the config file.\n"
+    exit 1
   fi
   #unblock
   printf "Bluetooth device found, unblocking rfkill...\n"
@@ -227,5 +243,4 @@ run_check() {
 }
 
 #run_check
-truncate -s0 "${LOGFILE}"
-main "${1}" 2>&1 | tee -a "${LOGFILE}"
+main "${1}" 2>&1 | tee "${LOGFILE}"
