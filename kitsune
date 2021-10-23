@@ -219,12 +219,13 @@ main() {
 }
 
 run_check() {
+  #this finds itself and exits
   if pgrep -af './kitsune' || pgrep -af '/opt/rfctf/kitsune'; then
     printf "Kitsune is already running, cowardly refusing to run twice.\n"
     exit 1
   fi
 }
 
-run_check
+#run_check
 truncate -s0 "${LOGFILE}"
 main "${1}" 2>&1 | tee -a "${LOGFILE}"
