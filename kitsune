@@ -134,7 +134,7 @@ random_mac() {
     multicast_char=${maybe_even}
   fi
 
-  random_mac="$(printf "%X%X:%X%X:%X%X:%X%X:%X%X:%X%X" $((${RANDOM} % 16)) ${multicast_char} $((${RANDOM} % 16)) $((${RANDOM} % 16)) $((${RANDOM} % 16)) $((${RANDOM} % 16)) $((${RANDOM} % 16)) $((${RANDOM} % 16)) $((${RANDOM} % 16)) $((${RANDOM} % 16)) $((${RANDOM} % 16)) $((${RANDOM} % 16)))"
+  random_mac="$(printf "0x%X%X 0x%X%X 0x%X%X 0x%X%X 0x%X%X 0x%X%X" $((${RANDOM} % 16)) $((${RANDOM} % 16)) $((${RANDOM} % 16)) $((${RANDOM} % 16)) $((${RANDOM} % 16)) $((${RANDOM} % 16)) $((${RANDOM} % 16)) $((${RANDOM} % 16)) $((${RANDOM} % 16)) $((${RANDOM} % 16)) ${multicast_char} $((${RANDOM} % 16)))"
   printf "%s" "${random_mac}"
 }
 
@@ -145,9 +145,9 @@ kitsune_bluetooth() {
       #set mac if requested
       if [ -n "${BLUETOOTH_MAC}" ]; then
         if [ "${BLUETOOTH_MAC}" = "random" ]; then
-          bdaddr -i "${BLUETOOTH_DEV}" -r "$(random_mac)"
+          hcitool -i "${BLUETOOTH_DEV}" cmd 0x3f 0x001 "$(random_mac)"
         elif printf "${BLUETOOTH_MAC}" | grep -qE '([[:xdigit:]]{2}:){5}[[:xdigit:]]{2}'; then
-          bdaddr -i "${BLUETOOTH_DEV}" -r "${BLUETOOTH_MAC}"
+          hcitool -i "${BLUETOOTH_DEV}" cmd 0x3f 0x001 "$(printf "%s" "${BLUETOOTH_MAC}" | awk -F':' '{print "0x"$6" 0x"$5" 0x"$4" 0x"$3" 0x"$2" 0x"$1}')"
         else
           printf "BLUETOOTH_MAC \"%s\" doesn\'t appear to be a valid mac address.  Ignoring.\n" "${BLUETOOTH_MAC}" 2>&1
         fi
