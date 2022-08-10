@@ -145,9 +145,9 @@ kitsune_bluetooth() {
       #set mac if requested
       if [ -n "${BLUETOOTH_MAC}" ]; then
         if [ "${BLUETOOTH_MAC}" = "random" ]; then
-          bdaddr -i "${BLUETOOTH_DEV}" -r "$(random_mac)"
+          btmgmt --index "${BLUETOOTH_DEV}" public-addr "$(random_mac)"
         elif printf "${BLUETOOTH_MAC}" | grep -qE '([[:xdigit:]]{2}:){5}[[:xdigit:]]{2}'; then
-          bdaddr -i "${BLUETOOTH_DEV}" -r "${BLUETOOTH_MAC}"
+          btmgmt --index "${BLUETOOTH_DEV}" public-addr "${BLUETOOTH_MAC}"
         else
           printf "BLUETOOTH_MAC \"%s\" doesn\'t appear to be a valid mac address.  Ignoring.\n" "${BLUETOOTH_MAC}" 2>&1
         fi
