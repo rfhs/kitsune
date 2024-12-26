@@ -43,7 +43,8 @@ void setup() {
   // https://docs.espressif.com/projects/esp-idf/en/latest/esp32/api-reference/system/misc_system_api.html#mac-address
   mac_addr[5] -= 2;
   esp_base_mac_addr_set(mac_addr);
-  SerialBT.begin(NAME); //Bluetooth device name
+  // String localName=String(), bool isMaster=false
+  SerialBT.begin(NAME, false); //Bluetooth device name
 
   M5.dis.drawpix(0, 0x0000FF); // BLUE
   delay(TIME_TO_WAKE * mS_TO_S);
