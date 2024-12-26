@@ -6,6 +6,7 @@
 #include "esp_sleep.h"
 #include "sys/time.h"
 #include "current_conf.h"
+
 #include <WiFi.h>
 #include <esp_wifi.h>
 
@@ -58,9 +59,8 @@ void setup() {
   // Before this desired mac address is not set
   // Speed counts
 
+  // bool SerialEnable, bool I2CEnable, bool DisplayEnable
   M5.begin(false, false,true);
-  //Needed if not using M5.begin()
-  //Serial.begin(115200);
   Serial.flush();
   M5.dis.drawpix(0, 0x9400D3);  // DARKVIOLET
   Serial.println();

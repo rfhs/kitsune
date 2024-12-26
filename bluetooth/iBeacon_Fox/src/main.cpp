@@ -1,13 +1,17 @@
-#include <Arduino.h>
+// LED Support
+#include <M5Atom.h>
+// needed if we don't use M5Atom.h
+//#include <Arduino.h>
+
+#include "esp_sleep.h"
+#include "sys/time.h"
+#include "current_conf.h"
+
 #include <BLEDevice.h>
 #include <BLEServer.h>
 #include <BLEUtils.h>
 #include <BLE2902.h>
 #include <BLEBeacon.h>
-
-#include "esp_sleep.h"
-#include "sys/time.h"
-#include "current_conf.h"
 
 // Edit the conference specific variables in a new file and symlink to current_conf.h
 #if defined(EASY)
@@ -58,7 +62,7 @@
 // MIN: 400 MAX: 500 results in 315ms interval
 // MIN: 5000 MAX: 6000 results in 4-7s interval
 
-uint8_t mac_addr[8] = MAC_ADDR;
+uint8_t mac_addr[6] = MAC_ADDR;
 
 RTC_DATA_ATTR static time_t last;    // remember last boot in RTC Memory
 RTC_DATA_ATTR static uint32_t bootcount; // remember number of boots in RTC Memory
@@ -88,17 +92,17 @@ void init_beacon() {
 }
 
 void setup() {
-  Serial.begin(115200);
-  Serial.println();
+  // bool SerialEnable, bool I2CEnable, bool DisplayEnable
+  M5.begin(true, false,true);
+  //Needed if not using M5.begin()
+  //Serial.begin(115200);
+  M5.dis.drawpix(0, 0x9400D3);  // DARKVIOLET
+  Serial.flush();
   Serial.println("Initializing...");
   gettimeofday(&now, NULL);
-
-  Serial.printf("Start ESP32 %d\n", bootcount++);
-
-  Serial.printf("deep sleep (%lds since last reset, %lds since last boot)\n", now.tv_sec, now.tv_sec - last);
-
+  Serial.printf("Start ESP32 %d\r\n", bootcount++);
+  Serial.printf("deep sleep (%lds since last reset, %lds since last boot)\r\n", now.tv_sec, now.tv_sec - last);
   last = now.tv_sec;
-
   Serial.flush();
 
   // https://docs.espressif.com/projects/esp-idf/en/latest/esp32/api-reference/system/misc_system_api.html#mac-address
@@ -118,16 +122,29 @@ void setup() {
   init_beacon();
 
   pAdvertising->start();
+  M5.dis.drawpix(0, 0x0000FF); // BLUE
   Serial.println("iBeacon advertising!");
   #ifdef DEEP_SLEEP
   delay(ADVERTISING_DURATION * 1000);
 
+  M5.dis.drawpix(0, 0x880000);  // HALF RED
   pAdvertising->stop();
-  Serial.printf("enter deep sleep\n");
+  Serial.println("entering deep sleep");
+  M5.dis.drawpix(0, 0xff0000);  // RED
+  delay(75);  // adjust the esp_deep_sleep if you change this
   esp_deep_sleep(1000000LL * GPIO_DEEP_SLEEP_DURATION);
-  Serial.printf("in deep sleep\n");
+  // This line should never run so it's a canary for sleep failed
+  M5.dis.drawpix(0, 0xFFF700);  // Yellow
   #endif
 }
 
 void loop() {
+  #ifdef DEEP_SLEEP
+  // setup should sleep then restart so this should also never run.
+  Serial.println("Entered loop, we are broken");
+  delay(200);
+  M5.dis.drawpix(0, 0xff0000);  // RED
+  delay(200);
+  M5.dis.drawpix(0, 0xFFF700);  // Yellow
+  #endif
 }
