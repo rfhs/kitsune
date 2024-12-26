@@ -20,7 +20,7 @@
 // set mac address
 #define MAC_ADDR {0xF2, 0xE2, 0xF5, 0x12, 0xC6, 0xC9}
 // Network config
-#define FSSID "WiFi AP Easy"
+#define FSSID "Kali WiFi AP Easy Demo"
 #define PSK "0123456789"
 // 1-13 permitted 0 means random
 #define CHANNEL 1
@@ -41,7 +41,7 @@
 // set mac address
 #define MAC_ADDR {0xF2, 0xA2, 0xD3, 0xD4, 0xF3, 0x40}
 // Network config
-#define FSSID "WiFi AP Hard"
+#define FSSID "Ba'al WiFi AP Hard Demo"
 #define PSK "0123456789"
 // 1-13 permitted 0 means random
 #define CHANNEL 0
