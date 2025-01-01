@@ -1,7 +1,4 @@
-//LED support
-#include <M5Atom.h>
-// needed if we don't use M5Atom.h
-//#include <Arduino.h>
+#include <Arduino.h>
 
 #include "esp_sleep.h"
 #include "sys/time.h"
@@ -9,6 +6,8 @@
 
 #include <WiFi.h>
 #include <esp_wifi.h>
+
+#include <rfhsledmacros.h>
 
 // microseconds are used by esp_sleep_enable_timer_wakeup
 #define uS_TO_S 1000000
@@ -21,7 +20,7 @@ struct timeval now;
 
 uint8_t mac_addr[6] = MAC_ADDR;
 
-void disableWiFi(){
+void disableWiFi() {
   WiFi.disconnect(true);
   WiFi.mode(WIFI_OFF);
 }
@@ -59,10 +58,10 @@ void setup() {
   // Before this desired mac address is not set
   // Speed counts
 
-  // bool SerialEnable, bool I2CEnable, bool DisplayEnable
-  M5.begin(false, false,true);
+  rfhsledinit();
+
   Serial.flush();
-  M5.dis.drawpix(0, 0x9400D3);  // DARKVIOLET
+  ledcolor(0x9400D3);  // DARKVIOLET
   Serial.println();
   Serial.println("Initializing...");
   gettimeofday(&now, NULL);
@@ -84,11 +83,11 @@ void setup() {
   Serial.println(WiFi.setTxPower(TXPOWER));
   Serial.print("\nStarted AP with MAC Address: ");
   Serial.println(WiFi.softAPmacAddress());
-  M5.dis.drawpix(0, 0x00ff00); // GREEN
+  ledcolor(0x00ff00); // GREEN
   #elif defined(CLIENT)
   WiFi.mode(WIFI_STA);
   WiFi.begin(FSSID, PSK);
-  M5.dis.drawpix(0, 0xfff000);  // YELLOW
+  ledcolor(0xfff000);  // YELLOW
   #endif
 
   // Before this desired config is not set
@@ -97,9 +96,9 @@ void setup() {
   
   delay(TIME_TO_WAKE * mS_TO_S);
   Serial.println("Going to sleep");
-  M5.dis.drawpix(0, 0x880000);  // HALF RED
+  ledcolor(0x880000);  // HALF RED
   disableWiFi();
-  M5.dis.drawpix(0, 0xff0000);  // RED
+  ledcolor(0xff0000);  // RED
   delay(75);  // adjust the esp_deep_sleep if you change this
   // subtract sleep time on line 39 and 105
   int sleepy_tyme = uS_TO_S * TIME_TO_SLEEP - 75 - 100;
@@ -108,14 +107,14 @@ void setup() {
   }
   esp_deep_sleep(sleepy_tyme);
   // This line should never run so it's a canary for sleep failed
-  M5.dis.drawpix(0, 0xFFF700);  // Yellow
+  ledcolor(0xFFF700);  // Yellow
 }
 
 void loop(){
   // setup should sleep then restart so this should also never run.
   Serial.println("Entered loop, we are broken");
   delay(200);
-  M5.dis.drawpix(0, 0xff0000);  // RED
+  ledcolor(0xff0000);  // RED
   delay(200);
-  M5.dis.drawpix(0, 0xFFF700);  // Yellow
+  ledcolor(0xFFF700);  // Yellow
 }

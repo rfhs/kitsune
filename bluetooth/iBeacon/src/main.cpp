@@ -1,7 +1,4 @@
-// LED Support
-#include <M5Atom.h>
-// needed if we don't use M5Atom.h
-//#include <Arduino.h>
+#include <Arduino.h>
 
 #include "esp_sleep.h"
 #include "sys/time.h"
@@ -12,6 +9,8 @@
 #include <BLEUtils.h>
 #include <BLE2902.h>
 #include <BLEBeacon.h>
+
+#include <rfhsledmacros.h>
 
 // Edit the conference specific variables in a new file and symlink to current_conf.h
 #if defined(EASY)
@@ -92,11 +91,8 @@ void init_beacon() {
 }
 
 void setup() {
-  // bool SerialEnable, bool I2CEnable, bool DisplayEnable
-  M5.begin(true, false,true);
-  //Needed if not using M5.begin()
-  //Serial.begin(115200);
-  M5.dis.drawpix(0, 0x9400D3);  // DARKVIOLET
+  Serial.begin(115200);
+  ledcolor(0x9400D3);  // DARKVIOLET
   Serial.flush();
   Serial.println("Initializing...");
   gettimeofday(&now, NULL);
@@ -122,19 +118,19 @@ void setup() {
   init_beacon();
 
   pAdvertising->start();
-  M5.dis.drawpix(0, 0x0000FF); // BLUE
+  ledcolor(0x0000FF); // BLUE
   Serial.println("iBeacon advertising!");
   #ifdef DEEP_SLEEP
   delay(ADVERTISING_DURATION * 1000);
 
-  M5.dis.drawpix(0, 0x880000);  // HALF RED
+  ledcolor(0x880000);  // HALF RED
   pAdvertising->stop();
   Serial.println("entering deep sleep");
-  M5.dis.drawpix(0, 0xff0000);  // RED
+  ledcolor(0xff0000);  // RED
   delay(75);  // adjust the esp_deep_sleep if you change this
   esp_deep_sleep(1000000LL * GPIO_DEEP_SLEEP_DURATION);
   // This line should never run so it's a canary for sleep failed
-  M5.dis.drawpix(0, 0xFFF700);  // Yellow
+  ledcolor(0xFFF700);  // Yellow
   #endif
 }
 
@@ -143,8 +139,8 @@ void loop() {
   // setup should sleep then restart so this should also never run.
   Serial.println("Entered loop, we are broken");
   delay(200);
-  M5.dis.drawpix(0, 0xff0000);  // RED
+  ledcolor(0xff0000);  // RED
   delay(200);
-  M5.dis.drawpix(0, 0xFFF700);  // Yellow
+  ledcolor(0xFFF700);  // Yellow
   #endif
 }

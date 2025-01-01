@@ -1,13 +1,12 @@
-// LED Support
-#include <M5Atom.h>
-// needed if we don't use M5Atom.h
-//#include <Arduino.h>
+#include <Arduino.h>
 
 #include "esp_sleep.h"
 #include "sys/time.h"
 #include "current_conf.h"
 
 #include "BluetoothSerial.h"
+
+#include <rfhsledmacros.h>
 
 // microseconds are used by esp_sleep_enable_timer_wakeup
 #define uS_TO_S 1000000
@@ -27,11 +26,9 @@ RTC_DATA_ATTR static uint32_t bootcount; // remember number of boots in RTC Memo
 struct timeval now;
 
 void setup() {
-  // bool SerialEnable, bool I2CEnable, bool DisplayEnable
-  M5.begin(true, false,true);
-  //Needed if not using M5.begin()
-  //Serial.begin(115200);
-  M5.dis.drawpix(0, 0x9400D3);  // DARKVIOLET
+  Serial.begin(115200);
+  rfhsledinit();
+  ledcolor(0x9400D3);  // DARKVIOLET
   Serial.flush();
   Serial.println("Initializing...");
   gettimeofday(&now, NULL);
@@ -46,10 +43,10 @@ void setup() {
   // String localName=String(), bool isMaster=false
   SerialBT.begin(NAME, false); //Bluetooth device name
 
-  M5.dis.drawpix(0, 0x0000FF); // BLUE
+  ledcolor(0x0000FF); // BLUE
   delay(TIME_TO_WAKE * mS_TO_S);
   Serial.println("Going to sleep");
-  M5.dis.drawpix(0, 0xff0000);  // RED
+  ledcolor(0xff0000);  // RED
   delay(75);  // adjust the esp_deep_sleep if you change this
   // subtract sleep time on line 44
   int sleepy_tyme = uS_TO_S * TIME_TO_SLEEP - 75;
@@ -58,14 +55,14 @@ void setup() {
   }
   esp_deep_sleep(sleepy_tyme);
   // This line should never run so it's a canary for sleep failed
-  M5.dis.drawpix(0, 0xFFF700);  // Yellow
+  ledcolor(0xFFF700);  // Yellow
 }
 
 void loop() {
   // setup should sleep then restart so this should also never run.
   Serial.println("Entered loop, we are broken");
   delay(200);
-  M5.dis.drawpix(0, 0xff0000);  // RED
+  ledcolor(0xff0000);  // RED
   delay(200);
-  M5.dis.drawpix(0, 0xFFF700);  // Yellow
+  ledcolor(0xFFF700);  // Yellow
 }
