@@ -1,9 +1,13 @@
 #include <FastLED.h>
 
 #define NUM_LEDS 1
+
+#if defined(ARDUINO_M5Stack_ATOM)
 #define DATA_PIN 27
-// This is for atoms3-lite
-//#define DATA_PIN 35
+#elif defined(ARDUINO_M5Stack_ATOMS3)
+#define DATA_PIN 35
+#endif
+
 CRGB leds[NUM_LEDS];
 
 void ledcolor(uint32_t colorcode) {

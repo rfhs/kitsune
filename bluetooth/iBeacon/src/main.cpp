@@ -127,7 +127,7 @@ void setup() {
   pAdvertising->stop();
   Serial.println("entering deep sleep");
   ledcolor(0xff0000);  // RED
-  delay(75);  // adjust the esp_deep_sleep if you change this
+  delay(50);
   esp_deep_sleep(1000000LL * GPIO_DEEP_SLEEP_DURATION);
   // This line should never run so it's a canary for sleep failed
   ledcolor(0xFFF700);  // Yellow
