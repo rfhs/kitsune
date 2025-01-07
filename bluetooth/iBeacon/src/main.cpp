@@ -92,9 +92,10 @@ void init_beacon() {
 
 void setup() {
   Serial.begin(115200);
-  ledcolor(0x9400D3);  // DARKVIOLET
   Serial.flush();
   Serial.println("Initializing...");
+  rfhsledinit();
+  ledcolor(0x9400D3);  // DARKVIOLET
   gettimeofday(&now, NULL);
   Serial.printf("Start ESP32 %d\r\n", bootcount++);
   Serial.printf("deep sleep (%lds since last reset, %lds since last boot)\r\n", now.tv_sec, now.tv_sec - last);
