@@ -1,32 +1,89 @@
 # iBeacon BLE Fox
 This is a [PlatformIO](https://platformio.org/) project to run on an ESP32 to enable creation of an iBeacon BLE fox. 
 
-Difficulty levels are defined as PlatformIO Environments:
+Target hardware and difficulty levels are defined as PlatformIO Environments:
 ```bash
 $ platformio run --list-targets
 Environment    Group     Name         Title                        Description
 -------------  --------  -----------  ---------------------------  ----------------------
-difficult      Platform  buildfs      Build Filesystem Image
-difficult      Platform  erase        Erase Flash
-difficult      Platform  size         Program Size                 Calculate program size
-difficult      Platform  upload       Upload
-difficult      Platform  uploadfs     Upload Filesystem Image
-difficult      Platform  uploadfsota  Upload Filesystem Image OTA
-
-easy           Platform  buildfs      Build Filesystem Image
-easy           Platform  erase        Erase Flash
-easy           Platform  size         Program Size                 Calculate program size
-easy           Platform  upload       Upload
-easy           Platform  uploadfs     Upload Filesystem Image
-easy           Platform  uploadfsota  Upload Filesystem Image OTA
-
-medium         Platform  buildfs      Build Filesystem Image
-medium         Platform  erase        Erase Flash
-medium         Platform  size         Program Size                 Calculate program size
-medium         Platform  upload       Upload
-medium         Platform  uploadfs     Upload Filesystem Image
-medium         Platform  uploadfsota  Upload Filesystem Image OTA
+Environment       Group     Name         Title                        Description
+m5atom-easy       Platform  buildfs      Build Filesystem Image
+m5atom-easy       Platform  erase        Erase Flash
+m5atom-easy       Platform  size         Program Size                 Calculate program size
+m5atom-easy       Platform  upload       Upload
+m5atom-easy       Platform  uploadfs     Upload Filesystem Image
+m5atom-easy       Platform  uploadfsota  Upload Filesystem Image OTA
+m5atom-hard       Platform  buildfs      Build Filesystem Image
+m5atom-hard       Platform  erase        Erase Flash
+m5atom-hard       Platform  size         Program Size                 Calculate program size
+m5atom-hard       Platform  upload       Upload
+m5atom-hard       Platform  uploadfs     Upload Filesystem Image
+m5atom-hard       Platform  uploadfsota  Upload Filesystem Image OTA
+m5atom-medium     Platform  buildfs      Build Filesystem Image
+m5atom-medium     Platform  erase        Erase Flash
+m5atom-medium     Platform  size         Program Size                 Calculate program size
+m5atom-medium     Platform  upload       Upload
+m5atom-medium     Platform  uploadfs     Upload Filesystem Image
+m5atom-medium     Platform  uploadfsota  Upload Filesystem Image OTA
+m5atoms3-easy     Platform  buildfs      Build Filesystem Image
+m5atoms3-easy     Platform  erase        Erase Flash
+m5atoms3-easy     Platform  size         Program Size                 Calculate program size
+m5atoms3-easy     Platform  upload       Upload
+m5atoms3-easy     Platform  uploadfs     Upload Filesystem Image
+m5atoms3-easy     Platform  uploadfsota  Upload Filesystem Image OTA
+m5atoms3-hard     Platform  buildfs      Build Filesystem Image
+m5atoms3-hard     Platform  erase        Erase Flash
+m5atoms3-hard     Platform  size         Program Size                 Calculate program size
+m5atoms3-hard     Platform  upload       Upload
+m5atoms3-hard     Platform  uploadfs     Upload Filesystem Image
+m5atoms3-hard     Platform  uploadfsota  Upload Filesystem Image OTA
+m5atoms3-medium   Platform  buildfs      Build Filesystem Image
+m5atoms3-medium   Platform  erase        Erase Flash
+m5atoms3-medium   Platform  size         Program Size                 Calculate program size
+m5atoms3-medium   Platform  upload       Upload
+m5atoms3-medium   Platform  uploadfs     Upload Filesystem Image
+m5atoms3-medium   Platform  uploadfsota  Upload Filesystem Image OTA
+m5stamps3-easy    Platform  buildfs      Build Filesystem Image
+m5stamps3-easy    Platform  erase        Erase Flash
+m5stamps3-easy    Platform  size         Program Size                 Calculate program size
+m5stamps3-easy    Platform  upload       Upload
+m5stamps3-easy    Platform  uploadfs     Upload Filesystem Image
+m5stamps3-easy    Platform  uploadfsota  Upload Filesystem Image OTA
+m5stamps3-hard    Platform  buildfs      Build Filesystem Image
+m5stamps3-hard    Platform  erase        Erase Flash
+m5stamps3-hard    Platform  size         Program Size                 Calculate program size
+m5stamps3-hard    Platform  upload       Upload
+m5stamps3-hard    Platform  uploadfs     Upload Filesystem Image
+m5stamps3-hard    Platform  uploadfsota  Upload Filesystem Image OTA
+m5stamps3-medium  Platform  buildfs      Build Filesystem Image
+m5stamps3-medium  Platform  erase        Erase Flash
+m5stamps3-medium  Platform  size         Program Size                 Calculate program size
+m5stamps3-medium  Platform  upload       Upload
+m5stamps3-medium  Platform  uploadfs     Upload Filesystem Image
+m5stamps3-medium  Platform  uploadfsota  Upload Filesystem Image OTA
+m5stickc-easy     Platform  buildfs      Build Filesystem Image
+m5stickc-easy     Platform  erase        Erase Flash
+m5stickc-easy     Platform  size         Program Size                 Calculate program size
+m5stickc-easy     Platform  upload       Upload
+m5stickc-easy     Platform  uploadfs     Upload Filesystem Image
+m5stickc-easy     Platform  uploadfsota  Upload Filesystem Image OTA
+m5stickc-hard     Platform  buildfs      Build Filesystem Image
+m5stickc-hard     Platform  erase        Erase Flash
+m5stickc-hard     Platform  size         Program Size                 Calculate program size
+m5stickc-hard     Platform  upload       Upload
+m5stickc-hard     Platform  uploadfs     Upload Filesystem Image
+m5stickc-hard     Platform  uploadfsota  Upload Filesystem Image OTA
+m5stickc-medium   Platform  buildfs      Build Filesystem Image
+m5stickc-medium   Platform  erase        Erase Flash
+m5stickc-medium   Platform  size         Program Size                 Calculate program size
+m5stickc-medium   Platform  upload       Upload
+m5stickc-medium   Platform  uploadfs     Upload Filesystem Image
+m5stickc-medium   Platform  uploadfsota  Upload Filesystem Image OTA
 ```
+
+Only M5Atom is currently fully supported.
+M5AtomS3 and M5StampS3 work except for serial output.
+M5StickC works except the hardware lacks an RGB led for output.
 
 To use:
 - [Install PlatformIO](https://platformio.org/install/cli)
