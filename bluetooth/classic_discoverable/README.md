@@ -6,20 +6,59 @@ Difficulty levels are defined as PlatformIO Environments:
 $ platformio run --list-targets
 Environment    Group     Name         Title                        Description
 -------------  --------  -----------  ---------------------------  ----------------------
-easy           Platform  buildfs      Build Filesystem Image
-easy           Platform  erase        Erase Flash
-easy           Platform  size         Program Size                 Calculate program size
-easy           Platform  upload       Upload
-easy           Platform  uploadfs     Upload Filesystem Image
-easy           Platform  uploadfsota  Upload Filesystem Image OTA
-
-hard           Platform  buildfs      Build Filesystem Image
-hard           Platform  erase        Erase Flash
-hard           Platform  size         Program Size                 Calculate program size
-hard           Platform  upload       Upload
-hard           Platform  uploadfs     Upload Filesystem Image
-hard           Platform  uploadfsota  Upload Filesystem Image OTA
+m5atom-easy     Platform  buildfs      Build Filesystem Image
+m5atom-easy     Platform  erase        Erase Flash
+m5atom-easy     Platform  size         Program Size                 Calculate program size
+m5atom-easy     Platform  upload       Upload
+m5atom-easy     Platform  uploadfs     Upload Filesystem Image
+m5atom-easy     Platform  uploadfsota  Upload Filesystem Image OTA
+m5atom-hard     Platform  buildfs      Build Filesystem Image
+m5atom-hard     Platform  erase        Erase Flash
+m5atom-hard     Platform  size         Program Size                 Calculate program size
+m5atom-hard     Platform  upload       Upload
+m5atom-hard     Platform  uploadfs     Upload Filesystem Image
+m5atom-hard     Platform  uploadfsota  Upload Filesystem Image OTA
+m5atoms3-easy   Platform  buildfs      Build Filesystem Image
+m5atoms3-easy   Platform  erase        Erase Flash
+m5atoms3-easy   Platform  size         Program Size                 Calculate program size
+m5atoms3-easy   Platform  upload       Upload
+m5atoms3-easy   Platform  uploadfs     Upload Filesystem Image
+m5atoms3-easy   Platform  uploadfsota  Upload Filesystem Image OTA
+m5atoms3-hard   Platform  buildfs      Build Filesystem Image
+m5atoms3-hard   Platform  erase        Erase Flash
+m5atoms3-hard   Platform  size         Program Size                 Calculate program size
+m5atoms3-hard   Platform  upload       Upload
+m5atoms3-hard   Platform  uploadfs     Upload Filesystem Image
+m5atoms3-hard   Platform  uploadfsota  Upload Filesystem Image OTA
+m5stamps3-easy  Platform  buildfs      Build Filesystem Image
+m5stamps3-easy  Platform  erase        Erase Flash
+m5stamps3-easy  Platform  size         Program Size                 Calculate program size
+m5stamps3-easy  Platform  upload       Upload
+m5stamps3-easy  Platform  uploadfs     Upload Filesystem Image
+m5stamps3-easy  Platform  uploadfsota  Upload Filesystem Image OTA
+m5stamps3-hard  Platform  buildfs      Build Filesystem Image
+m5stamps3-hard  Platform  erase        Erase Flash
+m5stamps3-hard  Platform  size         Program Size                 Calculate program size
+m5stamps3-hard  Platform  upload       Upload
+m5stamps3-hard  Platform  uploadfs     Upload Filesystem Image
+m5stamps3-hard  Platform  uploadfsota  Upload Filesystem Image OTA
+m5stickc-easy   Platform  buildfs      Build Filesystem Image
+m5stickc-easy   Platform  erase        Erase Flash
+m5stickc-easy   Platform  size         Program Size                 Calculate program size
+m5stickc-easy   Platform  upload       Upload
+m5stickc-easy   Platform  uploadfs     Upload Filesystem Image
+m5stickc-easy   Platform  uploadfsota  Upload Filesystem Image OTA
+m5stickc-hard   Platform  buildfs      Build Filesystem Image
+m5stickc-hard   Platform  erase        Erase Flash
+m5stickc-hard   Platform  size         Program Size                 Calculate program size
+m5stickc-hard   Platform  upload       Upload
+m5stickc-hard   Platform  uploadfs     Upload Filesystem Image
+m5stickc-hard   Platform  uploadfsota  Upload Filesystem Image OTA
 ```
+
+Only M5Atom is currently fully supported.
+M5AtomS3 and M5StampS3 work except for serial output.
+M5StickC works except the hardware lacks an RGB led for output.
 
 To use:
 - [Install PlatformIO](https://platformio.org/install/cli)
