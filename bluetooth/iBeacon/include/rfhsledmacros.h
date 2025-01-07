@@ -6,6 +6,10 @@
 #define DATA_PIN 27
 #elif defined(ARDUINO_M5Stack_ATOMS3)
 #define DATA_PIN 35
+#elif defined(ARDUINO_M5Stick_C)
+#define DATA_PIN 19
+#elif defined(ARDUINO_M5Stack_StampS3)
+#define DATA_PIN 21
 #endif
 
 CRGB leds[NUM_LEDS];
