@@ -89,7 +89,7 @@ To use:
 - [Install PlatformIO](https://platformio.org/install/cli)
 - Create a conference specific file header file e.g. `src/defcon31.h` and symlink it to `src/current_conf.h`
 - Modify variables in your conference specific file e.g. ['src/conferences/defcon31.h](./src/conferences/defcon31.h) for each of the difficulty levels
-- Select your difficulty level with the `-e` argument to `platformio run`, options are [easy, medium, difficult]
+- Select your difficulty level with the `-e` argument to `platformio run`, options are [easy, medium, hard]
 - **Note:** You can specify a target device serial port with argument `--upload-port` to avoid automatic detection.
 - For example, to build and upload Easy: `platformio run -e easy --target upload`
 - **Note:** To build without upload execute `platformio run -e easy`

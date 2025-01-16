@@ -23,7 +23,7 @@
 #define SIGNAL_POWER        0xc5
 #define MAC_ADDR            {0xF2, 0x3F, 0x21, 0xF5, 0x89, 0x58}
 
-#elif defined(DIFFICULT)
+#elif defined(HARD)
 #define DEVICE_NAME         "Anubis BLE Hard Demo"
 #define BEACON_UUID         "4A79F8EB-67C5-48EB-8587-1A659E90A0AE"
 #define MANUFACTURER_ID     0x4c00

@@ -28,7 +28,7 @@
 #define ADVERTISING_DURATION     1  // time to remain advertising
 #define GPIO_DEEP_SLEEP_DURATION 5  // sleep x seconds and then wake up
 
-#elif defined(DIFFICULT)
+#elif defined(HARD)
 
 #define DEEP_SLEEP
 #define ADV_MIN_INTERVAL    32
