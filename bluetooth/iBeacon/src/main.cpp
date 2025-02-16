@@ -95,7 +95,6 @@ void setup() {
   Serial.flush();
   Serial.println("Initializing...");
   rfhsledinit();
-  ledcolor(0x9400D3);  // DARKVIOLET
   gettimeofday(&now, NULL);
   Serial.printf("Start ESP32 %d\r\n", bootcount++);
   Serial.printf("deep sleep (%lds since last reset, %lds since last boot)\r\n", now.tv_sec, now.tv_sec - last);
@@ -131,7 +130,7 @@ void setup() {
   delay(50);
   esp_deep_sleep(1000000LL * GPIO_DEEP_SLEEP_DURATION);
   // This line should never run so it's a canary for sleep failed
-  ledcolor(0xFFF700);  // Yellow
+  rfhsledfatal();
   #endif
 }
 
@@ -139,9 +138,6 @@ void loop() {
   #ifdef DEEP_SLEEP
   // setup should sleep then restart so this should also never run.
   Serial.println("Entered loop, we are broken");
-  delay(200);
-  ledcolor(0xff0000);  // RED
-  delay(200);
-  ledcolor(0xFFF700);  // Yellow
+  rfhsledfatal();
   #endif
 }

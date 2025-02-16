@@ -33,4 +33,15 @@ void rfhsledinit() {
   // M5Stack recommends not setting this value greater than 20
   // to avoid melting the screen/cover over the LEDs
   FastLED.setBrightness(20);
+  // Set a color so we know the leds have been initialized
+  ledcolor(0x9400D3);  // DARKVIOLET
+}
+
+void rfhsledfatal() {
+  while (1) {
+    ledcolor(0xff0000);  // RED
+    delay(200);
+    ledcolor(0xFFF700);  // Yellow
+    delay(200);
+  }
 }

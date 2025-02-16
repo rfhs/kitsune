@@ -28,7 +28,6 @@ struct timeval now;
 void setup() {
   Serial.begin(115200);
   rfhsledinit();
-  ledcolor(0x9400D3);  // DARKVIOLET
   Serial.flush();
   Serial.println("Initializing...");
   gettimeofday(&now, NULL);
@@ -55,14 +54,11 @@ void setup() {
   }
   esp_deep_sleep(sleepy_tyme);
   // This line should never run so it's a canary for sleep failed
-  ledcolor(0xFFF700);  // Yellow
+  rfhsledfatal();
 }
 
 void loop() {
   // setup should sleep then restart so this should also never run.
   Serial.println("Entered loop, we are broken");
-  delay(200);
-  ledcolor(0xff0000);  // RED
-  delay(200);
-  ledcolor(0xFFF700);  // Yellow
+  rfhsledfatal();
 }
