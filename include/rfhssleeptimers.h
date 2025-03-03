@@ -12,7 +12,7 @@ struct timeval now;
 
 void rfhsboottimer() {
   gettimeofday(&now, NULL);
-  Serial.printf("Start ESP32 %d\r\n", bootcount++);
-  Serial.printf("deep sleep (%lds since last reset, %lds since last boot)\r\n", now.tv_sec, now.tv_sec - last);
+  Serial.printf("ESP32 boot count: %d\r\n", bootcount++);
+  Serial.printf("Sleep stats: %lds since cold boot, %lds since last wakeup\r\n", now.tv_sec, now.tv_sec - last);
   last = now.tv_sec;
 }

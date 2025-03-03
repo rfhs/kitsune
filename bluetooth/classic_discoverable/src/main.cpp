@@ -1,17 +1,11 @@
 #include <Arduino.h>
 
-#include "esp_sleep.h"
-#include "sys/time.h"
 #include "current_conf.h"
 
 #include "BluetoothSerial.h"
 
 #include <rfhsledmacros.h>
-
-// microseconds are used by esp_sleep_enable_timer_wakeup
-#define uS_TO_S 1000000
-// milliseconds are used by delay
-#define mS_TO_S 1000
+#include <rfhssleeptimers.h>
 
 #if !defined(CONFIG_BT_ENABLED) || !defined(CONFIG_BLUEDROID_ENABLED)
 #error Bluetooth is not enabled! Please run `make menuconfig` to and enable it
@@ -21,19 +15,12 @@ BluetoothSerial SerialBT;
 
 uint8_t mac_addr[6] = MAC_ADDR;
 
-RTC_DATA_ATTR static time_t last;    // remember last boot in RTC Memory
-RTC_DATA_ATTR static uint32_t bootcount; // remember number of boots in RTC Memory
-struct timeval now;
-
 void setup() {
   Serial.begin(115200);
   rfhsledinit();
   Serial.flush();
   Serial.println("Initializing...");
-  gettimeofday(&now, NULL);
-  Serial.printf("Start ESP32 %d\r\n", bootcount++);
-  Serial.printf("deep sleep (%lds since last reset, %lds since last boot)\r\n", now.tv_sec, now.tv_sec - last);
-  last = now.tv_sec;
+  rfhsboottimer();
   Serial.flush();
 
   // https://docs.espressif.com/projects/esp-idf/en/latest/esp32/api-reference/system/misc_system_api.html#mac-address

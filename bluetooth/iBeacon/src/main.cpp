@@ -1,7 +1,5 @@
 #include <Arduino.h>
 
-#include "esp_sleep.h"
-#include "sys/time.h"
 #include "current_conf.h"
 
 #include <BLEDevice.h>
@@ -11,6 +9,7 @@
 #include <BLEBeacon.h>
 
 #include <rfhsledmacros.h>
+#include <rfhssleeptimers.h>
 
 // Edit the conference specific variables in a new file and symlink to current_conf.h
 #if defined(EASY)
@@ -63,10 +62,6 @@
 
 uint8_t mac_addr[6] = MAC_ADDR;
 
-RTC_DATA_ATTR static time_t last;    // remember last boot in RTC Memory
-RTC_DATA_ATTR static uint32_t bootcount; // remember number of boots in RTC Memory
-struct timeval now;
-
 BLEAdvertising *pAdvertising;
 BLEServer *pServer;
 BLECharacteristic *pCharacteristic;
@@ -95,10 +90,7 @@ void setup() {
   Serial.flush();
   Serial.println("Initializing...");
   rfhsledinit();
-  gettimeofday(&now, NULL);
-  Serial.printf("Start ESP32 %d\r\n", bootcount++);
-  Serial.printf("deep sleep (%lds since last reset, %lds since last boot)\r\n", now.tv_sec, now.tv_sec - last);
-  last = now.tv_sec;
+  rfhsboottimer();
   Serial.flush();
 
   // https://docs.espressif.com/projects/esp-idf/en/latest/esp32/api-reference/system/misc_system_api.html#mac-address

@@ -62,12 +62,12 @@ void setup() {
   int set_channel = random(10);
   set_channel++;
   #endif
-  Serial.printf("Setting channel to: %d\n", set_channel);
+  Serial.printf("Setting channel to: %d\r\n", set_channel);
   Serial.flush();
   WiFi.mode(WIFI_AP);
   WiFi.softAP(FSSID, PSK, set_channel, SSID_HIDDEN, MAX_CLIENTS);
-  Serial.printf("\rSet power status: %s\n", String(WiFi.setTxPower(TXPOWER)));
-  Serial.println("\rStarted AP with MAC Address: " + String(WiFi.softAPmacAddress()));
+  Serial.printf("Set power status: %s\r\n", String(WiFi.setTxPower(TXPOWER)));
+  Serial.println("Started AP with MAC Address: " + String(WiFi.softAPmacAddress()));
   ledcolor(0x00ff00); // GREEN
   #elif defined(CLIENT)
   WiFi.mode(WIFI_STA);
