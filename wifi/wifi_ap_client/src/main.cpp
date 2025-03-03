@@ -1,19 +1,9 @@
 #include <Arduino.h>
 
 #include "current_conf.h"
-
-#include <WiFi.h>
-#include <esp_wifi.h>
-
 #include <rfhssleeptimers.h>
 #include <rfhsledmacros.h>
-
-uint8_t mac_addr[6] = MAC_ADDR;
-
-void disableWiFi() {
-  WiFi.disconnect(true);
-  WiFi.mode(WIFI_OFF);
-}
+#include <rfhswifi.h>
 
 void setup() {
   // Bring up serial early so we can debug
