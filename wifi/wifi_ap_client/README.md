@@ -78,35 +78,13 @@ m5stamps3-hard-client  Platform  size         Program Size                 Calcu
 m5stamps3-hard-client  Platform  upload       Upload
 m5stamps3-hard-client  Platform  uploadfs     Upload Filesystem Image
 m5stamps3-hard-client  Platform  uploadfsota  Upload Filesystem Image OTA
-m5stickc-easy-ap       Platform  buildfs      Build Filesystem Image
-m5stickc-easy-ap       Platform  erase        Erase Flash
-m5stickc-easy-ap       Platform  size         Program Size                 Calculate program size
-m5stickc-easy-ap       Platform  upload       Upload
-m5stickc-easy-ap       Platform  uploadfs     Upload Filesystem Image
-m5stickc-easy-ap       Platform  uploadfsota  Upload Filesystem Image OTA
-m5stickc-easy-client   Platform  buildfs      Build Filesystem Image
-m5stickc-easy-client   Platform  erase        Erase Flash
-m5stickc-easy-client   Platform  size         Program Size                 Calculate program size
-m5stickc-easy-client   Platform  upload       Upload
-m5stickc-easy-client   Platform  uploadfs     Upload Filesystem Image
-m5stickc-easy-client   Platform  uploadfsota  Upload Filesystem Image OTA
-m5stickc-hard-ap       Platform  buildfs      Build Filesystem Image
-m5stickc-hard-ap       Platform  erase        Erase Flash
-m5stickc-hard-ap       Platform  size         Program Size                 Calculate program size
-m5stickc-hard-ap       Platform  upload       Upload
-m5stickc-hard-ap       Platform  uploadfs     Upload Filesystem Image
-m5stickc-hard-ap       Platform  uploadfsota  Upload Filesystem Image OTA
-m5stickc-hard-client   Platform  buildfs      Build Filesystem Image
-m5stickc-hard-client   Platform  erase        Erase Flash
-m5stickc-hard-client   Platform  size         Program Size                 Calculate program size
-m5stickc-hard-client   Platform  upload       Upload
-m5stickc-hard-client   Platform  uploadfs     Upload Filesystem Image
-m5stickc-hard-client   Platform  uploadfsota  Upload Filesystem Image OTA
 ```
 
-Only M5Atom is currently fully supported.
-M5AtomS3 and M5StampS3 work except for serial output.
-M5StickC works except the hardware lacks an RGB led for output.
+|Hardware |Supported |Tested |Serial console during sleep |
+|------------------- | :---------: | :------: | :---------------------------: |
+|M5Stack Atom-lite |✅|✅|✅|
+|M5Stack AtomS3-lite |✅|✅|❌|
+|M5Stack StampS3 |✅|✅|❌|
 
 To use:
 - [Install PlatformIO](https://platformio.org/install/cli)

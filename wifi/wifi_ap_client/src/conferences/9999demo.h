@@ -15,8 +15,8 @@
 //WIFI_POWER_2dBm 8
 //WIFI_POWER_MINUS_1dBm -4
 
-#if defined(EASY_AP)
-#define AP
+#if defined(AP)
+#if defined(EASY)
 // set mac address
 #define MAC_ADDR {0xF2, 0xE2, 0xF5, 0x12, 0xC6, 0xC9}
 // Network config
@@ -36,8 +36,7 @@
 #define TXPOWER WIFI_POWER_17dBm
 #endif
 
-#if defined(HARD_AP)
-#define AP
+#if defined(HARD)
 // set mac address
 #define MAC_ADDR {0xF2, 0xA2, 0xD3, 0xD4, 0xF3, 0x40}
 // Network config
@@ -56,9 +55,10 @@
 #define TIME_TO_SLEEP 45
 #define TXPOWER WIFI_POWER_7dBm
 #endif
+#endif
 
-#if defined(EASY_CLIENT)
-#define CLIENT
+#if defined(CLIENT)
+#if defined(EASY)
 // set mac address
 #define MAC_ADDR {0xF2, 0x99, 0x68, 0x88, 0x95, 0xBA}
 // Network config
@@ -72,8 +72,7 @@
 #define TXPOWER WIFI_POWER_17dBm
 #endif
 
-#if defined(HARD_CLIENT)
-#define CLIENT
+#if defined(HARD)
 // set mac address
 #define MAC_ADDR {0xF2, 0xE2, 0x63, 0xAA, 0x91, 0x6F}
 // Network config
@@ -85,4 +84,5 @@
 #define TIME_TO_WAKE 300
 #define TIME_TO_SLEEP 0
 #define TXPOWER WIFI_POWER_17dBm
+#endif
 #endif
