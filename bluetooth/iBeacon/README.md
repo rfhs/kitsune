@@ -63,7 +63,6 @@ m5stamps3-medium  Platform  uploadfs     Upload Filesystem Image
 m5stamps3-medium  Platform  uploadfsota  Upload Filesystem Image OTA
 ```
 
-M5Atom-lite, M5AtomS3-lite and M5StampS3 are currently fully supported.
 |Hardware |Supported |Tested |Serial console during sleep |
 |------------------- | :---------: | :------: | :---------------------------: |
 |M5Stack Atom-lite |✅|✅|✅|
