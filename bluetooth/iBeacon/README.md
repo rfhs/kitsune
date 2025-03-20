@@ -61,29 +61,14 @@ m5stamps3-medium  Platform  size         Program Size                 Calculate 
 m5stamps3-medium  Platform  upload       Upload
 m5stamps3-medium  Platform  uploadfs     Upload Filesystem Image
 m5stamps3-medium  Platform  uploadfsota  Upload Filesystem Image OTA
-m5stickc-easy     Platform  buildfs      Build Filesystem Image
-m5stickc-easy     Platform  erase        Erase Flash
-m5stickc-easy     Platform  size         Program Size                 Calculate program size
-m5stickc-easy     Platform  upload       Upload
-m5stickc-easy     Platform  uploadfs     Upload Filesystem Image
-m5stickc-easy     Platform  uploadfsota  Upload Filesystem Image OTA
-m5stickc-hard     Platform  buildfs      Build Filesystem Image
-m5stickc-hard     Platform  erase        Erase Flash
-m5stickc-hard     Platform  size         Program Size                 Calculate program size
-m5stickc-hard     Platform  upload       Upload
-m5stickc-hard     Platform  uploadfs     Upload Filesystem Image
-m5stickc-hard     Platform  uploadfsota  Upload Filesystem Image OTA
-m5stickc-medium   Platform  buildfs      Build Filesystem Image
-m5stickc-medium   Platform  erase        Erase Flash
-m5stickc-medium   Platform  size         Program Size                 Calculate program size
-m5stickc-medium   Platform  upload       Upload
-m5stickc-medium   Platform  uploadfs     Upload Filesystem Image
-m5stickc-medium   Platform  uploadfsota  Upload Filesystem Image OTA
 ```
 
-Only M5Atom is currently fully supported.
-M5AtomS3 and M5StampS3 work except for serial output.
-M5StickC works except the hardware lacks an RGB led for output.
+M5Atom-lite, M5AtomS3-lite and M5StampS3 are currently fully supported.
+|Hardware |Supported |Tested |Serial console during sleep |
+|------------------- | :---------: | :------: | :---------------------------: |
+|M5Stack Atom-lite |✅|✅|✅|
+|M5Stack AtomS3-lite |✅|✅|❌|
+|M5Stack StampS3 |✅|✅|❌|
 
 To use:
 - [Install PlatformIO](https://platformio.org/install/cli)
