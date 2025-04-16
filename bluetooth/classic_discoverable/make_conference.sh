@@ -4,6 +4,7 @@ set -u
 
 if [ -z "${1:-}" ]; then
   printf "Please provide conference name\n"
+  exit 1
 fi
 if [ -e "src/conferences/$(date +"%Y")${1}.h" ]; then
   printf "src/conferences/%s%s.h already exists, please remove it or pick a different name\n" "$(date +"%Y")" "${1}"
