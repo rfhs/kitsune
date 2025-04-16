@@ -63,11 +63,11 @@ m5stamps3-medium  Platform  uploadfs     Upload Filesystem Image
 m5stamps3-medium  Platform  uploadfsota  Upload Filesystem Image OTA
 ```
 
-|Hardware |Supported |Tested |Serial console during sleep |
-|------------------- | :---------: | :------: | :---------------------------: |
-|M5Stack Atom-lite |✅|✅|✅|
-|M5Stack AtomS3-lite |✅|✅|❌|
-|M5Stack StampS3 |✅|✅|❌|
+|Hardware |Supported |Correct MAC Address | Tested |Serial console during sleep |
+|------------------- | :---------: | :-------------------: | :------: | :---------------------------: |
+|M5Stack Atom-lite |✅|✅|✅|✅|
+|M5Stack AtomS3-lite |✅|✅|❌ (-1) |❌|
+|M5Stack StampS3 |✅|✅|❌|❌ (-1) |
 
 To use:
 - [Install PlatformIO](https://platformio.org/install/cli)
