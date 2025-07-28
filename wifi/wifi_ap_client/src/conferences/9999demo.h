@@ -20,7 +20,7 @@
 // set mac address
 #define MAC_ADDR {0xF2, 0xE2, 0xF5, 0x12, 0xC6, 0xC9}
 // Network config
-#define FSSID "Zuma WiFi AP Easy Fox"
+#define FSSID "Zuma WiFi AP Easy Fox Demo"
 #define PSK "0123456789"
 // 1-13 permitted 0 means random
 #define CHANNEL 1
@@ -40,7 +40,7 @@
 // set mac address
 #define MAC_ADDR {0xF2, 0xA2, 0xD3, 0xD4, 0xF3, 0x40}
 // Network config
-#define FSSID "Everest WiFi AP Hard Fox"
+#define FSSID "Everest WiFi AP Hard Fox Demo"
 #define PSK "0123456789"
 // 1-13 permitted 0 means random
 #define CHANNEL 0
@@ -62,7 +62,7 @@
 // set mac address
 #define MAC_ADDR {0xF2, 0x99, 0x68, 0x88, 0x95, 0xBA}
 // Network config
-#define FSSID "Tracker WiFi Client Easy Fox"
+#define FSSID "Tracker WiFi Client Easy Fox Demo"
 #define PSK "0123456789"
 // checks run during startup so we want to stay
 // running no longer than a few minutes to force
@@ -76,7 +76,7 @@
 // set mac address
 #define MAC_ADDR {0xF2, 0xE2, 0x63, 0xAA, 0x91, 0x6F}
 // Network config
-#define FSSID "Robo-Dog WiFi Client Hard Fox"
+#define FSSID "Robo-Dog WiFi Client Hard Fox Demo"
 #define PSK "0123456789"
 // checks run during startup so we want to stay
 // running no longer than a few minutes to force
