@@ -1,5 +1,5 @@
 #if defined(EASY)
-#define DEVICE_NAME         "Sky BLE Easy Fox"
+#define DEVICE_NAME         "Skye BLE Easy Fox"
 #define BEACON_UUID         "00000001-0002-0003-0004-000000000005"
 #define MANUFACTURER_ID     0x4c00
 #define MAJOR               5
