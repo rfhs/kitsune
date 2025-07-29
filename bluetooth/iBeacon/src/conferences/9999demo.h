@@ -6,7 +6,7 @@
 // uuidgen | tr '[[:lower:]]' '[[:upper:]]'
 
 #if defined(EASY)
-#define DEVICE_NAME         "Sky BLE Easy Fox Demo"
+#define DEVICE_NAME         "Skye BLE Easy Fox Demo"
 #define BEACON_UUID         "3BDB3CAB-CA78-48C1-9DBC-1CF8C338CA2A"
 #define MANUFACTURER_ID     0x4c00
 #define MAJOR               5
