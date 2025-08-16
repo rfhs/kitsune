@@ -1,0 +1,20 @@
+name: Build Test All
+
+on:
+  push:
+jobs:
+  build-test-all:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: List added files
+      run: git diff-tree --no-commit-id --name-only -r ${{ github.sha }}
+    
+    - name: Build Test All
+      run: |
+        python3 -m pip install -U platformio
+        ./qa/build-test-all

@@ -1,0 +1,7 @@
+#!/bin/sh
+for i in $(find . -name platformio.ini | grep -v '.pio'); do
+  project="$(dirname -- "${i}")"
+  #cd "${project}"
+  pio run --silent --project-dir "${project}"
+  #cd "${OLDPWD}"
+done
