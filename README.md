@@ -8,6 +8,7 @@ RF CTF Fox code
 |M5Stack Atom-lite |✅|✅|✅|
 |M5Stack AtomS3-lite |✅|❌|✅|
 |M5Stack StampS3 |✅|❌|✅|
+|Arduino Nano ESP32 |✅|❌|✅|
 
 We will accept PRs to extend support to other platformio supported hardware.
 

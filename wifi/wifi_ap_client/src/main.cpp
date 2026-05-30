@@ -68,15 +68,15 @@ void setup() {
   // Before this desired config is not set
   // Speed counts
   Serial.println("Awake and screaming");
-  
+
   delay(TIME_TO_WAKE * mS_TO_S);
   Serial.println("Going to sleep");
   ledcolor(0x880000);  // HALF RED
   disableWiFi();
   ledcolor(0xff0000);  // RED
-  delay(75);  // adjust the esp_deep_sleep if you change this
-  // subtract sleep time on line 39 and 105
-  int sleepy_tyme = uS_TO_S * TIME_TO_SLEEP - 75 - 100;
+  delay(2000);  // adjust the esp_deep_sleep if you change this
+  // subtract sleep time on line 20 and 78
+  int64_t sleepy_tyme = (int64_t)uS_TO_S * TIME_TO_SLEEP - (2000 * 1000) - (100 * 1000);
   if (sleepy_tyme < 0 ) {
     sleepy_tyme = 0;
   }
