@@ -75,5 +75,5 @@ To use:
 - Modify variables in your conference specific file e.g. ['src/conferences/defcon31.h](./src/conferences/defcon31.h) for each of the difficulty levels
 - Select your difficulty level with the `-e` argument to `platformio run`, options are [easy, medium, hard]
 - **Note:** You can specify a target device serial port with argument `--upload-port` to avoid automatic detection.
-- For example, to build and upload Easy: `platformio run -e easy --target upload`
-- **Note:** To build without upload execute `platformio run -e easy`
+- For example, to build and upload Easy: `platformio run -e BOARDNAME-easy --target upload`
+- **Note:** To build without upload execute `platformio run -e BOARDNAME-easy`
