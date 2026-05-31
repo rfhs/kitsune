@@ -3,7 +3,7 @@
 
 #define NUM_LEDS 1
 
-#define ESP32_MAX_BRIGHTNESS 50
+#define ESP32_MAX_BRIGHTNESS 20
 
 #if defined(ARDUINO_M5Stack_ATOM)
 #define DATA_PIN 27
@@ -20,6 +20,13 @@ CRGB leds[NUM_LEDS];
 
 void ledcolor(uint32_t colorcode) {
 
+   /*
+   * What if we had more than 1 led?
+   * for(int num=0; num<NUM_LEDS; num++) {
+   *  leds[num] = CRGB(colorcode);
+   * }
+   */
+
   leds[0] = CRGB(colorcode);
 
 #if defined(ARDUINO_NANO_ESP32)
@@ -32,7 +39,7 @@ void ledcolor(uint32_t colorcode) {
   analogWrite(LED_GREEN, 255 - leds[0].g);
   analogWrite(LED_BLUE,  255 - leds[0].b);
 
-#elif defined(ARDUINO_XIAO_ESP32C5)
+// #elif defined(ARDUINO_XIAO_ESP32C5)
   // No RGB LED, just a single yellow USER_LED.
   // The light is ON when ap is initializing and active
   // OFF when going to sleep.
@@ -42,6 +49,10 @@ void ledcolor(uint32_t colorcode) {
 
   // For any digital LED
   FastLED.show();
+
+  // We are supposed to wait this long but I don't want to.
+  // delay(50)
+
 #endif
 }
 

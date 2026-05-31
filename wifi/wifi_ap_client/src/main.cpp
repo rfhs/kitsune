@@ -74,9 +74,9 @@ void setup() {
   ledcolor(0x880000);  // HALF RED
   disableWiFi();
   ledcolor(0xff0000);  // RED
-  delay(2000);  // adjust the esp_deep_sleep if you change this
+  delay(75)// adjust the esp_deep_sleep if you change this
   // subtract sleep time on line 20 and 78
-  int64_t sleepy_tyme = (int64_t)uS_TO_S * TIME_TO_SLEEP - (2000 * 1000) - (100 * 1000);
+  int64_t sleepy_tyme = (int64_t)uS_TO_S * TIME_TO_SLEEP - (75 * 1000) - (100 * 1000);
   if (sleepy_tyme < 0 ) {
     sleepy_tyme = 0;
   }
