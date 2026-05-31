@@ -1,8 +1,8 @@
 #include <FastLED.h>
 
-#define NUM_LEDS 1
+const uint8_t ESP32_MAX_BRIGHTNESS = 20;
 
-#define ESP32_MAX_BRIGHTNESS 20
+#define NUM_LEDS 1
 
 #if defined(ARDUINO_M5Stack_ATOM)
 #define DATA_PIN 27
@@ -38,11 +38,6 @@ void ledcolor(uint32_t colorcode) {
   analogWrite(LED_GREEN, 255 - leds[0].g);
   analogWrite(LED_BLUE,  255 - leds[0].b);
 
-// #elif defined(ARDUINO_XIAO_ESP32C5)
-  // No RGB LED, just a single yellow USER_LED.
-  // The light is ON when ap is initializing and active
-  // OFF when going to sleep.
-  // digitalWrite(27, LOW);
 
 #else
 
