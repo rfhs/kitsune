@@ -56,7 +56,6 @@ void rfhsledinit() {
 
 // Basically do nothing. The colors are set in ledcolor()
 
-// #elif defined(ARDUINO_XIAO_ESP32C5)
   // Single yellow LED on GPIO 27 as output
   // pinMode(27, OUTPUT);
 
