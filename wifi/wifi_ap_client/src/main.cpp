@@ -35,6 +35,13 @@ void setup() {
   } else {
     Serial.println("Error setting MAC address");
   }
+#if defined(ARDUINO_NANO_ESP32)
+  // esp_wifi_start() returns an error when called while already
+  // running, so WiFiStart() fails and WiFi.mode()/softAP()
+  // never properly start the AP => The AP name shows up as ESP-33XXXX.
+  esp_wifi_stop();
+#endif
+
   // Before this desired mac address is not set
   // Speed counts
 
