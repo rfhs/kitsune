@@ -16,7 +16,6 @@ void setup() {
   esp_wifi_init(&cfg);
   esp_wifi_set_storage(WIFI_STORAGE_RAM);
   delay(100); // adjust the esp_deep_sleep if you change this
-  esp_wifi_start();
 
   #if defined(AP)
   // Create Wi-Fi network with SSID and password
