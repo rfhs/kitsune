@@ -16,7 +16,7 @@ void setup() {
   esp_wifi_init(&cfg);
   esp_wifi_set_storage(WIFI_STORAGE_RAM);
   delay(100); // adjust the esp_deep_sleep if you change this
-  esp_wifi_start();
+  // esp_wifi_start(); // esp_wifi_set_mac() only requires Wi-Fi to be *initialized*
 
   #if defined(AP)
   // Create Wi-Fi network with SSID and password
@@ -35,12 +35,6 @@ void setup() {
   } else {
     Serial.println("Error setting MAC address");
   }
-#if defined(ARDUINO_NANO_ESP32)
-  // esp_wifi_start() returns an error when called while already
-  // running, so WiFiStart() fails and WiFi.mode()/softAP()
-  // never properly start the AP => The AP name shows up as ESP-33XXXX.
-  esp_wifi_stop();
-#endif
 
   // Before this desired mac address is not set
   // Speed counts
