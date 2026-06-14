@@ -4,36 +4,30 @@
 #include <rfhssleeptimers.h>
 #include <rfhsledmacros.h>
 #include <rfhswifi.h>
+#include <esp_mac.h>
 
 void setup() {
   // Bring up serial early so we can debug
   Serial.begin(115200);
   Serial.flush();
 
-  // Initialize Wi-Fi with default configuration to set MAC address
-  wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
-  WiFi.mode(WIFI_MODE_NULL);
-  esp_wifi_init(&cfg);
-  esp_wifi_set_storage(WIFI_STORAGE_RAM);
-  delay(100); // adjust the esp_deep_sleep if you change this
+  WiFi.persistent(false); // Stores it still in RAM
 
   #if defined(AP)
   // Create Wi-Fi network with SSID and password
   Serial.println("Setting AP (Access Point)…");
-  // Interface to set MAC address
-  wifi_interface_t interface = WIFI_IF_AP;
+  mac_addr[5] -=1;
   #elif defined(CLIENT)
   // Connect to Wi-Fi network with SSID and password
   Serial.println("Setting WiFi Fox Client…");
-  // Interface to set MAC address
-  wifi_interface_t interface = WIFI_IF_STA;
   #endif
-
-  if (esp_wifi_set_mac(interface, mac_addr) == ESP_OK) {
+  if (esp_base_mac_addr_set(mac_addr) == ESP_OK) {
     Serial.println("MAC address set successfully");
   } else {
     Serial.println("Error setting MAC address");
   }
+  delay(100); // adjust the esp_deep_sleep if you change this
+
   // Before this desired mac address is not set
   // Speed counts
 
