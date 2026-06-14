@@ -16,7 +16,7 @@ void setup() {
   esp_wifi_init(&cfg);
   esp_wifi_set_storage(WIFI_STORAGE_RAM);
   delay(100); // adjust the esp_deep_sleep if you change this
-  esp_wifi_start();
+  // esp_wifi_start(); // esp_wifi_set_mac() only requires Wi-Fi to be *initialized*
 
   #if defined(AP)
   // Create Wi-Fi network with SSID and password
@@ -35,6 +35,7 @@ void setup() {
   } else {
     Serial.println("Error setting MAC address");
   }
+
   // Before this desired mac address is not set
   // Speed counts
 
@@ -68,13 +69,13 @@ void setup() {
   // Before this desired config is not set
   // Speed counts
   Serial.println("Awake and screaming");
-  
+
   delay(TIME_TO_WAKE * mS_TO_S);
   Serial.println("Going to sleep");
   ledcolor(0x880000);  // HALF RED
   disableWiFi();
   ledcolor(0xff0000);  // RED
-  delay(75);  // adjust the esp_deep_sleep if you change this
+  delay(75); // adjust the esp_deep_sleep if you change this
   // subtract sleep time on line 39 and 105
   int sleepy_tyme = uS_TO_S * TIME_TO_SLEEP - 75 - 100;
   if (sleepy_tyme < 0 ) {
