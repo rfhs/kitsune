@@ -10,6 +10,8 @@
 #define DATA_PIN 19
 #elif defined(ARDUINO_M5Stack_StampS3)
 #define DATA_PIN 21
+#elif defined(ARDUINO_XIAO_ESP32C5)
+#define DATA_PIN 27
 
 #endif
 
@@ -36,6 +38,14 @@ void ledcolor(uint32_t colorcode) {
   analogWrite(LED_GREEN, 255 - leds[0].g);
   analogWrite(LED_BLUE,  255 - leds[0].b);
 
+#elif defined(ARDUINO_XIAO_ESP32C5)
+  // ON when awake, OFF when going to sleep.
+  if (colorcode == 0) {
+    digitalWrite(DATA_PIN, HIGH);  // off
+  } else {
+    digitalWrite(DATA_PIN, LOW);   // on
+  }
+
 #else
 
   // For any digital LED
@@ -52,6 +62,10 @@ void rfhsledinit() {
 #if defined(ARDUINO_NANO_ESP32)
 
 // Basically do nothing. The colors and brightness are set in ledcolor()
+  
+#elif defined(ARDUINO_XIAO_ESP32C5)
+  // Single yellow LED on GPIO 27 as output
+  pinMode(DATA_PIN, OUTPUT);
 
 #else
   FastLED.addLeds<WS2812, DATA_PIN, GRB>(leds, NUM_LEDS);

@@ -2,7 +2,12 @@
 #include <esp_wifi.h>
 
 void disableWiFi() {
+ // fixes a noisy log error when monitoring
+#if defined(AP)
+  WiFi.softAPdisconnect(true);
+#else
   WiFi.disconnect(true);
+#endif
   WiFi.mode(WIFI_OFF);
 }
 
