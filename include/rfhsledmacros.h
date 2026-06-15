@@ -1,7 +1,5 @@
 #include <FastLED.h>
 
-const uint8_t ESP32_MAX_BRIGHTNESS = 20;
-
 #define NUM_LEDS 1
 
 #if defined(ARDUINO_M5Stack_ATOM)
@@ -32,8 +30,8 @@ void ledcolor(uint32_t colorcode) {
 
 #if defined(ARDUINO_NANO_ESP32)
 
-  //Adjusting Brightness
-  leds[0].nscale8(ESP32_MAX_BRIGHTNESS);
+  // Brightness seems to require being set every call
+  leds[0].nscale8(75); //Adjusting Brightness
 
   //Displaying the color on the board
   analogWrite(LED_RED,   255 - leds[0].r);
@@ -63,8 +61,8 @@ void rfhsledinit() {
 
 #if defined(ARDUINO_NANO_ESP32)
 
-// Basically do nothing. The colors are set in ledcolor()
-
+// Basically do nothing. The colors and brightness are set in ledcolor()
+  
 #elif defined(ARDUINO_XIAO_ESP32C5)
   // Single yellow LED on GPIO 27 as output
   pinMode(DATA_PIN, OUTPUT);

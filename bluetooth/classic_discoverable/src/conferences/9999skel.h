@@ -7,7 +7,7 @@
 
 #if defined(HARD)
 #define MAC_ADDR {0x00, 0x06, 0x07, 0x08, 0x09, 0x0a}
-#define NAME "Marshall BTC Easy Fox"
+#define NAME "Marshall BTC Hard Fox"
 #define TIME_TO_WAKE 30
 #define TIME_TO_SLEEP 30
 #endif
