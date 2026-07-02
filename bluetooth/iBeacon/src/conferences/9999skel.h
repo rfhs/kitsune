@@ -1,4 +1,5 @@
 #if defined(EASY)
+#define RFHS_CHALLENGE_NAME "BLE Easy Fox"
 #define DEVICE_NAME         "Skye BLE Easy Fox"
 #define BEACON_UUID         "00000001-0002-0003-0004-000000000005"
 #define MANUFACTURER_ID     0x4c00
@@ -8,6 +9,7 @@
 #define MAC_ADDR            {0x00, 0x01, 0x02, 0x03, 0x04, 0x05}
 
 #elif defined(MEDIUM)
+#define RFHS_CHALLENGE_NAME "BLE Medium Fox"
 #define DEVICE_NAME         "Rocky BLE Medium Fox"
 #define BEACON_UUID         "00000006-0007-0008-0009-00000000000a"
 #define MANUFACTURER_ID     0x4c00
@@ -17,6 +19,7 @@
 #define MAC_ADDR            {0x00, 0x06, 0x07, 0x08, 0x09, 0x0a}
 
 #elif defined(HARD)
+#define RFHS_CHALLENGE_NAME "BLE Hard Fox"
 #define DEVICE_NAME         "Rubble BLE Hard Fox"
 #define BEACON_UUID         "0000000b-000c-000d-000e-00000000000f"
 #define MANUFACTURER_ID     0x4c00
