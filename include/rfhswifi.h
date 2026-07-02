@@ -5,11 +5,8 @@ void disableWiFi() {
  // fixes a noisy log error when monitoring
 #if defined(AP)
   WiFi.softAPdisconnect(true);
-#else
+#elif defined(CLIENT)
   WiFi.disconnect(true);
 #endif
   WiFi.mode(WIFI_OFF);
 }
-
-uint8_t mac_addr[6] = MAC_ADDR;
-
