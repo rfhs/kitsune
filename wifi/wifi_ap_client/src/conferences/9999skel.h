@@ -55,12 +55,52 @@
 #define TIME_TO_SLEEP 45
 #define TXPOWER WIFI_POWER_7dBm
 #endif
+
+#if defined(5EASY)
+// set mac address
+#define MAC_ADDR {0x00, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f}
+// Network config
+#define FSSID "Rex WiFi 5GHz AP Easy Fox"
+#define PSK "0123456789"
+// 1-13 permitted 0 means random
+#define CHANNEL 1
+// 0 broadcast 1 hidden
+#define SSID_HIDDEN  0
+// 1-4 permitted
+#define MAX_CLIENTS 1
+#define TIME_TO_WAKE 15
+#define TIME_TO_SLEEP 5
+// checks run during startup so we want to stay
+// running no longer than a few minutes to force
+// checks to run and led to update
+#define TXPOWER WIFI_POWER_17dBm
+#endif
+
+#if defined(5HARD)
+// set mac address
+#define MAC_ADDR {0x00, 0x10, 0x11, 0x12, 0x13, 0x14}
+// Network config
+#define FSSID "Liberty WiFi 5GHz AP Hard Fox"
+#define PSK "0123456789"
+// 1-13 permitted 0 means random
+#define CHANNEL 0
+// 0 broadcast 1 hidden
+#define SSID_HIDDEN 0
+// 1-4 permitted
+#define MAX_CLIENTS 1
+// checks run during startup so we want to stay
+// running no longer than a few minutes to force
+// checks to run and led to update
+#define TIME_TO_WAKE 30
+#define TIME_TO_SLEEP 45
+#define TXPOWER WIFI_POWER_7dBm
+#endif
 #endif
 
 #if defined(CLIENT)
 #if defined(EASY)
 // set mac address
-#define MAC_ADDR {0x00, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f}
+#define MAC_ADDR {0x00, 0x15, 0x16, 0x17, 0x18, 0x19}
 // Network config
 #define FSSID "Tracker WiFi Client Easy Fox"
 #define PSK "0123456789"
@@ -74,7 +114,7 @@
 
 #if defined(HARD)
 // set mac address
-#define MAC_ADDR {0x00, 0x10, 0x11, 0x12, 0x13, 0x14}
+#define MAC_ADDR {0x00, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e}
 // Network config
 #define FSSID "Robo-Dog WiFi Client Hard Fox"
 #define PSK "0123456789"
