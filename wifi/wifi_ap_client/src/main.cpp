@@ -4,6 +4,7 @@
 #include <rfhssleeptimers.h>
 #include <rfhsledmacros.h>
 #include <rfhswifi.h>
+#include <esp_mac.h>
 
 void setup() {
   // Bring up serial early so we can debug
@@ -14,7 +15,6 @@ void setup() {
   wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
   WiFi.mode(WIFI_MODE_NULL);
   esp_wifi_init(&cfg);
-  esp_wifi_set_storage(WIFI_STORAGE_RAM);
   delay(100); // adjust the esp_deep_sleep if you change this
   // esp_wifi_start(); // esp_wifi_set_mac() only requires Wi-Fi to be *initialized*
 
@@ -30,14 +30,18 @@ void setup() {
   wifi_interface_t interface = WIFI_IF_STA;
   #endif
 
+  // Before this desired mac address is not set
+  // Speed counts
+  uint8_t mac_addr[6] = MAC_ADDR;
   if (esp_wifi_set_mac(interface, mac_addr) == ESP_OK) {
     Serial.println("MAC address set successfully");
   } else {
     Serial.println("Error setting MAC address");
   }
 
-  // Before this desired mac address is not set
-  // Speed counts
+  //  If this runs before setting mac address then
+  //  setting mac address fails on esp32c5
+  esp_wifi_set_storage(WIFI_STORAGE_RAM);
 
   rfhsledinit();
 
@@ -63,7 +67,7 @@ void setup() {
   #elif defined(CLIENT)
   WiFi.mode(WIFI_STA);
   WiFi.begin(FSSID, PSK);
-  ledcolor(0xfff700);  // YELLOW
+  ledcolor(0xff8c00);  // ORANGE
   #endif
 
   // Before this desired config is not set
