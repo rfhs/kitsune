@@ -58,7 +58,7 @@
 #define TXPOWER WIFI_POWER_7dBm
 #endif
 
-#if defined(5EASY)
+#if defined(FIVEEASY)
 #define RFHS_CHALLENGE_NAME "WiFi 5GHz AP Easy Fox"
 // Network config
 #define FSSID "Rex WiFi 5GHz AP Easy Fox"
@@ -79,7 +79,7 @@
 #define TXPOWER WIFI_POWER_17dBm
 #endif
 
-#if defined(5HARD)
+#if defined(FIVEHARD)
 #define RFHS_CHALLENGE_NAME "WiFi 5GHz AP Hard Fox"
 // Network config
 #define FSSID "Liberty WiFi 5GHz AP Hard Fox"
@@ -103,8 +103,8 @@
 #endif
 
 #if defined(CLIENT)
-#define RFHS_CHALLENGE_NAME "WiFi Client Easy Fox"
 #if defined(EASY)
+#define RFHS_CHALLENGE_NAME "WiFi Client Easy Fox"
 // set mac address
 #define FSSID "Tracker WiFi Client Easy Fox"
 #define PSK "0123456789"
