@@ -78,6 +78,7 @@ void rfhsledinit() {
 }
 
 void rfhsledfatal() {
+  Serial.println("PANIC");
   while (1) {
     ledcolor(0xff0000);  // RED
     delay(200);
