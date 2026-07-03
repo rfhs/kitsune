@@ -2,7 +2,8 @@ name: Build Test All
 
 on:
   pull_request:
-  push:
+    branches:
+      - master
 jobs:
   build-test-all:
     runs-on: ubuntu-latest
