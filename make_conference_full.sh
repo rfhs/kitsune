@@ -36,7 +36,7 @@ for challenge in bluetooth/iBeacon bluetooth/classic_discoverable wifi/wifi_ap_c
     printf "Something went wrong creating %s/src/conferences/%s%s.h, please scroll up\n" "${challenge}" "$(date +"%Y")" "${1}"
     exit 1
   fi
-  ln -snf "src/conferences/$(date +"%Y")${1}.h" src/current_conf.h
+  ln -snf "conferences/$(date +"%Y")${1}.h" src/current_conf.h
   grep -e 'RFHS_CHALLENGE_NAME\|NAME\|UUID\|MAC_ADDR\|FSSID\|CHANNEL' "src/conferences/$(date +"%Y")${1}.h" | sed -e 's#{##' -e 's#}##' -e 's#0x##g' -e 's#, #:#g' | tee -a "${OLDPWD}/$(date +"%Y")${1}.txt" > /dev/null 2>&1
   printf "complete\n"
   popd > /dev/null 2>&1

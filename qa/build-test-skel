@@ -7,6 +7,11 @@ sudo apt-get install cracklib-runtime -y
 
 ## Create a new conference from 9999skel
 ./make_conference_full.sh github-ci
+## Verify is worked
+if [ ! -r "$(date +"%Y")github-ci.txt" ]; then
+  printf "Report file missing\n"
+  exit 1
+fi
 ## Build 9999skell (with rotated identifiers
 for i in $(find . -name platformio.ini | grep -v '.pio'); do
   project="$(dirname -- "${i}")"
