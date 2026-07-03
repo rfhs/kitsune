@@ -1,8 +1,9 @@
-name: Build Test All
+name: Build Test Demo
 
 on:
   pull_request:
-  push:
+    branches:
+      - master
 jobs:
   build-test-all:
     runs-on: ubuntu-latest
@@ -15,7 +16,7 @@ jobs:
     - name: List added files
       run: git diff-tree --no-commit-id --name-only -r ${{ github.sha }}
     
-    - name: Build Test All
+    - name: Build Test Demo
       run: |
         python3 -m pip install -U platformio
-        ./qa/build-test-all
+        ./qa/build-test-demo
