@@ -1,5 +1,8 @@
 #!/bin/sh
 
+python3 -m pip install -U platformio
+apt-get install cracklib-runtime -y
+
 ## Create a new conference from 9999skel
 ./make_conference_full.sh github-ci
 ## Build 9999skell (with rotated identifiers

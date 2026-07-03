@@ -18,5 +18,4 @@ jobs:
     
     - name: Build Test Skel
       run: |
-        python3 -m pip install -U platformio
         ./qa/build-test-skel
