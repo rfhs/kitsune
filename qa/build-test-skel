@@ -1,11 +1,5 @@
 #!/bin/sh
 
-## Build 9999demo
-for i in $(find . -name platformio.ini | grep -v '.pio'); do
-  project="$(dirname -- "${i}")"
-  pio run --silent --project-dir "${project}"
-done
-
 ## Create a new conference from 9999skel
 ./make_conference_full.sh github-ci
 ## Build 9999skell (with rotated identifiers
