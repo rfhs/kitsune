@@ -1,4 +1,6 @@
 #!/bin/sh
+set -e
+set -u
 
 python3 -m pip install -U platformio
 sudo apt-get install cracklib-runtime -y
