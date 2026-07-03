@@ -20,6 +20,10 @@ done
 
 # Safety checks complete, define functions and do the thing
 threewords() {
+  if [ ! -r '/usr/share/dict/cracklib-words' ]; then
+    printf 'Unable to find /usr/share/dict/cracklib-words\n'
+    exit 1
+  fi
   dictionary='/usr/share/dict/cracklib-words'
   shuf -n3 "${dictionary}" | paste -sd ' '
 }
