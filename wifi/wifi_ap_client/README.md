@@ -80,11 +80,13 @@ m5stamps3-hard-client  Platform  uploadfs     Upload Filesystem Image
 m5stamps3-hard-client  Platform  uploadfsota  Upload Filesystem Image OTA
 ```
 
-|Hardware |Supported |Tested |Serial console during sleep |
+|Hardware |AP |client |Serial console during sleep |
 |------------------- | :---------: | :------: | :---------------------------: |
 |M5Stack Atom-lite |✅|✅|✅|
 |M5Stack AtomS3-lite |✅|✅|❌|
 |M5Stack StampS3 |✅|✅|❌|
+|Ardunio Nano ESP32 |✅|❌|❌|
+|Seeed Xiao ESP32C5 |✅|❌||❌|
 
 To use:
 - [Install PlatformIO](https://platformio.org/install/cli)
