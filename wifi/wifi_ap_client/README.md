@@ -6,78 +6,24 @@ Difficulty levels are defined as PlatformIO Environments:
 $ platformio run --list-targets
 Environment    Group     Name         Title                        Description
 -------------  --------  -----------  ---------------------------  ----------------------
-m5atom-easy-ap         Platform  buildfs      Build Filesystem Image
-m5atom-easy-ap         Platform  erase        Erase Flash
-m5atom-easy-ap         Platform  size         Program Size                 Calculate program size
-m5atom-easy-ap         Platform  upload       Upload
-m5atom-easy-ap         Platform  uploadfs     Upload Filesystem Image
-m5atom-easy-ap         Platform  uploadfsota  Upload Filesystem Image OTA
-m5atom-easy-client     Platform  buildfs      Build Filesystem Image
-m5atom-easy-client     Platform  erase        Erase Flash
-m5atom-easy-client     Platform  size         Program Size                 Calculate program size
-m5atom-easy-client     Platform  upload       Upload
-m5atom-easy-client     Platform  uploadfs     Upload Filesystem Image
-m5atom-easy-client     Platform  uploadfsota  Upload Filesystem Image OTA
-m5atom-hard-ap         Platform  buildfs      Build Filesystem Image
-m5atom-hard-ap         Platform  erase        Erase Flash
-m5atom-hard-ap         Platform  size         Program Size                 Calculate program size
-m5atom-hard-ap         Platform  upload       Upload
-m5atom-hard-ap         Platform  uploadfs     Upload Filesystem Image
-m5atom-hard-ap         Platform  uploadfsota  Upload Filesystem Image OTA
-m5atom-hard-client     Platform  buildfs      Build Filesystem Image
-m5atom-hard-client     Platform  erase        Erase Flash
-m5atom-hard-client     Platform  size         Program Size                 Calculate program size
-m5atom-hard-client     Platform  upload       Upload
-m5atom-hard-client     Platform  uploadfs     Upload Filesystem Image
-m5atom-hard-client     Platform  uploadfsota  Upload Filesystem Image OTA
-m5atoms3-easy-ap       Platform  buildfs      Build Filesystem Image
-m5atoms3-easy-ap       Platform  erase        Erase Flash
-m5atoms3-easy-ap       Platform  size         Program Size                 Calculate program size
-m5atoms3-easy-ap       Platform  upload       Upload
-m5atoms3-easy-ap       Platform  uploadfs     Upload Filesystem Image
-m5atoms3-easy-ap       Platform  uploadfsota  Upload Filesystem Image OTA
-m5atoms3-easy-client   Platform  buildfs      Build Filesystem Image
-m5atoms3-easy-client   Platform  erase        Erase Flash
-m5atoms3-easy-client   Platform  size         Program Size                 Calculate program size
-m5atoms3-easy-client   Platform  upload       Upload
-m5atoms3-easy-client   Platform  uploadfs     Upload Filesystem Image
-m5atoms3-easy-client   Platform  uploadfsota  Upload Filesystem Image OTA
-m5atoms3-hard-ap       Platform  buildfs      Build Filesystem Image
-m5atoms3-hard-ap       Platform  erase        Erase Flash
-m5atoms3-hard-ap       Platform  size         Program Size                 Calculate program size
-m5atoms3-hard-ap       Platform  upload       Upload
-m5atoms3-hard-ap       Platform  uploadfs     Upload Filesystem Image
-m5atoms3-hard-ap       Platform  uploadfsota  Upload Filesystem Image OTA
-m5atoms3-hard-client   Platform  buildfs      Build Filesystem Image
-m5atoms3-hard-client   Platform  erase        Erase Flash
-m5atoms3-hard-client   Platform  size         Program Size                 Calculate program size
-m5atoms3-hard-client   Platform  upload       Upload
-m5atoms3-hard-client   Platform  uploadfs     Upload Filesystem Image
-m5atoms3-hard-client   Platform  uploadfsota  Upload Filesystem Image OTA
-m5stamps3-easy-ap      Platform  buildfs      Build Filesystem Image
-m5stamps3-easy-ap      Platform  erase        Erase Flash
-m5stamps3-easy-ap      Platform  size         Program Size                 Calculate program size
-m5stamps3-easy-ap      Platform  upload       Upload
-m5stamps3-easy-ap      Platform  uploadfs     Upload Filesystem Image
-m5stamps3-easy-ap      Platform  uploadfsota  Upload Filesystem Image OTA
-m5stamps3-easy-client  Platform  buildfs      Build Filesystem Image
-m5stamps3-easy-client  Platform  erase        Erase Flash
-m5stamps3-easy-client  Platform  size         Program Size                 Calculate program size
-m5stamps3-easy-client  Platform  upload       Upload
-m5stamps3-easy-client  Platform  uploadfs     Upload Filesystem Image
-m5stamps3-easy-client  Platform  uploadfsota  Upload Filesystem Image OTA
-m5stamps3-hard-ap      Platform  buildfs      Build Filesystem Image
-m5stamps3-hard-ap      Platform  erase        Erase Flash
-m5stamps3-hard-ap      Platform  size         Program Size                 Calculate program size
-m5stamps3-hard-ap      Platform  upload       Upload
-m5stamps3-hard-ap      Platform  uploadfs     Upload Filesystem Image
-m5stamps3-hard-ap      Platform  uploadfsota  Upload Filesystem Image OTA
-m5stamps3-hard-client  Platform  buildfs      Build Filesystem Image
-m5stamps3-hard-client  Platform  erase        Erase Flash
-m5stamps3-hard-client  Platform  size         Program Size                 Calculate program size
-m5stamps3-hard-client  Platform  upload       Upload
-m5stamps3-hard-client  Platform  uploadfs     Upload Filesystem Image
-m5stamps3-hard-client  Platform  uploadfsota  Upload Filesystem Image OTA
+arduino-nano-esp32-easy-ap      Platform  upload         Upload
+arduino-nano-esp32-hard-ap      Platform  upload         Upload
+m5atom-easy-ap                  Platform  upload         Upload
+m5atom-easy-client              Platform  upload         Upload
+m5atom-hard-ap                  Platform  upload         Upload
+m5atom-hard-client              Platform  upload         Upload
+m5atoms3-easy-ap                Platform  upload         Upload
+m5atoms3-easy-client            Platform  upload         Upload
+m5atoms3-hard-ap                Platform  upload         Upload
+m5atoms3-hard-client            Platform  upload         Upload
+m5stamps3-easy-ap               Platform  upload         Upload
+m5stamps3-easy-client           Platform  upload         Upload
+m5stamps3-hard-ap               Platform  upload         Upload
+m5stamps3-hard-client           Platform  upload         Upload
+seeed-xiao-esp32c5-easy-ap      Platform  upload         Upload
+seeed-xiao-esp32c5-fiveeasy-ap  Platform  upload         Upload
+seeed-xiao-esp32c5-fivehard-ap  Platform  upload         Upload
+seeed-xiao-esp32c5-hard-ap      Platform  upload         Upload
 ```
 
 |Hardware |AP |client |Serial console during sleep |
@@ -86,7 +32,7 @@ m5stamps3-hard-client  Platform  uploadfsota  Upload Filesystem Image OTA
 |M5Stack AtomS3-lite |✅|✅|❌|
 |M5Stack StampS3 |✅|✅|❌|
 |Ardunio Nano ESP32 |✅|❌|❌|
-|Seeed Xiao ESP32C5 |✅|❌||❌|
+|Seeed Xiao ESP32C5 |✅|❌|❌|
 
 To use:
 - [Install PlatformIO](https://platformio.org/install/cli)

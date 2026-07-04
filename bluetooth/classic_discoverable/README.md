@@ -6,49 +6,17 @@ Difficulty levels are defined as PlatformIO Environments:
 $ platformio run --list-targets
 Environment    Group     Name         Title                        Description
 -------------  --------  -----------  ---------------------------  ----------------------
-m5atom-easy     Platform  buildfs      Build Filesystem Image
-m5atom-easy     Platform  erase        Erase Flash
-m5atom-easy     Platform  size         Program Size                 Calculate program size
-m5atom-easy     Platform  upload       Upload
-m5atom-easy     Platform  uploadfs     Upload Filesystem Image
-m5atom-easy     Platform  uploadfsota  Upload Filesystem Image OTA
-m5atom-hard     Platform  buildfs      Build Filesystem Image
-m5atom-hard     Platform  erase        Erase Flash
-m5atom-hard     Platform  size         Program Size                 Calculate program size
-m5atom-hard     Platform  upload       Upload
-m5atom-hard     Platform  uploadfs     Upload Filesystem Image
-m5atom-hard     Platform  uploadfsota  Upload Filesystem Image OTA
-m5atoms3-easy   Platform  buildfs      Build Filesystem Image
-m5atoms3-easy   Platform  erase        Erase Flash
-m5atoms3-easy   Platform  size         Program Size                 Calculate program size
-m5atoms3-easy   Platform  upload       Upload
-m5atoms3-easy   Platform  uploadfs     Upload Filesystem Image
-m5atoms3-easy   Platform  uploadfsota  Upload Filesystem Image OTA
-m5atoms3-hard   Platform  buildfs      Build Filesystem Image
-m5atoms3-hard   Platform  erase        Erase Flash
-m5atoms3-hard   Platform  size         Program Size                 Calculate program size
-m5atoms3-hard   Platform  upload       Upload
-m5atoms3-hard   Platform  uploadfs     Upload Filesystem Image
-m5atoms3-hard   Platform  uploadfsota  Upload Filesystem Image OTA
-m5stamps3-easy  Platform  buildfs      Build Filesystem Image
-m5stamps3-easy  Platform  erase        Erase Flash
-m5stamps3-easy  Platform  size         Program Size                 Calculate program size
-m5stamps3-easy  Platform  upload       Upload
-m5stamps3-easy  Platform  uploadfs     Upload Filesystem Image
-m5stamps3-easy  Platform  uploadfsota  Upload Filesystem Image OTA
-m5stamps3-hard  Platform  buildfs      Build Filesystem Image
-m5stamps3-hard  Platform  erase        Erase Flash
-m5stamps3-hard  Platform  size         Program Size                 Calculate program size
-m5stamps3-hard  Platform  upload       Upload
-m5stamps3-hard  Platform  uploadfs     Upload Filesystem Image
-m5stamps3-hard  Platform  uploadfsota  Upload Filesystem Image OTA
+m5atom-easy    Platform  upload       Upload
+m5atom-hard    Platform  upload       Upload
 ```
 
 |Hardware |Supported |Tested |Serial console during sleep |
-|------------------- | :---------: | :------: | :---------------------------: |
+|------------------- | :---------: | :------: | :-------: |
 |M5Stack Atom-lite |✅|✅|✅|
 |M5Stack AtomS3-lite |❌|✅|❌|
 |M5Stack StampS3 |❌|✅|❌|
+|Arduino Nano ESP32 |❌|✅|❌|
+|Seeed XIAO ESP32C5 |❌|✅|❌|
 
 To use:
 - [Install PlatformIO](https://platformio.org/install/cli)
@@ -56,5 +24,5 @@ To use:
 - Modify variables in your conference specific file e.g. ['src/conferences/defcon31.h](./src/conferences/defcon31.h) for each of the difficulty levels
 - Select your difficulty level with the `-e` argument to `platformio run`, options are [easy, hard]
 - **Note:** You can specify a target device serial port with argument `--upload-port` to avoid automatic detection.
-- For example, to build and upload Easy: `platformio run -e BOARDNAME-easy --target upload`
-- **Note:** To build without upload execute `platformio run -e BOARDNAME-easy`
+- For example, to build and upload Easy: `platformio run -e m5atom-easy --target upload`
+- **Note:** To build without upload execute `platformio run -e m5atom-easy`
