@@ -3,13 +3,13 @@ RF CTF Fox code
 [![Build Test All](https://github.com/rfhs/kitsune/actions/workflows/build-test-all.yaml/badge.svg)](https://github.com/rfhs/kitsune/actions/workflows/build-test-all.yaml)
 
 
-|Hardware |Bluetooth iBeacon |Bluetooth Classic Discoverable |Wifi AP/Client |
-|------------------- | :---------: | :------: | :---------------------------: |
-|M5Stack Atom-lite |✅|✅|✅|
-|M5Stack AtomS3-lite |✅|❌|✅|
-|M5Stack StampS3 |✅|❌|✅|
-|Arduino Nano ESP32 |✅|❌|✅|
-|Seeed XIAO ESP32C5 |❌|❌|✅|
+|Hardware |Bluetooth iBeacon |Bluetooth Classic Discoverable |Wifi AP |Client |
+|------------------- | :---------: | :------: | :---------------------------: | :-----: |
+|M5Stack Atom-lite |✅|✅|✅|✅|
+|M5Stack AtomS3-lite |✅|❌|✅|✅|
+|M5Stack StampS3 |✅|❌|✅|✅|
+|Arduino Nano ESP32 |✅|❌|✅|❌|
+|Seeed XIAO ESP32C5 |❌|❌|✅|❌||
 
 We will accept PRs to extend support to other platformio supported hardware.
 

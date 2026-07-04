@@ -1,4 +1,8 @@
 #!/bin/sh
+set -e
+set -u
+
+python3 -m pip install -U platformio
 
 ## Build 9999demo
 for i in $(find . -name platformio.ini | grep -v '.pio'); do

@@ -23,7 +23,7 @@
 #define FSSID "Demo Zuma WiFi AP Easy Fox"
 #define PSK "0123456789"
 // 1-13 permitted 0 means random
-#define CHANNEL 36
+#define CHANNEL 1
 // 0 broadcast 1 hidden
 #define SSID_HIDDEN  0
 // 1-4 permitted

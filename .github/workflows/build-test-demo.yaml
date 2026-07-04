@@ -3,9 +3,9 @@ name: Build Test Demo
 on:
   pull_request:
     branches:
-      - master
+      - main
 jobs:
-  build-test-all:
+  build-test-demo:
     runs-on: ubuntu-latest
     steps:
     - name: Checkout
@@ -18,5 +18,4 @@ jobs:
     
     - name: Build Test Demo
       run: |
-        python3 -m pip install -U platformio
         ./qa/build-test-demo

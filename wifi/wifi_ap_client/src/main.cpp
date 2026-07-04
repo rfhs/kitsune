@@ -5,6 +5,8 @@
 #include <rfhsledmacros.h>
 #include <rfhswifi.h>
 #include <esp_mac.h>
+#include <esp_system.h>
+#include <esp_log.h>
 
 void setup() {
   // Bring up serial early so we can debug
@@ -15,7 +17,6 @@ void setup() {
   wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
   WiFi.mode(WIFI_MODE_NULL);
   esp_wifi_init(&cfg);
-  delay(100); // adjust the esp_deep_sleep if you change this
   // esp_wifi_start(); // esp_wifi_set_mac() only requires Wi-Fi to be *initialized*
 
   #if defined(AP)
@@ -50,23 +51,69 @@ void setup() {
   Serial.println("Initializing...");
   rfhsboottimer();
 
+  // Set the regulatory domain BEFORE starting the radio
+  // Use the 2-letter ISO code (e.g., "US", "DE", "JP", "CN")
+  // The second parameter 'true' tells the chip to enforce these rules tightly
+  esp_err_t err = esp_wifi_set_country_code("US", true);
+
+  if (err == ESP_OK) {
+    ESP_LOGI("WIFI", "Regulatory domain successfully set to US.");
+  } else {
+    ESP_LOGE("WIFI", "Failed to set country code: %s", esp_err_to_name(err));
+  }
+
+  char mac_str[18];
+  snprintf(mac_str, sizeof(mac_str), "%02X:%02X:%02X:%02X:%02X:%02X",
+      mac_addr[0], mac_addr[1], mac_addr[2],
+      mac_addr[3], mac_addr[4], mac_addr[5]);
+  Serial.println("Requested MAC address: " + String(mac_str));
   #if defined(AP)
   #if CHANNEL > 0
   int set_channel = CHANNEL;
   #else
-  int set_channel = random(10);
+  #if defined(FIVEEASY) || defined(FIVEHARD)
+
+  /*
+  // Directly stolen channel list from https://github.com/CoD-Segfault/wifi-shuriken/blob/main/include/channel_scheduler.h on 2026-07-03
+  // He worked it out by brute force
+  //static constexpr uint8_t CHANNEL_LIST_5G[] = {
+  //  36, 40, 44, 48, 52, 56, 60, 64, 100, 104, 108, 112, 116, 120, 124,
+  //  128, 132, 136, 140, 144, 149, 153, 157, 161, 165
+  //};
+  */
+
+  // All other channels were refused due to reg domain
+  static constexpr uint8_t CHANNEL_LIST_5G[] = {
+    36, 40, 44, 48, 149, 153, 157, 161, 165
+  };
+  constexpr size_t total_elements = sizeof(CHANNEL_LIST_5G) / sizeof(CHANNEL_LIST_5G[0]);
+  size_t random_index = esp_random() % total_elements;
+  uint8_t set_channel = CHANNEL_LIST_5G[random_index];
+  #else
+  // Intentionally limited to worldwide allowed channels
+  int set_channel = esp_random() % 11;
   set_channel++;
+  #endif
   #endif
   Serial.printf("Setting channel to: %d\r\n", set_channel);
   Serial.flush();
   WiFi.mode(WIFI_AP);
   WiFi.softAP(FSSID, PSK, set_channel, SSID_HIDDEN, MAX_CLIENTS);
   Serial.printf("Set power status: %s\r\n", String(WiFi.setTxPower(TXPOWER)));
-  Serial.println("Started AP with MAC Address: " + String(WiFi.softAPmacAddress()));
+  Serial.println("Started AP with MAC Address: " + WiFi.softAPmacAddress());
+  if (WiFi.softAPmacAddress() != mac_str){
+    Serial.println("Read MAC Address != Requested Mac Address");
+    rfhsledfatal();
+  }
   ledcolor(0x00ff00); // GREEN
   #elif defined(CLIENT)
   WiFi.mode(WIFI_STA);
   WiFi.begin(FSSID, PSK);
+  Serial.println("Started Client with MAC Address: " + WiFi.macAddress());
+  if (WiFi.macAddress() != mac_str){
+    Serial.println("Read MAC Address != Requested Mac Address");
+    rfhsledfatal();
+  }
   ledcolor(0xff8c00);  // ORANGE
   #endif
 
@@ -80,8 +127,8 @@ void setup() {
   disableWiFi();
   ledcolor(0xff0000);  // RED
   delay(75); // adjust the esp_deep_sleep if you change this
-  // subtract sleep time on line 39 and 105
-  int sleepy_tyme = uS_TO_S * TIME_TO_SLEEP - 75 - 100;
+  // subtract sleep time on line 91
+  int sleepy_tyme = uS_TO_S * TIME_TO_SLEEP - 75 ;
   if (sleepy_tyme < 0 ) {
     sleepy_tyme = 0;
   }
