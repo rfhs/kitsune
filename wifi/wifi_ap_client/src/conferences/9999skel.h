@@ -66,7 +66,7 @@
 // set mac address
 #define MAC_ADDR {0x00, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f}
 // 1-13 permitted 0 means random
-#define CHANNEL 1
+#define CHANNEL 36
 // 0 broadcast 1 hidden
 #define SSID_HIDDEN  0
 // 1-4 permitted
@@ -87,8 +87,7 @@
 // set mac address
 #define MAC_ADDR {0x00, 0x10, 0x11, 0x12, 0x13, 0x14}
 // 1-13 permitted 0 means random
-// XXX XXX XXX Need a way to do random 5GHz
-#define CHANNEL 36
+#define CHANNEL 0
 // 0 broadcast 1 hidden
 #define SSID_HIDDEN 0
 // 1-4 permitted

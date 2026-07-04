@@ -5,6 +5,8 @@
 #include <rfhsledmacros.h>
 #include <rfhswifi.h>
 #include <esp_mac.h>
+#include <esp_system.h>
+#include <esp_log.h>
 
 void setup() {
   // Bring up serial early so we can debug
@@ -49,6 +51,17 @@ void setup() {
   Serial.println("Initializing...");
   rfhsboottimer();
 
+  // Set the regulatory domain BEFORE starting the radio
+  // Use the 2-letter ISO code (e.g., "US", "DE", "JP", "CN")
+  // The second parameter 'true' tells the chip to enforce these rules tightly
+  esp_err_t err = esp_wifi_set_country_code("US", true);
+
+  if (err == ESP_OK) {
+    ESP_LOGI("WIFI", "Regulatory domain successfully set to US.");
+  } else {
+    ESP_LOGE("WIFI", "Failed to set country code: %s", esp_err_to_name(err));
+  }
+
   char mac_str[18];
   snprintf(mac_str, sizeof(mac_str), "%02X:%02X:%02X:%02X:%02X:%02X",
       mac_addr[0], mac_addr[1], mac_addr[2],
@@ -58,8 +71,29 @@ void setup() {
   #if CHANNEL > 0
   int set_channel = CHANNEL;
   #else
-  int set_channel = random(10);
+  #if defined(FIVEEASY) || defined(FIVEHARD)
+
+  /*
+  // Directly stolen channel list from https://github.com/CoD-Segfault/wifi-shuriken/blob/main/include/channel_scheduler.h on 2026-07-03
+  // He worked it out by brute force
+  //static constexpr uint8_t CHANNEL_LIST_5G[] = {
+  //  36, 40, 44, 48, 52, 56, 60, 64, 100, 104, 108, 112, 116, 120, 124,
+  //  128, 132, 136, 140, 144, 149, 153, 157, 161, 165
+  //};
+  */
+
+  // All other channels were refused due to reg domain
+  static constexpr uint8_t CHANNEL_LIST_5G[] = {
+    36, 40, 44, 48, 149, 153, 157, 161, 165
+  };
+  constexpr size_t total_elements = sizeof(CHANNEL_LIST_5G) / sizeof(CHANNEL_LIST_5G[0]);
+  size_t random_index = esp_random() % total_elements;
+  uint8_t set_channel = CHANNEL_LIST_5G[random_index];
+  #else
+  // Intentionally limited to worldwide allowed channels
+  int set_channel = esp_random() % 11;
   set_channel++;
+  #endif
   #endif
   Serial.printf("Setting channel to: %d\r\n", set_channel);
   Serial.flush();
