@@ -29,7 +29,7 @@ threewords() {
     exit 1
   fi
   dictionary='/usr/share/dict/cracklib-words'
-  shuf -n3 "${dictionary}" | paste -sd ' '
+  shuf -n3 "${dictionary}" | tr '[:lower:]' '[:upper:]' | paste -sd ' '
 }
 export -f threewords
 
@@ -53,5 +53,5 @@ printf "Seeding keys for %s%s... " "$(date +"%Y")" "${1}"
 sed -i \
   -e "/RFHS_CHALLENGE_NAME/{h; s/.*/printf -- '-\\n----------------------------------------------------------------\\nConference: %s%s\\nFlag: %s\\n\\n' \"\$(date +%Y)\" \"${1}\" \"\$(threewords)\"/e; G;}" \
   "$(date +"%Y")${1}.txt"
-
+sed -i '1iSet font to "Roboto Mono' "$(date +"%Y")${1}.txt"
 printf "complete\n"
