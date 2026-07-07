@@ -55,6 +55,48 @@
 #define TIME_TO_SLEEP 45
 #define TXPOWER WIFI_POWER_7dBm
 #endif
+
+#if defined(FIVEEASY)
+#define RFHS_CHALLENGE_NAME "WiFi 5GHz AP Easy Fox"
+// Network config
+#define FSSID "Rex WiFi 5GHz AP Easy Fox"
+#define PSK "0123456789"
+// set mac address
+#define MAC_ADDR {0xF2, 0xC6, 0xB7, 0xE2, 0xE9, 0x85}
+// 1-13 permitted 0 means random
+#define CHANNEL 36
+// 0 broadcast 1 hidden
+#define SSID_HIDDEN  0
+// 1-4 permitted
+#define MAX_CLIENTS 1
+#define TIME_TO_WAKE 15
+#define TIME_TO_SLEEP 5
+// checks run during startup so we want to stay
+// running no longer than a few minutes to force
+// checks to run and led to update
+#define TXPOWER WIFI_POWER_17dBm
+#endif
+
+#if defined(FIVEHARD)
+#define RFHS_CHALLENGE_NAME "WiFi 5GHz AP Hard Fox"
+// Network config
+#define FSSID "Liberty WiFi 5GHz AP Hard Fox"
+#define PSK "0123456789"
+// set mac address
+#define MAC_ADDR {0xF2, 0x81, 0x41, 0xD1, 0x30, 0xD1}
+// 1-13 permitted 0 means random
+#define CHANNEL 0
+// 0 broadcast 1 hidden
+#define SSID_HIDDEN 0
+// 1-4 permitted
+#define MAX_CLIENTS 1
+// checks run during startup so we want to stay
+// running no longer than a few minutes to force
+// checks to run and led to update
+#define TIME_TO_WAKE 30
+#define TIME_TO_SLEEP 45
+#define TXPOWER WIFI_POWER_7dBm
+#endif
 #endif
 
 #if defined(CLIENT)
