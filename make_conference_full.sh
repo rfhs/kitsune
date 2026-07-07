@@ -17,6 +17,10 @@ for challenge in bluetooth/iBeacon bluetooth/classic_discoverable wifi/wifi_ap_c
   fi
   popd > /dev/null 2>&1
 done
+if [ -f "$(date +"%Y")${1}.txt" ]; then
+  printf '%s%s.txt already exists, please remove it or pick a different name\n' "$(date +"%Y")" "${1}"
+  exit 1
+fi
 
 # Safety checks complete, define functions and do the thing
 threewords() {
@@ -25,8 +29,9 @@ threewords() {
     exit 1
   fi
   dictionary='/usr/share/dict/cracklib-words'
-  shuf -n3 "${dictionary}" | paste -sd ' '
+  shuf -n3 "${dictionary}" | tr '[:lower:]' '[:upper:]' | paste -sd ' '
 }
+export -f threewords
 
 for challenge in bluetooth/iBeacon bluetooth/classic_discoverable wifi/wifi_ap_client; do
   pushd "${challenge}" > /dev/null 2>&1
@@ -42,7 +47,11 @@ for challenge in bluetooth/iBeacon bluetooth/classic_discoverable wifi/wifi_ap_c
   popd > /dev/null 2>&1
 done
 printf "Seeding keys for %s%s... " "$(date +"%Y")" "${1}"
+#sed -i \
+#  -e "/RFHS_CHALLENGE_NAME/i -\n----------------------------------------------------------------\n$(date +"%Y")${1}\n$(threewords)\n" \
+#  "$(date +"%Y")${1}.txt"
 sed -i \
-  -e "/RFHS_CHALLENGE_NAME/i -\n----------------------------------------------------------------\n$(date +"%Y")${1}\n$(threewords)\n" \
+  -e "/RFHS_CHALLENGE_NAME/{h; s/.*/printf -- '-\\n----------------------------------------------------------------\\nConference: %s%s\\nFlag: %s\\n\\n' \"\$(date +%Y)\" \"${1}\" \"\$(threewords)\"/e; G;}" \
   "$(date +"%Y")${1}.txt"
+sed -i '1iSet font to "Roboto Mono' "$(date +"%Y")${1}.txt"
 printf "complete\n"

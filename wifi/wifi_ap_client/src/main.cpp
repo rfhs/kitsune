@@ -15,18 +15,22 @@ void setup() {
 
   // Initialize Wi-Fi with default configuration to set MAC address
   wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
-  WiFi.mode(WIFI_MODE_NULL);
+  #if defined(AP)
+  WiFi.mode(WIFI_AP);
+  #elif defined(CLIENT)
+  WiFi.mode(WIFI_STA);
+  #endif
   esp_wifi_init(&cfg);
   // esp_wifi_start(); // esp_wifi_set_mac() only requires Wi-Fi to be *initialized*
 
   #if defined(AP)
   // Create Wi-Fi network with SSID and password
-  Serial.println("Setting AP (Access Point)…");
+  Serial.println("Setting up AP (Access Point)…");
   // Interface to set MAC address
   wifi_interface_t interface = WIFI_IF_AP;
   #elif defined(CLIENT)
   // Connect to Wi-Fi network with SSID and password
-  Serial.println("Setting WiFi Fox Client…");
+  Serial.println("Setting up WiFi Client…");
   // Interface to set MAC address
   wifi_interface_t interface = WIFI_IF_STA;
   #endif
@@ -66,7 +70,6 @@ void setup() {
   snprintf(mac_str, sizeof(mac_str), "%02X:%02X:%02X:%02X:%02X:%02X",
       mac_addr[0], mac_addr[1], mac_addr[2],
       mac_addr[3], mac_addr[4], mac_addr[5]);
-  Serial.println("Requested MAC address: " + String(mac_str));
   #if defined(AP)
   #if CHANNEL > 0
   int set_channel = CHANNEL;
@@ -81,8 +84,6 @@ void setup() {
   //  128, 132, 136, 140, 144, 149, 153, 157, 161, 165
   //};
   */
-
-  // All other channels were refused due to reg domain
   static constexpr uint8_t CHANNEL_LIST_5G[] = {
     36, 40, 44, 48, 149, 153, 157, 161, 165
   };
@@ -91,29 +92,54 @@ void setup() {
   uint8_t set_channel = CHANNEL_LIST_5G[random_index];
   #else
   // Intentionally limited to worldwide allowed channels
-  int set_channel = esp_random() % 11;
+  uint8_t set_channel = esp_random() % 11;
   set_channel++;
   #endif
   #endif
-  Serial.printf("Setting channel to: %d\r\n", set_channel);
-  Serial.flush();
   WiFi.mode(WIFI_AP);
   WiFi.softAP(FSSID, PSK, set_channel, SSID_HIDDEN, MAX_CLIENTS);
+  delay(100); // Let AP start before we run our checks
   Serial.printf("Set power status: %s\r\n", String(WiFi.setTxPower(TXPOWER)));
   Serial.println("Started AP with MAC Address: " + WiFi.softAPmacAddress());
   if (WiFi.softAPmacAddress() != mac_str){
+    Serial.println("Requested MAC address      : " + String(mac_str));
     Serial.println("Read MAC Address != Requested Mac Address");
+    Serial.flush();
+    disableWiFi();
     rfhsledfatal();
   }
+  uint8_t currentChannel = WiFi.channel();
+  Serial.printf("Operating channel: %d\r\n", currentChannel);
+  if (currentChannel != set_channel){
+    Serial.printf("Requested channel: %d\r\n", set_channel);
+    Serial.println("Operating channel != Requested Channel");
+    Serial.flush();
+    disableWiFi();
+    rfhsledfatal();
+  }
+  String currentSSID = WiFi.softAPSSID();
+  Serial.println("Operating SSID: " + currentSSID);
+  if (String(FSSID) != currentSSID){
+    Serial.println("Requested SSID: " FSSID);
+    Serial.println("Operating SSID != Requested SSID");
+    Serial.flush();
+    disableWiFi();
+    rfhsledfatal();
+  }
+  Serial.flush();
   ledcolor(0x00ff00); // GREEN
   #elif defined(CLIENT)
   WiFi.mode(WIFI_STA);
   WiFi.begin(FSSID, PSK);
+  delay(100); // Let Client start before we run our checks
   Serial.println("Started Client with MAC Address: " + WiFi.macAddress());
   if (WiFi.macAddress() != mac_str){
     Serial.println("Read MAC Address != Requested Mac Address");
+    Serial.flush();
+    disableWiFi();
     rfhsledfatal();
   }
+  Serial.flush();
   ledcolor(0xff8c00);  // ORANGE
   #endif
 
@@ -126,9 +152,9 @@ void setup() {
   ledcolor(0x880000);  // HALF RED
   disableWiFi();
   ledcolor(0xff0000);  // RED
-  delay(75); // adjust the esp_deep_sleep if you change this
-  // subtract sleep time on line 91
-  int sleepy_tyme = uS_TO_S * TIME_TO_SLEEP - 75 ;
+  delay(75); // Give the led time to set before sleeping
+  // subtract sleep time on line 101, 134, 155
+  int sleepy_tyme = uS_TO_S * TIME_TO_SLEEP - 75 - 100 ;
   if (sleepy_tyme < 0 ) {
     sleepy_tyme = 0;
   }

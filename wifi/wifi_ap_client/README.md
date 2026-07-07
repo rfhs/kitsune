@@ -31,8 +31,8 @@ seeed-xiao-esp32c5-hard-ap      Platform  upload         Upload
 |M5Stack Atom-lite |✅|✅|✅|
 |M5Stack AtomS3-lite |✅|✅|❌|
 |M5Stack StampS3 |✅|✅|❌|
-|Ardunio Nano ESP32 |✅|❌|❌|
-|Seeed Xiao ESP32C5 |✅|❌|❌|
+|Ardunio Nano ESP32 |✅|✅|❌|
+|Seeed Xiao ESP32C5 |✅|✅|❌|
 
 To use:
 - [Install PlatformIO](https://platformio.org/install/cli)
