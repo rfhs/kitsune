@@ -59,7 +59,7 @@
 #if defined(FIVEEASY)
 #define RFHS_CHALLENGE_NAME "WiFi 5GHz AP Easy Fox"
 // Network config
-#define FSSID "Rex WiFi 5GHz AP Easy Fox"
+#define FSSID "Demo Rex WiFi 5GHz AP Easy Fox"
 #define PSK "0123456789"
 // set mac address
 #define MAC_ADDR {0xF2, 0xC6, 0xB7, 0xE2, 0xE9, 0x85}
@@ -80,7 +80,7 @@
 #if defined(FIVEHARD)
 #define RFHS_CHALLENGE_NAME "WiFi 5GHz AP Hard Fox"
 // Network config
-#define FSSID "Liberty WiFi 5GHz AP Hard Fox"
+#define FSSID "Demo Liberty WiFi 5GHz AP Hard Fox"
 #define PSK "0123456789"
 // set mac address
 #define MAC_ADDR {0xF2, 0x81, 0x41, 0xD1, 0x30, 0xD1}
