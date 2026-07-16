@@ -54,7 +54,7 @@ printf "complete\n"
 printf "Adding instructions..."
 sed -i -e "/FOX_KEYWORDS/{h; s/.*/printf -- '%s\n\n' \"\$(cat foxhunt_instructions.txt)\"/e; G;}" \
   "$(date +"%Y")${1}.txt"
-sed -i '1iSet font to "Roboto Mono' "$(date +"%Y")${1}.txt"
+sed -i '1iSet font to "Roboto Mono"' "$(date +"%Y")${1}.txt"
 printf "complete\n"
 
 printf "Generation Complete\n"
