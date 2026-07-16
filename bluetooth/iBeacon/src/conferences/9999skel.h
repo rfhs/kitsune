@@ -1,6 +1,7 @@
 #if defined(EASY)
 #define RFHS_CHALLENGE_NAME "BLE Easy Fox"
-#define DEVICE_NAME         "Skye BLE Easy Fox"
+#define FOX_KEYWORDS        "Hunter should ask 'Are you the BLE Easy Fox?'"
+#define DEVICE_NAME         "Bruce BLE Easy Fox"
 #define BEACON_UUID         "00000001-0002-0003-0004-000000000005"
 #define MANUFACTURER_ID     0x4c00
 #define MAJOR               5
@@ -10,7 +11,8 @@
 
 #elif defined(MEDIUM)
 #define RFHS_CHALLENGE_NAME "BLE Medium Fox"
-#define DEVICE_NAME         "Rocky BLE Medium Fox"
+#define FOX_KEYWORDS        "Hunter should ask 'Are you the BLE Medium Fox?'"
+#define DEVICE_NAME         "Cath BLE Medium Fox"
 #define BEACON_UUID         "00000006-0007-0008-0009-00000000000a"
 #define MANUFACTURER_ID     0x4c00
 #define MAJOR               5
@@ -20,7 +22,8 @@
 
 #elif defined(HARD)
 #define RFHS_CHALLENGE_NAME "BLE Hard Fox"
-#define DEVICE_NAME         "Rubble BLE Hard Fox"
+#define FOX_KEYWORDS        "Hunter should ask 'Are you the BLE Hard Fox?'"
+#define DEVICE_NAME         "3Jane BLE Hard Fox"
 #define BEACON_UUID         "0000000b-000c-000d-000e-00000000000f"
 #define MANUFACTURER_ID     0x4c00
 #define MAJOR               5

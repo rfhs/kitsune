@@ -42,16 +42,19 @@ for challenge in bluetooth/iBeacon bluetooth/classic_discoverable wifi/wifi_ap_c
     exit 1
   fi
   ln -snf "conferences/$(date +"%Y")${1}.h" src/current_conf.h
-  grep -e 'RFHS_CHALLENGE_NAME\|NAME\|UUID\|MAC_ADDR\|FSSID\|CHANNEL' "src/conferences/$(date +"%Y")${1}.h" | sed -e 's#{##' -e 's#}##' -e 's#0x##g' -e 's#, #:#g' | tee -a "${OLDPWD}/$(date +"%Y")${1}.txt" > /dev/null 2>&1
+  grep -e 'RFHS_CHALLENGE_NAME\|FOX_KEYWORDS\|NAME\|UUID\|MAC_ADDR\|FSSID\|CHANNEL' "src/conferences/$(date +"%Y")${1}.h" | sed -e 's#{##' -e 's#}##' -e 's#0x##g' -e 's#, #:#g' | tee -a "${OLDPWD}/$(date +"%Y")${1}.txt" > /dev/null 2>&1
   printf "complete\n"
   popd > /dev/null 2>&1
 done
 printf "Seeding keys for %s%s... " "$(date +"%Y")" "${1}"
-#sed -i \
-#  -e "/RFHS_CHALLENGE_NAME/i -\n----------------------------------------------------------------\n$(date +"%Y")${1}\n$(threewords)\n" \
-#  "$(date +"%Y")${1}.txt"
 sed -i \
   -e "/RFHS_CHALLENGE_NAME/{h; s/.*/printf -- '-\\n----------------------------------------------------------------\\nConference: %s%s\\nFlag: %s\\n\\n' \"\$(date +%Y)\" \"${1}\" \"\$(threewords)\"/e; G;}" \
   "$(date +"%Y")${1}.txt"
+printf "complete\n"
+printf "Adding instructions..."
+sed -i -e "/FOX_KEYWORDS/{h; s/.*/printf -- '%s\n\n' \"\$(cat foxhunt_instructions.txt)\"/e; G;}" \
+  "$(date +"%Y")${1}.txt"
 sed -i '1iSet font to "Roboto Mono' "$(date +"%Y")${1}.txt"
 printf "complete\n"
+
+printf "Generation Complete\n"

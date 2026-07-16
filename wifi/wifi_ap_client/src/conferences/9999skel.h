@@ -18,8 +18,9 @@
 #if defined(AP)
 #if defined(EASY)
 #define RFHS_CHALLENGE_NAME "WiFi AP Easy Fox"
+#define FOX_KEYWORDS "Hunter should ask 'Are you the WiFi AP Easy Fox?'"
 // Network config
-#define FSSID "Zuma WiFi AP Easy Fox"
+#define FSSID "Hiro WiFi AP Easy Fox"
 #define PSK "0123456789"
 // set mac address
 #define MAC_ADDR {0x00, 0x01, 0x02, 0x03, 0x04, 0x05}
@@ -39,8 +40,9 @@
 
 #if defined(HARD)
 #define RFHS_CHALLENGE_NAME "WiFi AP Hard Fox"
+#define FOX_KEYWORDS "Hunter should ask 'Are you the WiFi AP Hard Fox?'"
 // Network config
-#define FSSID "Everest WiFi AP Hard Fox"
+#define FSSID "YT WiFi AP Hard Fox"
 #define PSK "0123456789"
 // set mac address
 #define MAC_ADDR {0x00, 0x06, 0x07, 0x08, 0x09, 0x0a}
@@ -60,8 +62,9 @@
 
 #if defined(FIVEEASY)
 #define RFHS_CHALLENGE_NAME "WiFi 5GHz AP Easy Fox"
+#define FOX_KEYWORDS "Hunter should ask 'Are you the WiFi 5GHz AP Easy Fox?'"
 // Network config
-#define FSSID "Rex WiFi 5GHz AP Easy Fox"
+#define FSSID "Enzo WiFi 5GHz AP Easy Fox"
 #define PSK "0123456789"
 // set mac address
 #define MAC_ADDR {0x00, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f}
@@ -81,8 +84,9 @@
 
 #if defined(FIVEHARD)
 #define RFHS_CHALLENGE_NAME "WiFi 5GHz AP Hard Fox"
+#define FOX_KEYWORDS "Hunter should ask 'Are you the WiFi 5GHz AP Hard Fox?'"
 // Network config
-#define FSSID "Liberty WiFi 5GHz AP Hard Fox"
+#define FSSID "Lagos WiFi 5GHz AP Hard Fox"
 #define PSK "0123456789"
 // set mac address
 #define MAC_ADDR {0x00, 0x10, 0x11, 0x12, 0x13, 0x14}
@@ -104,8 +108,9 @@
 #if defined(CLIENT)
 #if defined(EASY)
 #define RFHS_CHALLENGE_NAME "WiFi Client Easy Fox"
+#define FOX_KEYWORDS "Hunter should ask 'Are you the WiFi Client Easy Fox?'"
 // set mac address
-#define FSSID "Tracker WiFi Client Easy Fox"
+#define FSSID "Ng WiFi Client Easy Fox"
 #define PSK "0123456789"
 #define MAC_ADDR {0x00, 0x15, 0x16, 0x17, 0x18, 0x19}
 // Network config
@@ -119,8 +124,9 @@
 
 #if defined(HARD)
 #define RFHS_CHALLENGE_NAME "WiFi Client Hard Fox"
+#define FOX_KEYWORDS "Hunter should ask 'Are you the WiFi Client Hard Fox?'"
 // Network config
-#define FSSID "Robo-Dog WiFi Client Hard Fox"
+#define FSSID "Mr Lee WiFi Client Hard Fox"
 #define PSK "0123456789"
 // set mac address
 #define MAC_ADDR {0x00, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e}
