@@ -9,6 +9,6 @@ When a hunter says the keyphrase in FOX_KEYWORDS, give them the whole kit.
 Fox Hunter Instructions
 -----------------------
 The challenge name on the scoreboard is in the RFHS_CHALLENGE_NAME field.
-The flag for the scoreboard is in the Flag field.
+The flag for the scoreboard is 'FOXFLAG'.
 Keep the patch that says "I found the fox".
 Return the remainder of the fox kit to the RF CTF desk.

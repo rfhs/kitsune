@@ -29,7 +29,7 @@ threewords() {
     exit 1
   fi
   dictionary='/usr/share/dict/cracklib-words'
-  shuf -n3 "${dictionary}" | tr '[:lower:]' '[:upper:]' | paste -sd ' '
+  shuf -n3 "${dictionary}" | tr '[:lower:]' '[:upper:]' | paste -sd ' ' | dos2unix
 }
 export -f threewords
 
@@ -46,15 +46,23 @@ for challenge in bluetooth/iBeacon bluetooth/classic_discoverable wifi/wifi_ap_c
   printf "complete\n"
   popd > /dev/null 2>&1
 done
-printf "Seeding keys for %s%s... " "$(date +"%Y")" "${1}"
+printf "Formatting with conference name for %s%s... " "$(date +"%Y")" "${1}"
 sed -i \
-  -e "/RFHS_CHALLENGE_NAME/{h; s/.*/printf -- '-\\n----------------------------------------------------------------\\nConference: %s%s\\nFlag: %s\\n\\n' \"\$(date +%Y)\" \"${1}\" \"\$(threewords)\"/e; G;}" \
+  -e "/RFHS_CHALLENGE_NAME/{h; s/.*/printf -- '-\\n----------------------------------------------------------------\\nConference: %s%s\\n\\n' \"\$(date +%Y)\" \"${1}\"/e; G;}" \
   "$(date +"%Y")${1}.txt"
 printf "complete\n"
+
 printf "Adding instructions..."
-sed -i -e "/FOX_KEYWORDS/{h; s/.*/printf -- '%s\n\n' \"\$(cat foxhunt_instructions.txt)\"/e; G;}" \
+sed -i -e "/FOX_KEYWORDS/{h; s/.*/printf -- '\n%s\n\n' \"\$(cat foxhunt_instructions.txt)\"/e; G;}" \
   "$(date +"%Y")${1}.txt"
-sed -i '1iSet font to "Roboto Mono"' "$(date +"%Y")${1}.txt"
 printf "complete\n"
+
+printf "Seeding keys for %s%s... " "$(date +"%Y")" "${1}"
+#this works despite shell check thinking it does not
+#shellcheck disable=2016
+sed -i -e 's/\(.*\)[F]OXFLAG\(.*\)/printf "%s%s%s\\n" \x22\1\x22 "\$(threewords)" \x22\2\x22/e' "$(date +"%Y")${1}.txt"
+printf "complete\n"
+
+sed -i '1iSet font to "Roboto Mono"' "$(date +"%Y")${1}.txt"
 
 printf "Generation Complete\n"
