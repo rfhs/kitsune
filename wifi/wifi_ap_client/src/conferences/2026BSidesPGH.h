@@ -17,13 +17,12 @@
 
 #if defined(AP)
 #if defined(EASY)
-// RFHS_CHALLENGE_NAME "WiFi AP Easy Fox"
-// FOX_KEYWORDS "Hunter should ask 'Are you the WiFi AP Easy Fox?'"
+#define RFHS_CHALLENGE_NAME "WiFi AP Easy Fox"
 // Network config
-#define FSSID "Hiro WiFi AP Easy Fox"
+#define FSSID "Zuma WiFi AP Easy Fox"
 #define PSK "0123456789"
 // set mac address
-#define MAC_ADDR {0x00, 0x01, 0x02, 0x03, 0x04, 0x05}
+#define MAC_ADDR {0xF2, 0x86, 0x9C, 0x93, 0x37, 0x38}
 // 1-13 permitted 0 means random
 #define CHANNEL 1
 // 0 broadcast 1 hidden
@@ -39,13 +38,12 @@
 #endif
 
 #if defined(HARD)
-// RFHS_CHALLENGE_NAME "WiFi AP Hard Fox"
-// FOX_KEYWORDS "Hunter should ask 'Are you the WiFi AP Hard Fox?'"
+#define RFHS_CHALLENGE_NAME "WiFi AP Hard Fox"
 // Network config
-#define FSSID "YT WiFi AP Hard Fox"
+#define FSSID "Everest WiFi AP Hard Fox"
 #define PSK "0123456789"
 // set mac address
-#define MAC_ADDR {0x00, 0x06, 0x07, 0x08, 0x09, 0x0a}
+#define MAC_ADDR {0xF2, 0xCA, 0xCF, 0x0A, 0x6B, 0x4C}
 // 1-13 permitted 0 means random
 #define CHANNEL 0
 // 0 broadcast 1 hidden
@@ -61,13 +59,12 @@
 #endif
 
 #if defined(FIVEEASY)
-// RFHS_CHALLENGE_NAME "WiFi 5GHz AP Easy Fox"
-// FOX_KEYWORDS "Hunter should ask 'Are you the WiFi 5GHz AP Easy Fox?'"
+#define RFHS_CHALLENGE_NAME "WiFi 5GHz AP Easy Fox"
 // Network config
-#define FSSID "Enzo WiFi 5GHz AP Easy Fox"
+#define FSSID "Rex WiFi 5GHz AP Easy Fox"
 #define PSK "0123456789"
 // set mac address
-#define MAC_ADDR {0x00, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f}
+#define MAC_ADDR {0xF2, 0x8B, 0x0A, 0x96, 0x8A, 0xA8}
 // 1-13 permitted 0 means random
 #define CHANNEL 36
 // 0 broadcast 1 hidden
@@ -83,13 +80,12 @@
 #endif
 
 #if defined(FIVEHARD)
-// RFHS_CHALLENGE_NAME "WiFi 5GHz AP Hard Fox"
-// FOX_KEYWORDS "Hunter should ask 'Are you the WiFi 5GHz AP Hard Fox?'"
+#define RFHS_CHALLENGE_NAME "WiFi 5GHz AP Hard Fox"
 // Network config
-#define FSSID "Lagos WiFi 5GHz AP Hard Fox"
+#define FSSID "Liberty WiFi 5GHz AP Hard Fox"
 #define PSK "0123456789"
 // set mac address
-#define MAC_ADDR {0x00, 0x10, 0x11, 0x12, 0x13, 0x14}
+#define MAC_ADDR {0xF2, 0xB4, 0x21, 0x54, 0x87, 0x8E}
 // 1-13 permitted 0 means random
 #define CHANNEL 0
 // 0 broadcast 1 hidden
@@ -107,12 +103,11 @@
 
 #if defined(CLIENT)
 #if defined(EASY)
-// RFHS_CHALLENGE_NAME "WiFi Client Easy Fox"
-// FOX_KEYWORDS "Hunter should ask 'Are you the WiFi Client Easy Fox?'"
+#define RFHS_CHALLENGE_NAME "WiFi Client Easy Fox"
 // set mac address
-#define FSSID "Ng WiFi Client Easy Fox"
+#define FSSID "Tracker WiFi Client Easy Fox"
 #define PSK "0123456789"
-#define MAC_ADDR {0x00, 0x15, 0x16, 0x17, 0x18, 0x19}
+#define MAC_ADDR {0xF2, 0x76, 0x99, 0x05, 0x5A, 0x0C}
 // Network config
 // checks run during startup so we want to stay
 // running no longer than a few minutes to force
@@ -123,13 +118,12 @@
 #endif
 
 #if defined(HARD)
-// RFHS_CHALLENGE_NAME "WiFi Client Hard Fox"
-// FOX_KEYWORDS "Hunter should ask 'Are you the WiFi Client Hard Fox?'"
+#define RFHS_CHALLENGE_NAME "WiFi Client Hard Fox"
 // Network config
-#define FSSID "Mr Lee WiFi Client Hard Fox"
+#define FSSID "Robo-Dog WiFi Client Hard Fox"
 #define PSK "0123456789"
 // set mac address
-#define MAC_ADDR {0x00, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e}
+#define MAC_ADDR {0xF2, 0xFD, 0xAD, 0x2B, 0x9F, 0xDE}
 // checks run during startup so we want to stay
 // running no longer than a few minutes to force
 // checks to run and led to update

@@ -1,0 +1,14 @@
+Fox Instructions
+----------------
+Take the "I was the fox" patch, it is yours for agreeing to be our fox.
+Keep the Fox powered on and in the kit as you recieved it.
+For most of the foxes all steady leds means working correctly.
+Rapid blinking or alternating color is bad, contact your fox handler.
+When a hunter says the keyphrase in FOX_KEYWORDS, give them the whole kit.
+
+Fox Hunter Instructions
+-----------------------
+The challenge name on the scoreboard is in the RFHS_CHALLENGE_NAME field.
+The flag for the scoreboard is 'FOXFLAG'.
+Keep the patch that says "I found the fox".
+Return the remainder of the fox kit to the RF CTF desk.
