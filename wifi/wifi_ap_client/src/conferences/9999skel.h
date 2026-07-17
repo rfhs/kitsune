@@ -17,8 +17,8 @@
 
 #if defined(AP)
 #if defined(EASY)
-#define RFHS_CHALLENGE_NAME "WiFi AP Easy Fox"
-#define FOX_KEYWORDS "Hunter should ask 'Are you the WiFi AP Easy Fox?'"
+// RFHS_CHALLENGE_NAME "WiFi AP Easy Fox"
+// FOX_KEYWORDS "Hunter should ask 'Are you the WiFi AP Easy Fox?'"
 // Network config
 #define FSSID "Hiro WiFi AP Easy Fox"
 #define PSK "0123456789"
@@ -39,8 +39,8 @@
 #endif
 
 #if defined(HARD)
-#define RFHS_CHALLENGE_NAME "WiFi AP Hard Fox"
-#define FOX_KEYWORDS "Hunter should ask 'Are you the WiFi AP Hard Fox?'"
+// RFHS_CHALLENGE_NAME "WiFi AP Hard Fox"
+// FOX_KEYWORDS "Hunter should ask 'Are you the WiFi AP Hard Fox?'"
 // Network config
 #define FSSID "YT WiFi AP Hard Fox"
 #define PSK "0123456789"
@@ -61,8 +61,8 @@
 #endif
 
 #if defined(FIVEEASY)
-#define RFHS_CHALLENGE_NAME "WiFi 5GHz AP Easy Fox"
-#define FOX_KEYWORDS "Hunter should ask 'Are you the WiFi 5GHz AP Easy Fox?'"
+// RFHS_CHALLENGE_NAME "WiFi 5GHz AP Easy Fox"
+// FOX_KEYWORDS "Hunter should ask 'Are you the WiFi 5GHz AP Easy Fox?'"
 // Network config
 #define FSSID "Enzo WiFi 5GHz AP Easy Fox"
 #define PSK "0123456789"
@@ -83,8 +83,8 @@
 #endif
 
 #if defined(FIVEHARD)
-#define RFHS_CHALLENGE_NAME "WiFi 5GHz AP Hard Fox"
-#define FOX_KEYWORDS "Hunter should ask 'Are you the WiFi 5GHz AP Hard Fox?'"
+// RFHS_CHALLENGE_NAME "WiFi 5GHz AP Hard Fox"
+// FOX_KEYWORDS "Hunter should ask 'Are you the WiFi 5GHz AP Hard Fox?'"
 // Network config
 #define FSSID "Lagos WiFi 5GHz AP Hard Fox"
 #define PSK "0123456789"
@@ -107,8 +107,8 @@
 
 #if defined(CLIENT)
 #if defined(EASY)
-#define RFHS_CHALLENGE_NAME "WiFi Client Easy Fox"
-#define FOX_KEYWORDS "Hunter should ask 'Are you the WiFi Client Easy Fox?'"
+// RFHS_CHALLENGE_NAME "WiFi Client Easy Fox"
+// FOX_KEYWORDS "Hunter should ask 'Are you the WiFi Client Easy Fox?'"
 // set mac address
 #define FSSID "Ng WiFi Client Easy Fox"
 #define PSK "0123456789"
@@ -123,8 +123,8 @@
 #endif
 
 #if defined(HARD)
-#define RFHS_CHALLENGE_NAME "WiFi Client Hard Fox"
-#define FOX_KEYWORDS "Hunter should ask 'Are you the WiFi Client Hard Fox?'"
+// RFHS_CHALLENGE_NAME "WiFi Client Hard Fox"
+// FOX_KEYWORDS "Hunter should ask 'Are you the WiFi Client Hard Fox?'"
 // Network config
 #define FSSID "Mr Lee WiFi Client Hard Fox"
 #define PSK "0123456789"
