@@ -39,8 +39,8 @@ void ledcolor(uint32_t colorcode) {
   analogWrite(LED_BLUE,  255 - leds[0].b);
 
 #elif defined(ARDUINO_XIAO_ESP32C5)
-  // ON when awake, OFF when going to sleep.
-  if (colorcode == 0) {
+  // ON when any color except red, OFF when red
+  if (colorcode == 0xff0000) {
     digitalWrite(DATA_PIN, HIGH);  // off
   } else {
     digitalWrite(DATA_PIN, LOW);   // on
@@ -82,7 +82,7 @@ void rfhsledfatal() {
   while (1) {
     ledcolor(0xff0000);  // RED
     delay(200);
-    ledcolor(0xFFF700);  // Yellow
+    ledcolor(0xfff700);  // Yellow
     delay(200);
   }
 }
