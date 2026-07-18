@@ -1,35 +1,34 @@
-// Bash to generate MAC address
-// Note: least significant bit of first byte must be zero, here it's fixed to 0xF2
-// printf '0xF2, 0x%02X, 0x%02X, 0x%02X, 0x%02X, 0x%02X\n' $[RANDOM%256] $[RANDOM%256] $[RANDOM%256] $[RANDOM%256] $[RANDOM%256]
-
-// Bash to generate UUID
-// uuidgen | tr '[[:lower:]]' '[[:upper:]]'
-
 #if defined(EASY)
-#define DEVICE_NAME         "Demo Skye BLE Easy Fox"
-#define BEACON_UUID         "3BDB3CAB-CA78-48C1-9DBC-1CF8C338CA2A"
+// RFHS_CHALLENGE_NAME "BLE Easy Fox"
+// FOX_KEYWORDS        "Hunter should ask 'Are you the BLE Easy Fox?'"
+#define DEVICE_NAME         "Bruce BLE Easy Fox"
+#define BEACON_UUID         "A2AFA582-E4E8-4599-B28B-4E11AC6DD6E8"
 #define MANUFACTURER_ID     0x4c00
 #define MAJOR               5
 #define MINOR               88
 #define SIGNAL_POWER        0xc5
-#define MAC_ADDR            {0xF2, 0xCF, 0x52, 0xCA, 0x3E, 0xF9}
+#define MAC_ADDR            {0xF2, 0x82, 0x42, 0xD0, 0x84, 0xBC}
 
 #elif defined(MEDIUM)
-#define DEVICE_NAME         "Demo Rocky BLE Medium Fox"
-#define BEACON_UUID         "71F24C1B-BBA4-4EB3-8D62-787A7BF440EC"
+// RFHS_CHALLENGE_NAME "BLE Medium Fox"
+// FOX_KEYWORDS        "Hunter should ask 'Are you the BLE Medium Fox?'"
+#define DEVICE_NAME         "Cath BLE Medium Fox"
+#define BEACON_UUID         "162EEB7B-743C-47E9-9414-BBD6149B4E40"
 #define MANUFACTURER_ID     0x4c00
 #define MAJOR               5
 #define MINOR               88
 #define SIGNAL_POWER        0xc5
-#define MAC_ADDR            {0xF2, 0x3F, 0x21, 0xF5, 0x89, 0x58}
+#define MAC_ADDR            {0xF2, 0x63, 0x89, 0x10, 0x8D, 0x1D}
 
 #elif defined(HARD)
-#define DEVICE_NAME         "Demo Rubble BLE Hard Fox"
-#define BEACON_UUID         "4A79F8EB-67C5-48EB-8587-1A659E90A0AE"
+// RFHS_CHALLENGE_NAME "BLE Hard Fox"
+// FOX_KEYWORDS        "Hunter should ask 'Are you the BLE Hard Fox?'"
+#define DEVICE_NAME         "3Jane BLE Hard Fox"
+#define BEACON_UUID         "DB6A0ED0-1DC3-4348-BD78-E997A0C082A3"
 #define MANUFACTURER_ID     0x4c00
 #define MAJOR               5
 #define MINOR               88
 #define SIGNAL_POWER        0xc5
-#define MAC_ADDR            {0xF2, 0x3B, 0x4F, 0x07, 0x0B, 0xA2}
+#define MAC_ADDR            {0xF2, 0xAC, 0x87, 0x05, 0x0A, 0xC7}
 
 #endif
