@@ -6,7 +6,7 @@ python3 -m pip install -U platformio
 sudo apt-get install cracklib-runtime -y
 
 ## Create a new conference from 9999skel
-./make_conference_full.sh github-ci
+./make_conference_full github-ci
 ## Verify is worked
 if [ ! -r "$(date +"%Y")github-ci.txt" ]; then
   printf "Report file missing\n"

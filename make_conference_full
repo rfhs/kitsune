@@ -38,8 +38,8 @@ fi
 for challenge in bluetooth/iBeacon bluetooth/classic_discoverable wifi/wifi_ap_client non-kitsune-foxes/fm_fox; do
   pushd "${challenge}" > /dev/null 2>&1
   printf "Rolling %s for %s... " "${challenge}" "${conf}"
-  if [ -x make_conference.sh ]; then
-    ./make_conference.sh "${requested_conf}"
+  if [ -x make_conference ]; then
+    ./make_conference "${requested_conf}"
     if [ ! -e "src/conferences/${conf}.h" ]; then
       printf "Something went wrong creating %s/src/conferences/%s.h, please scroll up\n" "${challenge}" "${conf}"
       exit 1
