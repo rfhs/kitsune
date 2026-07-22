@@ -20,7 +20,7 @@
 // RFHS_CHALLENGE_NAME "WiFi AP Easy Fox"
 // FOX_KEYWORDS "Hunter should ask 'Are you the WiFi AP Easy Fox?'"
 // Network config
-#define FSSID "Hiro WiFi AP Easy Fox"
+#define FSSID "Demo Hiro WiFi AP Easy Fox"
 #define PSK "0123456789"
 // set mac address
 #define MAC_ADDR {0xF2, 0xF4, 0x90, 0x22, 0x0D, 0x0F}
@@ -42,7 +42,7 @@
 // RFHS_CHALLENGE_NAME "WiFi AP Hard Fox"
 // FOX_KEYWORDS "Hunter should ask 'Are you the WiFi AP Hard Fox?'"
 // Network config
-#define FSSID "YT WiFi AP Hard Fox"
+#define FSSID "Demo YT WiFi AP Hard Fox"
 #define PSK "0123456789"
 // set mac address
 #define MAC_ADDR {0xF2, 0x72, 0xC1, 0x79, 0x16, 0x1B}
@@ -64,7 +64,7 @@
 // RFHS_CHALLENGE_NAME "WiFi 5GHz AP Easy Fox"
 // FOX_KEYWORDS "Hunter should ask 'Are you the WiFi 5GHz AP Easy Fox?'"
 // Network config
-#define FSSID "Enzo WiFi 5GHz AP Easy Fox"
+#define FSSID "Demo Enzo WiFi 5GHz AP Easy Fox"
 #define PSK "0123456789"
 // set mac address
 #define MAC_ADDR {0xF2, 0x77, 0x20, 0x34, 0x0A, 0xC7}
@@ -86,7 +86,7 @@
 // RFHS_CHALLENGE_NAME "WiFi 5GHz AP Hard Fox"
 // FOX_KEYWORDS "Hunter should ask 'Are you the WiFi 5GHz AP Hard Fox?'"
 // Network config
-#define FSSID "Lagos WiFi 5GHz AP Hard Fox"
+#define FSSID "Demo Lagos WiFi 5GHzAP Hard Fox"
 #define PSK "0123456789"
 // set mac address
 #define MAC_ADDR {0xF2, 0x13, 0xD4, 0x3C, 0x51, 0x4B}
@@ -110,7 +110,7 @@
 // RFHS_CHALLENGE_NAME "WiFi Client Easy Fox"
 // FOX_KEYWORDS "Hunter should ask 'Are you the WiFi Client Easy Fox?'"
 // set mac address
-#define FSSID "Ng WiFi Client Easy Fox"
+#define FSSID "Demo Ng WiFi Client Easy Fox"
 #define PSK "0123456789"
 #define MAC_ADDR {0xF2, 0x44, 0x5E, 0x10, 0x97, 0xF4}
 // Network config
@@ -126,7 +126,7 @@
 // RFHS_CHALLENGE_NAME "WiFi Client Hard Fox"
 // FOX_KEYWORDS "Hunter should ask 'Are you the WiFi Client Hard Fox?'"
 // Network config
-#define FSSID "Mr Lee WiFi Client Hard Fox"
+#define FSSID "Demo Mr Lee WiFi Client Hard Fox"
 #define PSK "0123456789"
 // set mac address
 #define MAC_ADDR {0xF2, 0x83, 0x27, 0x31, 0x80, 0xC7}
