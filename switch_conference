@@ -11,7 +11,7 @@ else
 fi
 
 # Check if that conference name already exists
-for challenge in bluetooth/iBeacon bluetooth/classic_discoverable wifi/wifi_ap_client; do
+for challenge in bluetooth/iBeacon bluetooth/classic_discoverable wifi/wifi_ap_client zigbee/zigbee_coordinator; do
   pushd "${challenge}" > /dev/null 2>&1
   if [ ! -e "src/conferences/${conf}.h" ]; then
     printf "%s/src/conferences/%s.h does not exist, unable to switch to this conference\n" "${challenge}" "${conf}"
@@ -20,7 +20,7 @@ for challenge in bluetooth/iBeacon bluetooth/classic_discoverable wifi/wifi_ap_c
   popd > /dev/null 2>&1
 done
 
-for challenge in bluetooth/iBeacon bluetooth/classic_discoverable wifi/wifi_ap_client; do
+for challenge in bluetooth/iBeacon bluetooth/classic_discoverable wifi/wifi_ap_client zigbee/zigbee_coordinator; do
   pushd "${challenge}" > /dev/null 2>&1
   ln -snf "conferences/${conf}.h" src/current_conf.h
   popd > /dev/null 2>&1

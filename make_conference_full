@@ -22,7 +22,7 @@ else
 fi
 
 # Check if that conference name already exists
-for challenge in bluetooth/iBeacon bluetooth/classic_discoverable wifi/wifi_ap_client; do
+for challenge in bluetooth/iBeacon bluetooth/classic_discoverable wifi/wifi_ap_client zigbee/zigbee_coordinator; do
   pushd "${challenge}" > /dev/null 2>&1
   if [ -e "src/conferences/${conf}.h" ]; then
     printf "%s/src/conferences/%s.h already exists, please remove it or pick a different name\n" "${challenge}" "${conf}"
@@ -35,7 +35,7 @@ if [ -f "${conf}.txt" ]; then
   exit 1
 fi
 
-for challenge in bluetooth/iBeacon bluetooth/classic_discoverable wifi/wifi_ap_client non-kitsune-foxes/fm_fox; do
+for challenge in bluetooth/iBeacon bluetooth/classic_discoverable wifi/wifi_ap_client zigbee/zigbee_coordinator non-kitsune-foxes/fm_fox; do
   pushd "${challenge}" > /dev/null 2>&1
   printf "Rolling %s for %s... " "${challenge}" "${conf}"
   if [ -x make_conference ]; then
