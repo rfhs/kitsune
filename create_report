@@ -41,7 +41,7 @@ else
   printf "Please provide conference name\n"
   exit 1
 fi
-for challenge in bluetooth/iBeacon bluetooth/classic_discoverable wifi/wifi_ap_client non-kitsune-foxes/fm_fox; do
+for challenge in bluetooth/iBeacon bluetooth/classic_discoverable wifi/wifi_ap_client zigbee/zigbee_coordinator non-kitsune-foxes/fm_fox; do
   pushd "${challenge}" > /dev/null 2>&1
   grep -e 'RFHS_CHALLENGE_NAME\|FOX_KEYWORDS\|NAME\|UUID\|MAC_ADDR\|FSSID\|CHANNEL' "src/conferences/${conf}.h" | \
     sed -e 's#{##' -e 's#}##' -e 's#0x##g' -e 's#, #:#g' -e 's#// ##' -e "s/#define //" | tee -a "${OLDPWD}/${conf}.txt" > /dev/null 2>&1
