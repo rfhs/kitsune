@@ -14,8 +14,8 @@
 
 #if defined(COORDINATOR)
 #if defined(EASY)
-// RFHS_CHALLENGE_NAME "Zigbee Coordinator Easy Fox"
-// FOX_KEYWORDS "Hunter should ask 'Are you the Zigbee Coordinator Easy Fox?'"
+// RFHS_CHALLENGE_NAME "Zigbee Easy Fox"
+// FOX_KEYWORDS "Hunter should ask 'Are you the Zigbee Easy Fox?'"
 // set mac address
 #define MAC_ADDR {0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07}
 // Channel 11-26.
@@ -30,8 +30,8 @@
 #endif
 
 #if defined(HARD)
-// RFHS_CHALLENGE_NAME "Zigbee Coordinator Hard Fox"
-// FOX_KEYWORDS "Hunter should ask 'Are you the Zigbee Coordinator Hard Fox?'"
+// RFHS_CHALLENGE_NAME "Zigbee Hard Fox"
+// FOX_KEYWORDS "Hunter should ask 'Are you the Zigbee Hard Fox?'"
 // set mac address
 #define MAC_ADDR {0x00, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e}
 // Channel 11-26.
