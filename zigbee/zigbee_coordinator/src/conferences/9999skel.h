@@ -3,7 +3,14 @@
 // Note: least significant bit of first byte must be zero, here it's fixed to 0xF2
 // printf '0xF2, 0x%02X, 0x%02X, 0x%02X, 0x%02X, 0x%02X, 0x%02X, 0x%02X\n' $[RANDOM%256] $[RANDOM%256] $[RANDOM%256] $[RANDOM%256] $[RANDOM%256] $[RANDOM%256] $[RANDOM%256]
 
+// Note: https://docs.espressif.com/projects/esp-test-tools/en/latest/esp32c5/development_stage/rf_test_items/zigbee_non_signaling_test.html
+
 // TXPOWER is in dBm, -15 to 20 on the ESP32-C5
+
+// TXPOWER range: https://github.com/espressif/esp-idf/blob/v5.5.4/components/esp_hal_ieee802154/esp32c5/include/hal/ieee802154_ll.h#L11-L12
+
+// IEEE802154_TXPOWER_VALUE_MIN -15
+// IEEE802154_TXPOWER_VALUE_MAX 20
 
 #if defined(COORDINATOR)
 #if defined(EASY)
@@ -11,7 +18,8 @@
 // FOX_KEYWORDS "Hunter should ask 'Are you the Zigbee Coordinator Easy Fox?'"
 // set mac address
 #define MAC_ADDR {0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07}
-// 11-26 permitted 0 means random
+// Channel 11-26.
+// 16 channels in total permitted. 0 means random
 #define CHANNEL 15
 // checks run during startup so we want to stay
 // running no longer than a few minutes to force
@@ -26,7 +34,8 @@
 // FOX_KEYWORDS "Hunter should ask 'Are you the Zigbee Coordinator Hard Fox?'"
 // set mac address
 #define MAC_ADDR {0x00, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e}
-// 11-26 permitted 0 means random
+// Channel 11-26.
+// 16 channels in total permitted. 0 means random
 #define CHANNEL 0
 // checks run during startup so we want to stay
 // running no longer than a few minutes to force
