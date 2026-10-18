@@ -22,3 +22,8 @@ To use:
 - **Note:** You can specify a target device serial port with argument `--upload-port` to avoid automatic detection.
 - For example, to build and upload Easy: `platformio run -e BOARDNAME-easy-coordinator --target upload`
 - **Note:** To build without upload execute `platformio run -e BOARDNAME-easy-coordinator`
+
+Easy is currently fairly difficult as it only sends one packet every ~15 seconds
+Hard is currently extremely hard.
+I'm not sure if we can control how often the packets are sent, but we can fake it by only being awake for a short time and sleeping for a short time.
+This makes security a little better too as no one can interact with us fast enough.
