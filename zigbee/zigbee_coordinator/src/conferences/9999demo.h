@@ -1,0 +1,47 @@
+// Bash to generate MAC address
+// Note: 802.15.4 uses an 8 byte (EUI-64) address
+// Note: least significant bit of first byte must be zero, here it's fixed to 0xF2
+// printf '0xF2, 0x%02X, 0x%02X, 0x%02X, 0x%02X, 0x%02X, 0x%02X, 0x%02X\n' $[RANDOM%256] $[RANDOM%256] $[RANDOM%256] $[RANDOM%256] $[RANDOM%256] $[RANDOM%256] $[RANDOM%256]
+
+// Note: https://docs.espressif.com/projects/esp-test-tools/en/latest/esp32c5/development_stage/rf_test_items/zigbee_non_signaling_test.html
+
+// TXPOWER is in dBm, -15 to 20 on the ESP32-C5
+
+// TXPOWER range: https://github.com/espressif/esp-idf/blob/v5.5.4/components/esp_hal_ieee802154/esp32c5/include/hal/ieee802154_ll.h
+
+// IEEE802154_TXPOWER_VALUE_MIN -15
+// IEEE802154_TXPOWER_VALUE_MAX 20
+
+#if defined(COORDINATOR)
+#if defined(EASY)
+// RFHS_CHALLENGE_NAME "Zigbee Easy Fox"
+// FOX_KEYWORDS "Hunter should ask 'Are you the Zigbee Easy Fox?'"
+// set mac address
+#define MAC_ADDR {0xF2, 0x5A, 0x3C, 0x91, 0x0E, 0x7B, 0x44, 0xD8}
+// Channel 11-26.
+// 16 channels in total permitted. 0 means random
+#define CHANNEL 15
+// checks run during startup so we want to stay
+// running no longer than a few minutes to force
+// checks to run and led to update
+#define TIME_TO_WAKE 300
+#define TIME_TO_SLEEP 1
+#define TXPOWER 20
+#endif
+
+#if defined(HARD)
+// RFHS_CHALLENGE_NAME "Zigbee Hard Fox"
+// FOX_KEYWORDS "Hunter should ask 'Are you the Zigbee Hard Fox?'"
+// set mac address
+#define MAC_ADDR {0xF2, 0xA7, 0x19, 0x62, 0xC3, 0x08, 0xBE, 0x35}
+// Channel 11-26.
+// 16 channels in total permitted. 0 means random
+#define CHANNEL 0
+// checks run during startup so we want to stay
+// running no longer than a few minutes to force
+// checks to run and led to update
+#define TIME_TO_WAKE 30
+#define TIME_TO_SLEEP 45
+#define TXPOWER -12
+#endif
+#endif
