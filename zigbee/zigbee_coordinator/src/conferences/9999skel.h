@@ -26,6 +26,9 @@
 // checks to run and led to update
 #define TIME_TO_WAKE 300
 #define TIME_TO_SLEEP 1
+// seconds between packets, 1-255. Zigbee default is 15.
+// keep it well under TIME_TO_WAKE or the fox may sleep before it talks
+#define PACKET_INTERVAL 1
 #define TXPOWER 20
 #endif
 
@@ -36,12 +39,15 @@
 #define MAC_ADDR {0x00, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e}
 // Channel 11-26.
 // 16 channels in total permitted. 0 means random
-#define CHANNEL 0
+#define CHANNEL 11
 // checks run during startup so we want to stay
 // running no longer than a few minutes to force
 // checks to run and led to update
-#define TIME_TO_WAKE 30
-#define TIME_TO_SLEEP 45
-#define TXPOWER -12
+#define TIME_TO_WAKE 300
+#define TIME_TO_SLEEP 1
+// seconds between packets, 1-255. Zigbee default is 15.
+// keep it well under TIME_TO_WAKE or the fox may sleep before it talks
+#define PACKET_INTERVAL 15
+#define TXPOWER 20
 #endif
 #endif

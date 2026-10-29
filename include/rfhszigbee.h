@@ -4,6 +4,11 @@
 // coordinator. we are just screaming and want to be heard
 #define ZIGBEE_ENDPOINT 1
 
+// the stack stores the link status period as uint8_t seconds
+#if PACKET_INTERVAL < 1 || PACKET_INTERVAL > 255
+#error "PACKET_INTERVAL must be defined as 1-255 seconds in the conference header"
+#endif
+
 ZigbeeGateway zbCoordinator = ZigbeeGateway(ZIGBEE_ENDPOINT);
 
 const uint8_t mac_addr[8] = MAC_ADDR;
@@ -34,7 +39,14 @@ bool rfhsstartzigbee() {
   }
   esp_zb_lock_acquire(portMAX_DELAY);
   esp_zb_set_tx_power(TXPOWER);
+  // the periodic packet hunters hear is the link status broadcast.
+  // the zigbee default is one every 15 seconds.
+  esp_err_t err = esp_zb_nwk_set_link_status_period(PACKET_INTERVAL);
   esp_zb_lock_release();
+  if (err != ESP_OK) {
+    Serial.printf("Error setting packet interval: %s\r\n", esp_err_to_name(err));
+    return false;
+  }
   return true;
 }
 
@@ -62,6 +74,12 @@ bool rfhscheckzigbee() {
     return false;
   }
   Serial.printf("Operating PAN ID: 0x%04X\r\n", esp_zb_get_pan_id());
+  Serial.printf("Packet interval: %ds\r\n", esp_zb_nwk_get_link_status_period());
+  if (esp_zb_nwk_get_link_status_period() != PACKET_INTERVAL) {
+    Serial.printf("Requested packet interval: %ds\r\n", PACKET_INTERVAL);
+    Serial.println("Packet interval != Requested packet interval");
+    return false;
+  }
   return true;
 }
 
