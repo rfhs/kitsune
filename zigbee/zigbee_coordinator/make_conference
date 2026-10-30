@@ -15,6 +15,31 @@ get_mac() {
   printf '\{0xF2, 0x%02X, 0x%02X, 0x%02X, 0x%02X, 0x%02X, 0x%02X, 0x%02X\}\n' $((RANDOM%256)) $((RANDOM%256)) $((RANDOM%256)) $((RANDOM%256)) $((RANDOM%256)) $((RANDOM%256)) $((RANDOM%256))
 }
 
+# Random PAN ID 0x0000-0xFFFE, 0xFFFF is the 802.15.4 broadcast PAN ID.
+# Always four hex digits, so a rolled zero is 0x0000 and not the bare 0 the
+# firmware reads as "random". RANDOM is 15 bits, two make 16. 1 and 2 are
+# the skel placeholders; the first sed below could hand one of them to the
+# second, so neither is rolled.
+get_pan_id() {
+  local pan_id
+  while :; do
+    pan_id=$(( ((RANDOM << 15) | RANDOM) % 0xFFFF ))
+    case "${pan_id}" in
+      1|2) continue ;;
+    esac
+    printf '0x%04X\n' "${pan_id}"
+    return
+  done
+}
+
+easy_pan_id="$(get_pan_id)"
+hard_pan_id="$(get_pan_id)"
+while [ "${hard_pan_id}" = "${easy_pan_id}" ]; do
+  hard_pan_id="$(get_pan_id)"
+done
+
 sed -e "s#{0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07}#$(get_mac)#" \
   -e "s#{0x00, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e}#$(get_mac)#" \
+  -e "s|^#define PAN_ID 0x0001\$|#define PAN_ID ${easy_pan_id}|" \
+  -e "s|^#define PAN_ID 0x0002\$|#define PAN_ID ${hard_pan_id}|" \
   src/conferences/9999skel.h > "src/conferences/$(date +"%Y")${1}.h"
