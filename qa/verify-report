@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/bin/sh
 # Check every line of a generated conference report against a known format.
 # Catches comment text or junk leaking in through the grep in create_report
 # and make_conference_full, identifier values that don't look right, and
@@ -14,10 +14,11 @@ if [ -z "${1:-}" ] || [ ! -r "${1}" ]; then
 fi
 report="${1}"
 shift
-headers=("$@")
+## What remains in "$@" are the conference headers, if any were given
 
-## One pattern per kind of line the report can contain. A line that matches
-## none of these, and isn't a line of foxhunt_instructions.txt, is a leak.
+## One pattern per kind of line the report can contain, joined into one
+## extended regular expression for grep -E. A line that matches none of
+## these, and isn't a line of foxhunt_instructions.txt, is a leak.
 hex2='[0-9A-Fa-f]{2}'
 mac6="${hex2}(:${hex2}){5}"
 mac8="${hex2}(:${hex2}){7}"
@@ -27,26 +28,28 @@ uuid='"[0-9A-Fa-f]{8}(-[0-9A-Fa-f]{4}){3}-[0-9A-Fa-f]{12}"'
 # punctuation, so only lower case and spaces are ruled out. That also
 # rejects the "Unable to find ..." message threewords prints on failure.
 word="[^a-z ]+"
-formats=(
-  "^Set font to \"Roboto Mono\"$"
-  "^-$"
-  "^-{64}$"
-  "^Conference: [A-Za-z0-9_-]+$"
-  "^RFHS_CHALLENGE_NAME +${quoted}$"
-  "^FOX_KEYWORDS +${quoted}$"
-  "^DEVICE_NAME +${quoted}$"
-  "^NAME +${quoted}$"
-  "^FSSID +${quoted}$"
-  "^BEACON_UUID +${uuid}$"
-  "^MAC_ADDR +(${mac6}|${mac8})$"
-  "^EXT_PAN_ID +${mac8}$"
-  "^CHANNEL +[0-9]{1,3}$"
-  "^PAN_ID +(0|0x[0-9A-Fa-f]{4})$"
-  "^The flag for the scoreboard is '${word} ${word} ${word}'\.$"
-)
+formats=''
+format() {
+  formats="${formats}${formats:+|}(${1})"
+}
+format '^Set font to "Roboto Mono"$'
+format '^-$'
+format '^-{64}$'
+format '^Conference: [A-Za-z0-9_-]+$'
+format "^RFHS_CHALLENGE_NAME +${quoted}$"
+format "^FOX_KEYWORDS +${quoted}$"
+format "^DEVICE_NAME +${quoted}$"
+format "^NAME +${quoted}$"
+format "^FSSID +${quoted}$"
+format "^BEACON_UUID +${uuid}$"
+format "^MAC_ADDR +(${mac6}|${mac8})$"
+format "^EXT_PAN_ID +${mac8}$"
+format '^CHANNEL +[0-9]{1,3}$'
+format '^PAN_ID +(0|0x[0-9A-Fa-f]{4})$'
+format "^The flag for the scoreboard is '${word} ${word} ${word}'\\.$"
 ## Fields the report generators pull out of the conference headers. Each
 ## must appear in the report as many times as it appears in the headers.
-fields=(RFHS_CHALLENGE_NAME FOX_KEYWORDS DEVICE_NAME NAME FSSID BEACON_UUID MAC_ADDR EXT_PAN_ID CHANNEL PAN_ID)
+fields='RFHS_CHALLENGE_NAME FOX_KEYWORDS DEVICE_NAME NAME FSSID BEACON_UUID MAC_ADDR EXT_PAN_ID CHANNEL PAN_ID'
 
 ## Everything else must be a verbatim line from the instructions
 instructions="$(dirname -- "${0}")/../foxhunt_instructions.txt"
@@ -61,24 +64,22 @@ fail() {
   failures=$((failures + 1))
 }
 
-lineno=0
-while IFS= read -r line || [ -n "${line}" ]; do
-  lineno=$((lineno + 1))
-  [ -z "${line}" ] && continue
-  matched=0
-  for f in "${formats[@]}"; do
-    if [[ "${line}" =~ ${f} ]]; then
-      matched=1
-      break
-    fi
-  done
-  if [ "${matched}" -eq 0 ] && grep -qxF -- "${line}" "${instructions}"; then
-    matched=1
+## grep -n gives "number:line" for every line no pattern matched. Blank
+## lines are fine, instruction lines are fine, anything else is a leak.
+unmatched="$(mktemp)"
+trap 'rm -f "${unmatched}"' EXIT
+grep -nvE "${formats}" "${report}" > "${unmatched}" || true
+while IFS= read -r entry; do
+  lineno="${entry%%:*}"
+  line="${entry#*:}"
+  if [ -z "${line}" ]; then
+    continue
   fi
-  if [ "${matched}" -eq 0 ]; then
+  if ! grep -qxF -- "${line}" "${instructions}"; then
     fail "line ${lineno} unrecognized: ${line}"
   fi
-done < "${report}"
+done < "${unmatched}"
+lines="$(wc -l < "${report}")"
 
 ## Lines that pass the patterns above but hold a placeholder nothing replaced
 if grep -nE 'EXT_PAN_ID +MAC_ADDR$|FOXFLAG|Unable to find' "${report}"; then
@@ -103,9 +104,9 @@ fi
 ## When the conference headers are given, count each field in them and in
 ## the report. In the PlatformIO projects a field is a "#define FIELD" or a
 ## "// FIELD" comment line; fm_fox's header has the bare field names.
-if [ "${#headers[@]}" -gt 0 ]; then
-  for field in "${fields[@]}"; do
-    expected="$(cat "${headers[@]}" | grep -cE "^(#define |// )?${field}[[:space:]]" || true)"
+if [ "$#" -gt 0 ]; then
+  for field in ${fields}; do
+    expected="$(cat "$@" | grep -cE "^(#define |// )?${field}[[:space:]]" || true)"
     actual="$(grep -cE "^${field}[[:space:]]" "${report}" || true)"
     if [ "${expected}" -ne "${actual}" ]; then
       fail "${field}: ${expected} in headers, ${actual} in report"
@@ -114,7 +115,7 @@ if [ "${#headers[@]}" -gt 0 ]; then
 fi
 
 if [ "${failures}" -gt 0 ]; then
-  printf '%s: %d problem(s) in %d lines\n' "${report}" "${failures}" "${lineno}"
+  printf '%s: %d problem(s) in %d lines\n' "${report}" "${failures}" "${lines}"
   exit 1
 fi
-printf '%s: %d foxes, %d lines, all fields look right\n' "${report}" "${foxes}" "${lineno}"
+printf '%s: %d foxes, %d lines, all fields look right\n' "${report}" "${foxes}" "${lines}"

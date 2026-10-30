@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/bin/sh
 set -e
 set -u
 
@@ -22,12 +22,10 @@ fi
 
 # Check if that conference name already exists
 for challenge in bluetooth/iBeacon bluetooth/classic_discoverable wifi/wifi_ap_client zigbee/zigbee_coordinator; do
-  pushd "${challenge}" > /dev/null 2>&1
-  if [ -e "src/conferences/${conf}.h" ]; then
+  if [ -e "${challenge}/src/conferences/${conf}.h" ]; then
     printf "%s/src/conferences/%s.h already exists, please remove it or pick a different name\n" "${challenge}" "${conf}"
     exit 1
   fi
-  popd > /dev/null 2>&1
 done
 if [ -f "${conf}.txt" ]; then
   printf '%s.txt already exists, please remove it or pick a different name\n' "${conf}"
@@ -35,24 +33,22 @@ if [ -f "${conf}.txt" ]; then
 fi
 
 for challenge in bluetooth/iBeacon bluetooth/classic_discoverable wifi/wifi_ap_client zigbee/zigbee_coordinator non-kitsune-foxes/fm_fox; do
-  pushd "${challenge}" > /dev/null 2>&1
   printf "Rolling %s for %s... " "${challenge}" "${conf}"
-  if [ -x make_conference ]; then
-    ./make_conference "${requested_conf}"
-    if [ ! -e "src/conferences/${conf}.h" ]; then
+  if [ -x "${challenge}/make_conference" ]; then
+    (cd "${challenge}" && ./make_conference "${requested_conf}")
+    if [ ! -e "${challenge}/src/conferences/${conf}.h" ]; then
       printf "Something went wrong creating %s/src/conferences/%s.h, please scroll up\n" "${challenge}" "${conf}"
       exit 1
     fi
-    ln -snf "conferences/${conf}.h" src/current_conf.h
+    ln -snf "conferences/${conf}.h" "${challenge}/src/current_conf.h"
   fi
   # PAN_ID keeps its 0x so it matches what Kismet shows.
   # EXT_PAN_ID is usually defined as MAC_ADDR. sed keeps the last MAC_ADDR
   # line in its hold space and prints that in place of the literal text.
-  grep -e 'RFHS_CHALLENGE_NAME\|FOX_KEYWORDS\|NAME\|UUID\|MAC_ADDR\|FSSID\|CHANNEL\|PAN_ID' "src/current_conf.h" | \
+  grep -e 'RFHS_CHALLENGE_NAME\|FOX_KEYWORDS\|NAME\|UUID\|MAC_ADDR\|FSSID\|CHANNEL\|PAN_ID' "${challenge}/src/current_conf.h" | \
     sed -e 's#{##' -e 's#}##' -e '/^#define PAN_ID /!s#0x##g' -e 's#, #:#g' -e 's#// ##' -e "s/#define //" \
-      -e '/^MAC_ADDR /h' -e '/^EXT_PAN_ID MAC_ADDR$/{g; s/^MAC_ADDR/EXT_PAN_ID/;}' | tee -a "${OLDPWD}/${conf}.txt" > /dev/null 2>&1
+      -e '/^MAC_ADDR /h' -e '/^EXT_PAN_ID MAC_ADDR$/{g; s/^MAC_ADDR/EXT_PAN_ID/;}' >> "${conf}.txt"
   printf "complete\n"
-  popd > /dev/null 2>&1
 done
 printf "Formatting with conference name for %s... " "${conf}"
 sed -i \

@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/bin/sh
 set -e
 set -u
 
@@ -46,19 +46,17 @@ else
   exit 1
 fi
 for challenge in bluetooth/iBeacon bluetooth/classic_discoverable wifi/wifi_ap_client zigbee/zigbee_coordinator non-kitsune-foxes/fm_fox; do
-  pushd "${challenge}" > /dev/null 2>&1
   # The stubs in non-kitsune-foxes have no conferences, just one header
-  header="src/conferences/${conf}.h"
-  if [ ! -d src/conferences ]; then
-    header="src/current_conf.h"
+  header="${challenge}/src/conferences/${conf}.h"
+  if [ ! -d "${challenge}/src/conferences" ]; then
+    header="${challenge}/src/current_conf.h"
   fi
   # PAN_ID keeps its 0x so it matches what Kismet shows.
   # EXT_PAN_ID is usually defined as MAC_ADDR. sed keeps the last MAC_ADDR
   # line in its hold space and prints that in place of the literal text.
   grep -e 'RFHS_CHALLENGE_NAME\|FOX_KEYWORDS\|NAME\|UUID\|MAC_ADDR\|FSSID\|CHANNEL\|PAN_ID' "${header}" | \
     sed -e 's#{##' -e 's#}##' -e '/^#define PAN_ID /!s#0x##g' -e 's#, #:#g' -e 's#// ##' -e "s/#define //" \
-      -e '/^MAC_ADDR /h' -e '/^EXT_PAN_ID MAC_ADDR$/{g; s/^MAC_ADDR/EXT_PAN_ID/;}' | tee -a "${OLDPWD}/${conf}.txt" > /dev/null 2>&1
+      -e '/^MAC_ADDR /h' -e '/^EXT_PAN_ID MAC_ADDR$/{g; s/^MAC_ADDR/EXT_PAN_ID/;}' >> "${conf}.txt"
   printf "complete\n"
-  popd > /dev/null 2>&1
 done
 create_report

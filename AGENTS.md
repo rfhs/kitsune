@@ -89,7 +89,9 @@ same change.
   your machine breaks CI or someone's fox-flashing laptop.
 - A script that starts `#!/bin/bash` must work in at least bash. Use it
   only when a bash feature makes the script clearly more readable than
-  the `/bin/sh` version; don't reach for it out of habit.
+  the `/bin/sh` version; don't reach for it out of habit. Every script in
+  the repo is `/bin/sh`. Lists go in files from `mktemp`, random bytes
+  come from `od -An -N<n> -tu1 /dev/urandom`.
 - Anything that spawns a shell for you runs `/bin/sh`, whatever the
   script's own shebang: `sed`'s `e` flag, `system()`, `find -exec sh -c`,
   `xargs sh -c`, Python's `subprocess(shell=True)`. The command you hand

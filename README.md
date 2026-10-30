@@ -72,7 +72,7 @@ Platforms are pinned in each `platformio.ini` and every board section names one.
 
 ### Shell scripts
 
-A script with `#!/bin/sh` has to work in bash, dash, mksh and busybox ash, so it is POSIX sh only. A script with `#!/bin/bash` has to work in at least bash. Everything passes `shellcheck`. `./qa/shell-lint` checks all of that for every script in the repo and CI runs it on each PR. Remember that `sed`'s `e` flag, `system()` and `sh -c` run `/bin/sh` no matter what shebang your script has, so a bash function is invisible to them.
+A script with `#!/bin/sh` has to work in bash, dash, mksh and busybox ash, so it is POSIX sh only. A script with `#!/bin/bash` has to work in at least bash, and is only worth it when bash makes it clearly more readable; every script here is `/bin/sh`. Everything passes `shellcheck`. `./qa/shell-lint` checks all of that for every script in the repo and CI runs it on each PR. Remember that `sed`'s `e` flag, `system()` and `sh -c` run `/bin/sh` no matter what shebang your script has, so a bash function is invisible to them.
 
 ### Testing
 

@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/bin/sh
 # Build every environment of a board for the demo conference, roll a new
 # conference off the skel, build them all again. This is what CI runs,
 # one project and board per runner, so the same script runs it at home.
@@ -83,19 +83,24 @@ conf="$(date +"%Y")qa-build-test"
 cleanup_conf() {
   rm -f -- ./*/*/src/conferences/"${conf}.h" "${conf}.txt"
 }
+## Two lists live in scratch files: where every current_conf.h pointed at
+## the start, and one line per build for the summary.
+scratch="$(mktemp -d)"
+: > "${scratch}/results"
+
 ## make_conference_full repoints every project's current_conf.h symlink.
 ## Remember where they pointed so they can be put back on exit.
-declare -A original_conf
 for project in $(projects); do
-  original_conf["${project}"]="$(readlink "${project}/src/current_conf.h" || true)"
-done
+  printf '%s %s\n' "${project}" "$(readlink "${project}/src/current_conf.h" || true)"
+done > "${scratch}/links"
 restore() {
   cleanup_conf
-  for project in "${!original_conf[@]}"; do
-    if [ -n "${original_conf[${project}]}" ]; then
-      ln -snf "${original_conf[${project}]}" "${project}/src/current_conf.h"
+  while read -r project target; do
+    if [ -n "${target}" ]; then
+      ln -snf "${target}" "${project}/src/current_conf.h"
     fi
-  done
+  done < "${scratch}/links"
+  rm -rf "${scratch}"
 }
 trap restore EXIT
 
@@ -113,12 +118,10 @@ endgroup() {
   fi
 }
 
-results=()
 failures=0
 ## build <project> <env> <conference>: one pio run, recorded for the summary
 build() {
   group "${1} ${2} (${3})"
-  local start status
   start="$(date +%s)"
   if pio run --silent --project-dir "${1}" -e "${2}"; then
     status="ok"
@@ -126,8 +129,9 @@ build() {
     status="FAIL"
     failures=$((failures + 1))
   fi
-  printf '%s %s %s %s %ds\n' "${status}" "${1}" "${2}" "${3}" "$(( $(date +%s) - start ))"
-  results+=("${status} ${1} ${2} ${3} $(( $(date +%s) - start ))")
+  seconds=$(( $(date +%s) - start ))
+  printf '%s %s %s %s %ds\n' "${status}" "${1}" "${2}" "${3}" "${seconds}"
+  printf '%s %s %s %s %s\n' "${status}" "${1}" "${2}" "${3}" "${seconds}" >> "${scratch}/results"
   endgroup
 }
 
@@ -169,14 +173,14 @@ done
 ## Summary table, also written to the job summary page on GitHub Actions
 {
   printf '\n%-6s %-32s %-36s %-18s %s\n' "status" "project" "environment" "conference" "seconds"
-  for r in "${results[@]}"; do
-    # shellcheck disable=SC2086
-    printf '%-6s %-32s %-36s %-18s %s\n' ${r}
-  done
+  while read -r status project env built_conf seconds; do
+    printf '%-6s %-32s %-36s %-18s %s\n' "${status}" "${project}" "${env}" "${built_conf}" "${seconds}"
+  done < "${scratch}/results"
 } | tee -a "${GITHUB_STEP_SUMMARY:-/dev/null}"
+builds="$(wc -l < "${scratch}/results")"
 
 if [ "${failures}" -gt 0 ]; then
   printf '\n%d build(s) failed\n' "${failures}"
   exit 1
 fi
-printf '\nAll %d builds passed\n' "${#results[@]}"
+printf '\nAll %d builds passed\n' "${builds}"
