@@ -1,0 +1,23 @@
+name: Shell Scripts
+
+on:
+  pull_request:
+    branches:
+      - main
+
+concurrency:
+  group: shell-scripts-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  shell-scripts:
+    runs-on: ubuntu-24.04
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v7
+
+    - name: Setup
+      run: ./qa/setup
+
+    - name: Shell Scripts
+      run: ./qa/shell-lint

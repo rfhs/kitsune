@@ -1,0 +1,43 @@
+#!/bin/sh
+# What CI installs before qa/build-test and qa/report-format.
+# Debian or Ubuntu only. Locally you just need pio on your PATH.
+set -e
+set -u
+
+sudo apt-get update -qq
+## cracklib-runtime, dos2unix: threewords in the report scripts
+## uuid-runtime: uuidgen in the iBeacon make_conference
+## git: the pioarduino platform refuses to run without it
+## dash, mksh, busybox-static: the shells qa/shell-lint parses with
+## curl, xz-utils: the shellcheck download below
+sudo apt-get install -y -qq cracklib-runtime dos2unix uuid-runtime git \
+  dash mksh busybox-static curl xz-utils
+## threewords reads /usr/share/dict/cracklib-words; Debian and Ubuntu
+## install the same list as cracklib-small.
+if [ ! -r /usr/share/dict/cracklib-words ] && [ -r /usr/share/dict/cracklib-small ]; then
+  sudo ln -s cracklib-small /usr/share/dict/cracklib-words
+fi
+
+## The runner image has pipx, a bare Debian or Ubuntu does not
+if ! command -v pipx > /dev/null 2>&1; then
+  sudo apt-get install -y -qq pipx
+fi
+## Pinned so a PlatformIO release can't change what CI does
+pipx install "platformio==${PLATFORMIO_VERSION:-6.2.0}"
+
+## shellcheck from the project's stable release channel, so every run uses
+## the same current version whatever the distro ships. ~/.local/bin is
+## ahead of /usr/bin once it is on PATH.
+mkdir -p "${HOME}/.local/bin"
+shellcheck_url="https://github.com/koalaman/shellcheck/releases/download/stable/shellcheck-stable.linux.$(uname -m).tar.xz"
+if curl -fsSL "${shellcheck_url}" | tar -xJ -C /tmp; then
+  install -m 755 /tmp/shellcheck-stable/shellcheck "${HOME}/.local/bin/shellcheck"
+  rm -rf /tmp/shellcheck-stable
+else
+  printf 'Could not download shellcheck from %s, using the distro package\n' "${shellcheck_url}"
+  sudo apt-get install -y -qq shellcheck
+fi
+## pipx installs pio into ~/.local/bin, which later workflow steps need on PATH
+if [ -n "${GITHUB_PATH:-}" ]; then
+  echo "${HOME}/.local/bin" >> "${GITHUB_PATH}"
+fi

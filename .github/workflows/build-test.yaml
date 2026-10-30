@@ -1,0 +1,48 @@
+name: Build Test
+
+on:
+  pull_request:
+    branches:
+      - main
+
+# A new push to the PR cancels the run for the old commit
+concurrency:
+  group: build-test-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # One leg per project and board, read from the platformio.ini files
+  matrix:
+    runs-on: ubuntu-24.04
+    outputs:
+      legs: ${{ steps.legs.outputs.legs }}
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v7
+
+    - name: Setup
+      run: ./qa/setup
+
+    - name: List legs
+      id: legs
+      run: |
+        legs="$(./qa/build-test list)"
+        echo "${legs}"
+        echo "legs=${legs}" >> "${GITHUB_OUTPUT}"
+
+  build:
+    needs: matrix
+    name: ${{ matrix.name }}
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.matrix.outputs.legs) }}
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v7
+
+    - name: Setup
+      run: ./qa/setup
+
+    - name: Build Test
+      run: ./qa/build-test "${{ matrix.project }}" "${{ matrix.board }}" "${{ matrix.mode }}"

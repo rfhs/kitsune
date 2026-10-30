@@ -1,0 +1,31 @@
+name: Report Format
+
+on:
+  pull_request:
+    branches:
+      - main
+
+concurrency:
+  group: report-format-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  report-format:
+    runs-on: ubuntu-24.04
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v7
+
+    - name: Setup
+      run: ./qa/setup
+
+    - name: Report Format
+      run: ./qa/report-format
+
+    - name: Upload reports
+      if: always()
+      uses: actions/upload-artifact@v7
+      with:
+        name: conference-reports
+        path: '*.txt'
+        if-no-files-found: ignore

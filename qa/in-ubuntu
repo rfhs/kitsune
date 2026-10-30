@@ -1,0 +1,55 @@
+#!/bin/sh
+# Run a qa script the way CI runs it: in the Ubuntu release the
+# ubuntu-24.04 runner is built on, after qa/setup. /bin/sh is dash there
+# and only what qa/setup installs exists, which a developer's machine hides.
+#
+# The repo is copied into the container, so nothing it writes lands in
+# your checkout. ~/.platformio inside the container is kept in a volume,
+# so a second build doesn't download the toolchains again.
+#
+# Usage:
+#   qa/in-ubuntu                                     runs ./qa/report-format
+#   qa/in-ubuntu ./qa/build-test <project> <board>   one CI leg, slow the first time
+#   qa/in-ubuntu bash                                a shell to poke around in
+set -e
+set -u
+
+cd "$(dirname -- "${0}")/.."
+
+if command -v docker > /dev/null 2>&1; then
+  runtime=docker
+elif command -v podman > /dev/null 2>&1; then
+  runtime=podman
+else
+  printf 'Needs docker or podman\n'
+  exit 1
+fi
+image="${UBUNTU_IMAGE:-ubuntu:24.04}"
+
+if [ "$#" -eq 0 ]; then
+  set -- ./qa/report-format
+fi
+
+## Copy the checkout in, leaving out build output and git history, run
+## qa/setup as CI does, then the command. sudo is installed because
+## qa/setup uses it and the runner has it; here it just runs as root.
+## The single quotes are deliberate, the script is expanded in the container.
+# shellcheck disable=SC2016
+"${runtime}" run --rm -t \
+  -v "${PWD}:/src:ro" \
+  -v kitsune-platformio:/root/.platformio \
+  -w /repo \
+  "${image}" \
+  bash -c '
+    set -e
+    export DEBIAN_FRONTEND=noninteractive
+    mkdir -p /repo
+    tar -C /src --exclude=.pio --exclude=.git -cf - . | tar -C /repo -xf -
+    apt-get update -qq > /dev/null
+    apt-get install -y -qq sudo python3 python3-venv > /dev/null 2>&1
+    ./qa/setup > /tmp/qa-setup.log 2>&1 || { cat /tmp/qa-setup.log; exit 1; }
+    export PATH="${HOME}/.local/bin:${PATH}"
+    # pio draws download progress bars with carriage returns, one per percent
+    export PLATFORMIO_DISABLE_PROGRESSBAR=true
+    exec "$@"
+  ' -- "$@"
