@@ -18,9 +18,18 @@
 // FOX_KEYWORDS "Hunter should ask 'Are you the Zigbee Easy Fox?'"
 // set mac address
 #define MAC_ADDR {0xF2, 0x5A, 0x3C, 0x91, 0x0E, 0x7B, 0x44, 0xD8}
+// Extended PAN ID, 8 bytes in the same order as the MAC above. Zigbee
+// defaults it to the coordinator MAC, which the value below keeps. Only
+// beacons carry it, so Kismet shows it after something scans the channel.
+#define EXT_PAN_ID MAC_ADDR
 // Channel 11-26.
 // 16 channels in total permitted. 0 means random
 #define CHANNEL 15
+// PAN ID 0x0000-0xFFFE, make_conference rolls one per fox. Kismet names
+// the device "PAN ID / short address"; a coordinator's short address is
+// always 0x0000. A bare 0 rolls a new PAN ID every wake, which makes the
+// fox hard to track. Write 0x0000 for PAN ID zero.
+#define PAN_ID 0x1337
 // checks run during startup so we want to stay
 // running no longer than a few minutes to force
 // checks to run and led to update
@@ -37,9 +46,18 @@
 // FOX_KEYWORDS "Hunter should ask 'Are you the Zigbee Hard Fox?'"
 // set mac address
 #define MAC_ADDR {0xF2, 0xA7, 0x19, 0x62, 0xC3, 0x08, 0xBE, 0x35}
+// Extended PAN ID, 8 bytes in the same order as the MAC above. Zigbee
+// defaults it to the coordinator MAC, which the value below keeps. Only
+// beacons carry it, so Kismet shows it after something scans the channel.
+#define EXT_PAN_ID MAC_ADDR
 // Channel 11-26.
 // 16 channels in total permitted. 0 means random
 #define CHANNEL 11
+// PAN ID 0x0000-0xFFFE, make_conference rolls one per fox. Kismet names
+// the device "PAN ID / short address"; a coordinator's short address is
+// always 0x0000. A bare 0 rolls a new PAN ID every wake, which makes the
+// fox hard to track. Write 0x0000 for PAN ID zero.
+#define PAN_ID 0xDEAD
 // checks run during startup so we want to stay
 // running no longer than a few minutes to force
 // checks to run and led to update

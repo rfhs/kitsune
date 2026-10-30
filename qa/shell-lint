@@ -1,0 +1,83 @@
+#!/bin/sh
+# Check every shell script in the repo against the rules in AGENTS.md:
+# no findings from shellcheck, a #!/bin/sh script parses in bash, dash,
+# mksh and busybox ash, a #!/bin/bash script parses in bash. Scripts are
+# found by their shebang, so a new one is covered the moment it is added.
+#
+# Usage: qa/shell-lint
+# Needs shellcheck, dash, mksh and busybox on PATH. qa/setup installs them,
+# or run ./qa/in-ubuntu ./qa/shell-lint.
+set -e
+set -u
+
+cd "$(dirname -- "${0}")/.."
+
+failures=0
+fail() {
+  printf 'FAIL %s\n' "${1}"
+  failures=$((failures + 1))
+}
+
+## Everything the checks need. A missing interpreter is a failure, not a
+## skipped check, so a run that says ok has actually run every shell.
+for tool in shellcheck bash dash mksh busybox; do
+  if ! command -v "${tool}" > /dev/null 2>&1; then
+    fail "${tool} not found. Run qa/setup, or ./qa/in-ubuntu ./qa/shell-lint"
+  fi
+done
+if [ "${failures}" -gt 0 ]; then
+  exit 1
+fi
+printf 'shellcheck %s\n' "$(shellcheck --version | sed -n 's/^version: //p')"
+
+## Every regular file whose first line is a sh or bash shebang.
+## Build output and git internals are skipped.
+find . -type f -not -path './.git/*' -not -path '*/.pio/*' -not -name '*.patch' |
+  sort |
+  while IFS= read -r file; do
+    shebang="$(head -n 1 "${file}" 2> /dev/null || true)"
+    case "${shebang}" in
+      '#!/bin/sh'|'#!/usr/bin/env sh')     dialect='sh' ;;
+      '#!/bin/bash'|'#!/usr/bin/env bash') dialect='bash' ;;
+      *) continue ;;
+    esac
+    printf '%s\n' "${dialect} ${file}"
+  done > /tmp/shell-lint.list
+
+if [ ! -s /tmp/shell-lint.list ]; then
+  fail "no shell scripts found, which can't be right"
+fi
+
+while IFS=' ' read -r dialect file; do
+  before="${failures}"
+  ## shellcheck takes the dialect from the shebang itself
+  if ! shellcheck "${file}"; then
+    fail "${file}: shellcheck"
+  fi
+  ## then every shell the script claims to run in has to parse it
+  case "${dialect}" in
+    sh)   shells='bash dash mksh busybox' ;;
+    bash) shells='bash' ;;
+  esac
+  for shell in ${shells}; do
+    if [ "${shell}" = busybox ]; then
+      checker='busybox sh'
+    else
+      checker="${shell}"
+    fi
+    # shellcheck disable=SC2086  # checker is one or two words, split on purpose
+    if ! ${checker} -n "${file}"; then
+      fail "${file}: does not parse in ${shell}"
+    fi
+  done
+  if [ "${failures}" -eq "${before}" ]; then
+    printf 'ok   %-5s %s\n' "${dialect}" "${file}"
+  fi
+done < /tmp/shell-lint.list
+rm -f /tmp/shell-lint.list
+
+if [ "${failures}" -gt 0 ]; then
+  printf '\n%d problem(s)\n' "${failures}"
+  exit 1
+fi
+printf '\nAll shell scripts pass\n'

@@ -1,0 +1,186 @@
+#!/bin/sh
+# Build every environment of a board for the demo conference, roll a new
+# conference off the skel, build them all again. This is what CI runs,
+# one project and board per runner, so the same script runs it at home.
+#
+# Usage:
+#   qa/build-test                             every project and board, in series
+#   qa/build-test <project>                   every board of one project
+#   qa/build-test <project> <board>           one board, what a CI job runs
+#   qa/build-test <project> <board> <mode>    one board's -<mode> environments
+#   qa/build-test list                        the legs as a GitHub Actions matrix
+#
+# project is the directory holding platformio.ini e.g. wifi/wifi_ap_client
+# board is the platformio board id e.g. m5stack-atom
+# mode is the last part of an environment name e.g. ap or client
+set -e
+set -u
+
+cd "$(dirname -- "${0}")/.."
+
+## Boards with too many environments for one runner. The leg for each of
+## these is split by the mode at the end of the environment name, so one
+## slow board doesn't set the wall clock of the whole CI run. One
+## "project board" per line.
+split_by_mode="
+wifi/wifi_ap_client seeed_xiao_esp32c5
+"
+
+if ! command -v pio > /dev/null 2>&1; then
+  printf 'pio not found. Install platformio, see README.md\n'
+  exit 1
+fi
+
+## projects: every directory with a platformio.ini.
+## board_envs: "board env" for every environment in one project. pio has
+## already resolved the extends chain, so the board is read off the env.
+projects() {
+  find . -name platformio.ini -not -path '*/.pio/*' -printf '%h\n' | sed 's#^\./##' | sort
+}
+board_envs() {
+  pio project config --project-dir "${1}" --json-output | python3 -c '
+import json, sys
+for section, items in json.load(sys.stdin):
+    if not section.startswith("env:"):
+        continue
+    board = dict(items).get("board")
+    if not board:
+        sys.exit(f"{sys.argv[1]} {section} has no board")
+    print(board, section[4:])' "${1}"
+}
+
+## list: every (project, board) pair as a GitHub Actions matrix. It comes
+## from the ini files, so a board added to any project gets a CI job without
+## anyone editing the workflow.
+if [ "${1:-}" = "list" ]; then
+  for project in $(projects); do
+    board_envs "${project}" | awk -v p="${project}" '{print p, $1, $2}'
+  done | python3 -c '
+import json, sys
+split = {tuple(l.split()) for l in sys.argv[1].splitlines() if l.strip()}
+legs = set()
+for line in sys.stdin:
+    project, board, env = line.split()
+    mode = env.rsplit("-", 1)[1] if (project, board) in split else ""
+    legs.add((project, board, mode))
+out = [{"name": " ".join(x for x in leg if x), "project": leg[0], "board": leg[1], "mode": leg[2]}
+       for leg in sorted(legs)]
+print(json.dumps({"include": out}))' "${split_by_mode}"
+  exit 0
+fi
+
+want_project="${1:-}"
+want_board="${2:-}"
+want_mode="${3:-}"
+if [ -n "${want_project}" ] && [ ! -r "${want_project}/platformio.ini" ]; then
+  printf 'No platformio.ini in %s\n' "${want_project}"
+  exit 1
+fi
+
+## The second pass builds a conference rolled off the skel. Its files are
+## removed before it is made, so make_conference_full can't refuse, and after.
+conf="$(date +"%Y")qa-build-test"
+cleanup_conf() {
+  rm -f -- ./*/*/src/conferences/"${conf}.h" "${conf}.txt"
+}
+## Two lists live in scratch files: where every current_conf.h pointed at
+## the start, and one line per build for the summary.
+scratch="$(mktemp -d)"
+: > "${scratch}/results"
+
+## make_conference_full repoints every project's current_conf.h symlink.
+## Remember where they pointed so they can be put back on exit.
+for project in $(projects); do
+  printf '%s %s\n' "${project}" "$(readlink "${project}/src/current_conf.h" || true)"
+done > "${scratch}/links"
+restore() {
+  cleanup_conf
+  while read -r project target; do
+    if [ -n "${target}" ]; then
+      ln -snf "${target}" "${project}/src/current_conf.h"
+    fi
+  done < "${scratch}/links"
+  rm -rf "${scratch}"
+}
+trap restore EXIT
+
+## Collapsible log sections on GitHub Actions, plain headings elsewhere
+group() {
+  if [ -n "${GITHUB_ACTIONS:-}" ]; then
+    printf '::group::%s\n' "${1}"
+  else
+    printf '\n=== %s ===\n' "${1}"
+  fi
+}
+endgroup() {
+  if [ -n "${GITHUB_ACTIONS:-}" ]; then
+    printf '::endgroup::\n'
+  fi
+}
+
+failures=0
+## build <project> <env> <conference>: one pio run, recorded for the summary
+build() {
+  group "${1} ${2} (${3})"
+  start="$(date +%s)"
+  if pio run --silent --project-dir "${1}" -e "${2}"; then
+    status="ok"
+  else
+    status="FAIL"
+    failures=$((failures + 1))
+  fi
+  seconds=$(( $(date +%s) - start ))
+  printf '%s %s %s %s %ds\n' "${status}" "${1}" "${2}" "${3}" "${seconds}"
+  printf '%s %s %s %s %s\n' "${status}" "${1}" "${2}" "${3}" "${seconds}" >> "${scratch}/results"
+  endgroup
+}
+
+for project in $(projects); do
+  if [ -n "${want_project}" ] && [ "${project}" != "${want_project}" ]; then
+    continue
+  fi
+  envs="$(board_envs "${project}" | awk -v b="${want_board}" -v m="${want_mode}" \
+    '(b == "" || $1 == b) && (m == "" || $2 ~ ("-" m "$")) {print $2}')"
+  if [ -z "${envs}" ]; then
+    printf 'No environments for board %s mode %s in %s\n' "${want_board:-any}" "${want_mode:-any}" "${project}"
+    exit 1
+  fi
+
+  ## First pass: 9999demo, the conference checked in to every project
+  ln -snf conferences/9999demo.h "${project}/src/current_conf.h"
+  for env in ${envs}; do
+    build "${project}" "${env}" "9999demo"
+  done
+
+  ## Second pass: a conference just rolled off 9999skel, with fresh
+  ## identifiers. make_conference_full points current_conf.h at it.
+  ## Only main.cpp includes the conference header, so each environment
+  ## recompiles that one file and relinks.
+  cleanup_conf
+  group "make_conference_full ${conf}"
+  ./make_conference_full qa-build-test
+  if [ ! -r "${conf}.txt" ]; then
+    printf 'Report %s.txt missing\n' "${conf}"
+    exit 1
+  fi
+  endgroup
+  for env in ${envs}; do
+    build "${project}" "${env}" "${conf}"
+  done
+  cleanup_conf
+done
+
+## Summary table, also written to the job summary page on GitHub Actions
+{
+  printf '\n%-6s %-32s %-36s %-18s %s\n' "status" "project" "environment" "conference" "seconds"
+  while read -r status project env built_conf seconds; do
+    printf '%-6s %-32s %-36s %-18s %s\n' "${status}" "${project}" "${env}" "${built_conf}" "${seconds}"
+  done < "${scratch}/results"
+} | tee -a "${GITHUB_STEP_SUMMARY:-/dev/null}"
+builds="$(wc -l < "${scratch}/results")"
+
+if [ "${failures}" -gt 0 ]; then
+  printf '\n%d build(s) failed\n' "${failures}"
+  exit 1
+fi
+printf '\nAll %d builds passed\n' "${builds}"

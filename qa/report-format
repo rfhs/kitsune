@@ -1,0 +1,33 @@
+#!/bin/sh
+# Generate the conference reports the way an organizer would and check
+# every line of them. Needs the cracklib word list and dos2unix, see qa/setup.
+set -e
+set -u
+
+cd "$(dirname -- "${0}")/.."
+
+## The second report is for a conference rolled off the skel. Its files are
+## removed before it is made, so make_conference_full can't refuse, and on
+## exit, even after a failure. make_conference_full repoints every
+## current_conf.h; a dangling one is pointed back at 9999demo.h.
+conf="$(date +"%Y")qa-report-format"
+cleanup() {
+  rm -f -- ./*/*/src/conferences/"${conf}.h" "${conf}.txt"
+  for link in ./*/*/src/current_conf.h; do
+    if [ -L "${link}" ] && [ ! -e "${link}" ]; then
+      ln -snf conferences/9999demo.h "${link}"
+    fi
+  done
+}
+trap cleanup EXIT
+cleanup
+
+## Report for 9999demo, the conference checked in to every project.
+## The fm_fox stub has one header that is in every report.
+rm -f 9999demo.txt
+./create_report 9999demo
+./qa/verify-report 9999demo.txt ./*/*/src/conferences/9999demo.h non-kitsune-foxes/fm_fox/src/current_conf.h
+
+## Report for a conference just rolled off 9999skel
+./make_conference_full qa-report-format
+./qa/verify-report "${conf}.txt" ./*/*/src/conferences/"${conf}.h" non-kitsune-foxes/fm_fox/src/current_conf.h

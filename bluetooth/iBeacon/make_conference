@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/bin/sh
 set -e
 set -u
 
@@ -11,8 +11,12 @@ if [ -e "src/conferences/$(date +"%Y")${1}.h" ]; then
   exit 1
 fi
 
+# Five random bytes behind the fixed first one. od prints them as decimal
+# numbers separated by spaces; set -- makes each one a positional argument.
 get_mac() {
-  printf '\{0xF2, 0x%02X, 0x%02X, 0x%02X, 0x%02X, 0x%02X\}\n' $((RANDOM%256)) $((RANDOM%256)) $((RANDOM%256)) $((RANDOM%256)) $((RANDOM%256))
+  # shellcheck disable=SC2046  # splitting od's output into 5 words is the point
+  set -- $(od -An -N5 -tu1 /dev/urandom)
+  printf '\{0xF2, 0x%02X, 0x%02X, 0x%02X, 0x%02X, 0x%02X\}\n' "$@"
 }
 
 get_uuid() {
