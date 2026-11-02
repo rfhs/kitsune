@@ -11,12 +11,24 @@ if [ -e "src/conferences/$(date +"%Y")${1}.h" ]; then
   exit 1
 fi
 
-# Five random bytes behind the fixed first one. od prints them as decimal
-# numbers separated by spaces; set -- makes each one a positional argument.
+# All six bytes are random. The first byte is then forced to have bit 0
+# clear, so the address is unicast (I/G), and bit 1 set, so it is locally
+# administered and never collides with a vendor's assigned block. That
+# leaves it even and nonzero, so the address can never be all zeros. The
+# last three bytes are the Bluetooth LAP; 9E:8B:00-9E:8B:3F are the inquiry
+# access codes and may not be a device address, so those are rolled again.
+# od prints the bytes as decimal numbers separated by spaces; set -- makes
+# each one a positional argument.
 get_mac() {
-  # shellcheck disable=SC2046  # splitting od's output into 5 words is the point
-  set -- $(od -An -N5 -tu1 /dev/urandom)
-  printf '\{0xF2, 0x%02X, 0x%02X, 0x%02X, 0x%02X, 0x%02X\}\n' "$@"
+  while :; do
+    # shellcheck disable=SC2046  # splitting od's output into 6 words is the point
+    set -- $(od -An -N6 -tu1 /dev/urandom)
+    if [ "$4" -eq 158 ] && [ "$5" -eq 139 ] && [ "$6" -le 63 ]; then
+      continue
+    fi
+    printf '\{0x%02X, 0x%02X, 0x%02X, 0x%02X, 0x%02X, 0x%02X\}\n' $(( ($1 & 0xFC) | 0x02 )) "$2" "$3" "$4" "$5" "$6"
+    return
+  done
 }
 
 get_uuid() {

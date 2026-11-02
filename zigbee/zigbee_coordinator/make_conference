@@ -11,12 +11,16 @@ if [ -e "src/conferences/$(date +"%Y")${1}.h" ]; then
   exit 1
 fi
 
-# Seven random bytes behind the fixed first one. od prints them as decimal
-# numbers separated by spaces; set -- makes each one a positional argument.
+# All eight bytes are random. The first byte is then forced to have bit 0
+# clear, so the EUI-64 is a device address (I/G), and bit 1 set, so it is
+# locally administered and never collides with a vendor's assigned block.
+# That leaves it even and nonzero, so the address can never be all zeros
+# and every roll is valid. od prints the bytes as decimal numbers separated
+# by spaces; set -- makes each one a positional argument.
 get_mac() {
-  # shellcheck disable=SC2046  # splitting od's output into 7 words is the point
-  set -- $(od -An -N7 -tu1 /dev/urandom)
-  printf '\{0xF2, 0x%02X, 0x%02X, 0x%02X, 0x%02X, 0x%02X, 0x%02X, 0x%02X\}\n' "$@"
+  # shellcheck disable=SC2046  # splitting od's output into 8 words is the point
+  set -- $(od -An -N8 -tu1 /dev/urandom)
+  printf '\{0x%02X, 0x%02X, 0x%02X, 0x%02X, 0x%02X, 0x%02X, 0x%02X, 0x%02X\}\n' $(( ($1 & 0xFC) | 0x02 )) "$2" "$3" "$4" "$5" "$6" "$7" "$8"
 }
 
 # Random PAN ID 0x0000-0xFFFE, 0xFFFF is the 802.15.4 broadcast PAN ID.

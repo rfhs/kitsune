@@ -8,7 +8,6 @@
 #if defined(EASY)
 #define DEVICE_NAME         "Kali"
 #define BEACON_UUID         "4F9F4075-57DC-4F1D-B028-905CCDB0D344"
-#define MANUFACTURER_ID     0x4c00
 #define MAJOR               5
 #define MINOR               88
 #define SIGNAL_POWER        0xc5
@@ -17,7 +16,6 @@
 #elif defined(MEDIUM)
 #define DEVICE_NAME         "Apophis"
 #define BEACON_UUID         "51AD602D-A475-4816-B85A-1223F1A14EA7"
-#define MANUFACTURER_ID     0x4c00
 #define MAJOR               5
 #define MINOR               88
 #define SIGNAL_POWER        0xc5
@@ -26,7 +24,6 @@
 #elif defined(DIFFICULT)
 #define DEVICE_NAME         "Anubis"
 #define BEACON_UUID         "09E88397-927B-4012-BA21-488F6BEB7B66"
-#define MANUFACTURER_ID     0x4c00
 #define MAJOR               5
 #define MINOR               88
 #define SIGNAL_POWER        0xc5

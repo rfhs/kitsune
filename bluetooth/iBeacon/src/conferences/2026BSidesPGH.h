@@ -3,7 +3,6 @@
 // FOX_KEYWORDS        "Hunter should ask 'Are you the BLE Easy Fox?'"
 #define DEVICE_NAME         "Skye BLE Easy Fox"
 #define BEACON_UUID         "F4162470-E0C1-42FD-B2CA-3FF8FA2B6CA9"
-#define MANUFACTURER_ID     0x4c00
 #define MAJOR               5
 #define MINOR               88
 #define SIGNAL_POWER        0xc5
@@ -14,7 +13,6 @@
 // FOX_KEYWORDS        "Hunter should ask 'Are you the BLE Medium Fox?'"
 #define DEVICE_NAME         "Rocky BLE Medium Fox"
 #define BEACON_UUID         "A57D0F5F-BBF4-4EEB-ABFA-5D0A64601482"
-#define MANUFACTURER_ID     0x4c00
 #define MAJOR               5
 #define MINOR               88
 #define SIGNAL_POWER        0xc5
@@ -25,7 +23,6 @@
 // FOX_KEYWORDS        "Hunter should ask 'Are you the BLE Hard Fox?'"
 #define DEVICE_NAME         "Rubble BLE Hard Fox"
 #define BEACON_UUID         "689236A5-DC8A-4C2A-93C5-E877710C5013"
-#define MANUFACTURER_ID     0x4c00
 #define MAJOR               5
 #define MINOR               88
 #define SIGNAL_POWER        0xc5

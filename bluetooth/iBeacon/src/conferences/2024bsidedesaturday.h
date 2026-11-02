@@ -8,7 +8,6 @@
 #if defined(EASY)
 #define DEVICE_NAME         "Kali BLE Easy Fox"
 #define BEACON_UUID         "AEE2EACB-4A3E-485B-B554-0D7FF9CC0096"
-#define MANUFACTURER_ID     0x4c00
 #define MAJOR               5
 #define MINOR               88
 #define SIGNAL_POWER        0xc5
@@ -17,7 +16,6 @@
 #elif defined(MEDIUM)
 #define DEVICE_NAME         "Apophis BLE Medium Fox"
 #define BEACON_UUID         "05B9744D-9963-4149-9032-E6B2ADCA0BAB"
-#define MANUFACTURER_ID     0x4c00
 #define MAJOR               5
 #define MINOR               88
 #define SIGNAL_POWER        0xc5
@@ -26,7 +24,6 @@
 #elif defined(DIFFICULT)
 #define DEVICE_NAME         "Anubis BLE Hard Fox"
 #define BEACON_UUID         "E7D0633A-63BD-46CC-925D-31A0FB6D01C8"
-#define MANUFACTURER_ID     0x4c00
 #define MAJOR               5
 #define MINOR               88
 #define SIGNAL_POWER        0xc5

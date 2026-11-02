@@ -11,12 +11,16 @@ if [ -e "src/conferences/$(date +"%Y")${1}.h" ]; then
   exit 1
 fi
 
-# Five random bytes behind the fixed first one. od prints them as decimal
-# numbers separated by spaces; set -- makes each one a positional argument.
+# All six bytes are random. The first byte is then forced to have bit 0
+# clear, so the address is unicast (I/G), and bit 1 set, so it is locally
+# administered and never collides with a vendor's assigned block. That
+# leaves it even and nonzero, so the address can never be all zeros and
+# every roll is a valid Wi-Fi MAC. od prints the bytes as decimal numbers
+# separated by spaces; set -- makes each one a positional argument.
 get_mac() {
-  # shellcheck disable=SC2046  # splitting od's output into 5 words is the point
-  set -- $(od -An -N5 -tu1 /dev/urandom)
-  printf '\{0xF2, 0x%02X, 0x%02X, 0x%02X, 0x%02X, 0x%02X\}\n' "$@"
+  # shellcheck disable=SC2046  # splitting od's output into 6 words is the point
+  set -- $(od -An -N6 -tu1 /dev/urandom)
+  printf '\{0x%02X, 0x%02X, 0x%02X, 0x%02X, 0x%02X, 0x%02X\}\n' $(( ($1 & 0xFC) | 0x02 )) "$2" "$3" "$4" "$5" "$6"
 }
 
 get_uuid() {
