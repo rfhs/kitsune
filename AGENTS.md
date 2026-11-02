@@ -35,8 +35,14 @@ the conference headers and the report scripts have to agree exactly.
   (`grep 'rfhszigbee.h.*warning'`). The bar is zero.
 - `./qa/build-test <project> [board] [mode]` is what one CI job runs. Use
   it, or `pio run -e <env>` for a single environment while iterating.
-- To test a compile-time guard, edit `9999demo.h`, build, then restore it.
-  Afterwards `git status` must show only the files you meant to change.
+- Every conference value has a compile time guard in the shared header
+  that uses it, and `./qa/guard-test [project]` builds one environment per
+  wrong value and requires the guard's own message. A new tunable or a
+  changed range gets a case there in the same change. The test builds
+  both platform families in one run, so it runs `pio pkg install` before
+  each demo build; without that the first pioarduino build after an
+  official-platform build fails reinstalling `tool-esptoolpy`. CI never
+  sees this because each job builds one board.
 - Confirm platform resolution after touching a `platformio.ini`:
   `pio project config --project-dir <project> --json-output` must give
   every environment an explicit pinned `platform`.

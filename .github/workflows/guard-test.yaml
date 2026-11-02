@@ -1,0 +1,32 @@
+name: Guard Test
+
+on:
+  pull_request:
+    branches:
+      - main
+
+concurrency:
+  group: guard-test-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  guard-test:
+    name: ${{ matrix.project }}
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        project:
+          - bluetooth/classic_discoverable
+          - bluetooth/iBeacon
+          - wifi/wifi_ap_client
+          - zigbee/zigbee_coordinator
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v7
+
+    - name: Setup
+      run: ./qa/setup
+
+    - name: Guard Test
+      run: ./qa/guard-test "${{ matrix.project }}"
