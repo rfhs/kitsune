@@ -99,7 +99,7 @@ void setup() {
   WiFi.mode(WIFI_AP);
   WiFi.softAP(FSSID, PSK, set_channel, SSID_HIDDEN, MAX_CLIENTS);
   delay(100); // Let AP start before we run our checks
-  Serial.printf("Set power status: %s\r\n", String(WiFi.setTxPower(TXPOWER)));
+  Serial.printf("Set power status: %s\r\n", WiFi.setTxPower(TXPOWER) ? "ok" : "failed");
   Serial.println("Started AP with MAC Address: " + WiFi.softAPmacAddress());
   if (WiFi.softAPmacAddress() != mac_str){
     Serial.println("Requested MAC address      : " + String(mac_str));

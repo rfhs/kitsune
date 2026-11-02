@@ -1,5 +1,6 @@
 #include "esp_sleep.h"
 #include "sys/time.h"
+#include <inttypes.h>
 
 // microseconds are used by esp_sleep_enable_timer_wakeup
 #define uS_TO_S 1000000
@@ -29,7 +30,10 @@ struct timeval now;
 
 void rfhsboottimer() {
   gettimeofday(&now, NULL);
-  Serial.printf("ESP32 boot count: %d\r\n", bootcount++);
-  Serial.printf("Sleep stats: %lds since cold boot, %lds since last wakeup\r\n", now.tv_sec, now.tv_sec - last);
+  // time_t is 32 bit on the ESP32 cores and 64 bit on the ESP32-C5, so the
+  // values are widened to long long for one format that fits both.
+  Serial.printf("ESP32 boot count: %" PRIu32 "\r\n", bootcount++);
+  Serial.printf("Sleep stats: %llds since cold boot, %llds since last wakeup\r\n",
+      (long long)now.tv_sec, (long long)(now.tv_sec - last));
   last = now.tv_sec;
 }
