@@ -1,7 +1,25 @@
 #include "esp_mac.h"
+#include <rfhsconfcheck.h>
 
 #define STRINGIFY(x) #x
 #define TOSTRING(x) STRINGIFY(x)
+
+// MAC_ADDR is the Bluetooth device address, 6 bytes most significant first.
+// Bit 0 of the first byte is the I/G bit; a device address has it clear
+// and esp_base_mac_addr_set refuses anything else. The last three bytes
+// are the Bluetooth LAP. The Core specification reserves LAPs 0x9E8B00 to
+// 0x9E8B3F for inquiry access codes and forbids them in any device
+// address. The address goes on air as a public address, so the BLE random
+// address type bits in the first byte do not apply.
+#ifndef MAC_ADDR
+#error "MAC_ADDR must be defined in the conference header, 6 bytes"
+#endif
+constexpr uint8_t rfhs_bt_mac[] = MAC_ADDR;
+static_assert(sizeof(rfhs_bt_mac) == 6, "MAC_ADDR must be exactly 6 bytes");
+static_assert((rfhs_bt_mac[0] & 0x01) == 0, "MAC_ADDR: bit 0 of the first byte (I/G) must be 0, use an even first byte");
+static_assert(!rfhs_all_bytes(rfhs_bt_mac, 6, 0x00), "MAC_ADDR must not be all zeros");
+static_assert(!(rfhs_bt_mac[3] == 0x9E && rfhs_bt_mac[4] == 0x8B && rfhs_bt_mac[5] <= 0x3F),
+    "MAC_ADDR: the last three bytes 9E:8B:00 to 9E:8B:3F are Bluetooth inquiry access codes, pick another LAP");
 
 bool rfhssetbtmac() {
   uint8_t mac_addr[6] = MAC_ADDR;

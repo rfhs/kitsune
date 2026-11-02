@@ -3,6 +3,7 @@ RF CTF Fox code
 [![Build Test](https://github.com/rfhs/kitsune/actions/workflows/build-test.yaml/badge.svg)](https://github.com/rfhs/kitsune/actions/workflows/build-test.yaml)
 [![Report Format](https://github.com/rfhs/kitsune/actions/workflows/report-format.yaml/badge.svg)](https://github.com/rfhs/kitsune/actions/workflows/report-format.yaml)
 [![Shell Scripts](https://github.com/rfhs/kitsune/actions/workflows/shell-scripts.yaml/badge.svg)](https://github.com/rfhs/kitsune/actions/workflows/shell-scripts.yaml)
+[![Guard Test](https://github.com/rfhs/kitsune/actions/workflows/guard-test.yaml/badge.svg)](https://github.com/rfhs/kitsune/actions/workflows/guard-test.yaml)
 
 
 |Hardware |Bluetooth iBeacon |Bluetooth Classic Discoverable |WiFi AP |WiFi Client |Zigbee Coordinator |
@@ -42,7 +43,7 @@ Inside a project, `src/main.cpp` includes `src/current_conf.h`, a symlink to one
 - `9999demo.h` has working demo values and is what the committed `current_conf.h` points at. Never commit the symlink pointing anywhere else.
 - `<year><conference>.h` files are real conferences, rolled from the skel.
 
-Each header has one block per difficulty (`#if defined(EASY)`, `#if defined(HARD)`, ...) and every tunable is a `#define` inside it.
+Each header has one block per difficulty (`#if defined(EASY)`, `#if defined(HARD)`, ...) and every tunable is a `#define` inside it. Every tunable has a comment giving its permitted values, and the shared header that uses it refuses to compile anything else: a 5 byte MAC, a passphrase under 8 characters, a Zigbee channel of 5. The error message names the variable and the range. `./qa/guard-test` proves every one of those checks still fires.
 
 ### Conferences and reports
 
@@ -55,10 +56,11 @@ The flags come from `threewords`, which reads `/usr/share/dict/cracklib-words`. 
 ### Adding a tunable
 
 1. Define it in every difficulty block of `9999skel.h` and `9999demo.h`, with a comment giving the range, what any special value means, and what a hunter will see change.
-2. In the shared header for the challenge: refuse bad values at compile time with `#error`, apply the value, then read it back in the check function and refuse to run on a mismatch so the fox shows the fatal LED instead of transmitting something other than what the report says. `CHANNEL` and `PAN_ID` in `include/rfhszigbee.h` show the pattern.
-3. If it should be different for every fox at every conference, give it a placeholder value in the skel and a `sed` in that project's `make_conference`. The randomizer must never produce a placeholder value, or a later `sed` replaces it again.
-4. If hunters need it, add it to the grep in `create_report` and `make_conference_full`, and a line pattern plus field name in `qa/verify-report`.
-5. Build every environment of the project with `./qa/build-test <project>` and run `./qa/report-format`.
+2. In the shared header for the challenge: refuse bad values at compile time with `#error` (numbers) or `static_assert` (strings and byte arrays, helpers in `include/rfhsconfcheck.h`), apply the value, then read it back in the check function and refuse to run on a mismatch so the fox shows the fatal LED instead of transmitting something other than what the report says. `CHANNEL` and `PAN_ID` in `include/rfhszigbee.h` show the pattern. The message names the variable and the permitted values, and the comment on the define in the conference header says the same thing.
+3. Add a case to `qa/guard-test` for each way the value can be wrong, and run it.
+4. If it should be different for every fox at every conference, give it a placeholder value in the skel and a `sed` in that project's `make_conference`. The randomizer must never produce a placeholder value, or a later `sed` replaces it again.
+5. If hunters need it, add it to the grep in `create_report` and `make_conference_full`, and a line pattern plus field name in `qa/verify-report`.
+6. Build every environment of the project with `./qa/build-test <project>` and run `./qa/report-format`.
 
 ### Adding a board
 
@@ -85,6 +87,7 @@ CI builds every environment of every project twice, once with the checked in `99
 ./qa/build-test list                                        # the jobs CI will run
 ./qa/report-format                                          # generate and check the conference reports
 ./qa/shell-lint                                             # shellcheck and parse every shell script
+./qa/guard-test [project]                                   # every bad conference value is refused at compile time
 ```
 `qa/build-test` puts the `current_conf.h` symlinks back when it finishes. `qa/setup` is what CI installs first; locally you only need `pio` on your PATH, `cracklib-runtime`, `dos2unix` and `uuid-runtime` for `qa/report-format`, and `shellcheck`, `dash`, `mksh` and `busybox` for `qa/shell-lint`.
 

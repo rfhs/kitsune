@@ -5,7 +5,6 @@
 #if defined(EASY)
 #define DEVICE_NAME         "GhostTrap"
 #define BEACON_UUID         "E1F25DCB-1FDD-42D3-A9CF-97B024B9BD8A"
-#define MANUFACTURER_ID     0x4c00
 #define MAJOR               5
 #define MINOR               88
 #define SIGNAL_POWER        0xc5
@@ -14,7 +13,6 @@
 #elif defined(MEDIUM)
 #define DEVICE_NAME         "EctoGoggles"
 #define BEACON_UUID         "8FE71AB9-7775-4DED-B4DD-E9AB6516D87B"
-#define MANUFACTURER_ID     0x4c00
 #define MAJOR               5
 #define MINOR               88
 #define SIGNAL_POWER        0xc5
@@ -23,7 +21,6 @@
 #elif defined(DIFFICULT)
 #define DEVICE_NAME         "PKEMeter"
 #define BEACON_UUID         "D80643E6-4C88-400D-9620-4F2C3D5E5BDE"
-#define MANUFACTURER_ID     0x4c00
 #define MAJOR               5
 #define MINOR               88
 #define SIGNAL_POWER        0xc5

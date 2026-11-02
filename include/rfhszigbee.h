@@ -1,12 +1,43 @@
 #include "Zigbee.h"
 #include "esp_mac.h"
+#include <rfhsconfcheck.h>
 
 // coordinator. we are just screaming and want to be heard
 #define ZIGBEE_ENDPOINT 1
 
-// the stack stores the link status period as uint8_t seconds
-#if PACKET_INTERVAL < 1 || PACKET_INTERVAL > 255
-#error "PACKET_INTERVAL must be defined as 1-255 seconds in the conference header"
+// Exactly one difficulty, so exactly one block of the conference header
+// defines the values below.
+#ifndef COORDINATOR
+#error "Build with -D COORDINATOR"
+#endif
+#if (defined(EASY) + defined(HARD)) != 1
+#error "Build with exactly one of -D EASY or -D HARD"
+#endif
+#if !defined(TIME_TO_WAKE) || !defined(TIME_TO_SLEEP)
+#error "TIME_TO_WAKE and TIME_TO_SLEEP must be defined in the conference header, in seconds"
+#endif
+// CHANNEL: 802.15.4 has channels 11-26 at 2.4 GHz. 0 picks one at random
+// every wake.
+#ifndef CHANNEL
+#error "CHANNEL must be defined in the conference header, 0 for random or 11-26"
+#elif CHANNEL != 0 && (CHANNEL < 11 || CHANNEL > 26)
+#error "CHANNEL must be 0 (random) or 11-26"
+#endif
+// TXPOWER in dBm. The ESP32-C5 radio does IEEE802154_TXPOWER_VALUE_MIN to
+// IEEE802154_TXPOWER_VALUE_MAX, -15 to 20.
+#ifndef TXPOWER
+#error "TXPOWER must be defined in the conference header, -15 to 20 dBm"
+#elif TXPOWER < -15 || TXPOWER > 20
+#error "TXPOWER must be -15 to 20 dBm"
+#endif
+// PACKET_INTERVAL: the stack stores the link status period as uint8_t
+// seconds. It has to fit inside one wake or the fox never transmits.
+#ifndef PACKET_INTERVAL
+#error "PACKET_INTERVAL must be defined in the conference header, 1-255 seconds and less than TIME_TO_WAKE"
+#elif PACKET_INTERVAL < 1 || PACKET_INTERVAL > 255
+#error "PACKET_INTERVAL must be 1-255 seconds"
+#elif defined(TIME_TO_WAKE) && PACKET_INTERVAL >= TIME_TO_WAKE
+#error "PACKET_INTERVAL must be less than TIME_TO_WAKE or the fox sleeps before it transmits"
 #endif
 // 0xFFFF is the 802.15.4 broadcast PAN ID, so it can't be ours
 #ifndef PAN_ID
@@ -43,17 +74,31 @@ constexpr bool pan_id_random = rfhs_str_eq(RFHS_STR(PAN_ID), "0");
 // esp_zb_nwk_set_short_address() in test/esp_zigbee_test_utils.h only
 // works before joining and only sets the NWK layer. Expect to pick the
 // address before Zigbee.begin().
+// MAC_ADDR is the IEEE 802.15.4 EUI-64, 8 bytes most significant first.
+// Bit 0 of the first byte is the I/G bit and a device address has it
+// clear. esp_iface_mac_addr_set checks nothing, so this is the only check.
+#ifndef MAC_ADDR
+#error "MAC_ADDR must be defined in the conference header, 8 bytes"
+#endif
+// EXT_PAN_ID is 8 bytes in the same order. All zeros means "not on a
+// network" to the stack and all 0xFF is the wildcard, so neither can
+// name a network.
 #ifndef EXT_PAN_ID
 #error "EXT_PAN_ID must be defined in the conference header, 8 bytes like MAC_ADDR or just MAC_ADDR"
 #endif
 
 ZigbeeGateway zbCoordinator = ZigbeeGateway(ZIGBEE_ENDPOINT);
 
-const uint8_t mac_addr[8] = MAC_ADDR;
+constexpr uint8_t mac_addr[] = MAC_ADDR;
+static_assert(sizeof(mac_addr) == 8, "MAC_ADDR must be exactly 8 bytes");
+static_assert((mac_addr[0] & 0x01) == 0, "MAC_ADDR: bit 0 of the first byte (I/G) must be 0, use an even first byte");
+static_assert(!rfhs_all_bytes(mac_addr, 8, 0x00), "MAC_ADDR must not be all zeros");
 // Most significant byte first like MAC_ADDR; rfhsstartzigbee reverses it
 // for the stack.
-const uint8_t ext_pan_id[] = EXT_PAN_ID;
+constexpr uint8_t ext_pan_id[] = EXT_PAN_ID;
 static_assert(sizeof(ext_pan_id) == 8, "EXT_PAN_ID must be exactly 8 bytes");
+static_assert(!rfhs_all_bytes(ext_pan_id, 8, 0x00), "EXT_PAN_ID must not be all zeros, the stack reads that as no network");
+static_assert(!rfhs_all_bytes(ext_pan_id, 8, 0xFF), "EXT_PAN_ID must not be all 0xFF, that is the wildcard");
 int set_channel;
 
 bool rfhssetzigbeemac() {

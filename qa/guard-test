@@ -1,0 +1,189 @@
+#!/bin/sh
+# Prove the compile time guards on the conference headers work: for each
+# kind of mistake a user can make, write it into a scratch copy of 9999demo.h,
+# build one environment, and require the build to fail with the guard's own
+# message. A guard that stops firing shows up here as "built anyway" or
+# "failed for another reason".
+#
+# Usage: qa/guard-test            every case
+#        qa/guard-test <project>  the cases for one project
+# Needs pio on PATH and a few minutes; each failing build stops in the
+# preprocessor.
+set -e
+set -u
+
+cd "$(dirname -- "${0}")/.."
+
+if ! command -v pio > /dev/null 2>&1; then
+  printf 'pio not found. Install platformio, see README.md\n'
+  exit 1
+fi
+want_project="${1:-}"
+
+## The scratch conference every case builds against. The symlinks are put
+## back and the scratch files removed on exit, including after a failure.
+conf="9999guardtest"
+scratch="$(mktemp -d)"
+restore() {
+  for project in bluetooth/classic_discoverable bluetooth/iBeacon wifi/wifi_ap_client zigbee/zigbee_coordinator; do
+    rm -f "${project}/src/conferences/${conf}.h"
+    ln -snf conferences/9999demo.h "${project}/src/current_conf.h"
+  done
+  rm -rf "${scratch}"
+}
+trap restore EXIT
+
+passed=0
+failed=0
+## explain: show why the last build failed and keep its log. Compiler errors
+## are quoted; anything else (a toolchain or build system failure) gets the
+## tail of the log, since that is not a guard result at all.
+explain() {
+  kept="/tmp/guard-test-fail-$(date +%s)-$$.log"
+  cp "${scratch}/log" "${kept}"
+  if grep -q 'error' "${scratch}/log"; then
+    grep -m3 'error' "${scratch}/log" | sed 's/^/        /'
+  else
+    tail -n 4 "${scratch}/log" | sed 's/^/        /'
+  fi
+  printf '        full log: %s\n' "${kept}"
+}
+## build <project> <env> [extra build flags]: runs pio, leaves the log in
+## ${scratch}/log, returns pio's exit status
+build() {
+  if [ -n "${3:-}" ]; then
+    PLATFORMIO_BUILD_FLAGS="${3}" pio run --silent --project-dir "${1}" -e "${2}" > "${scratch}/log" 2>&1
+  else
+    pio run --silent --project-dir "${1}" -e "${2}" > "${scratch}/log" 2>&1
+  fi
+}
+
+## expect_pass <project> <env>: the unmodified demo must build, so a failure
+## below is the guard and not something else. The packages are installed
+## first: the official espressif32 platform and the pioarduino fork both
+## provide tool-esptoolpy under one name, and the first build after switching
+## between them reinstalls it and fails inside the install. This test is the
+## one place both families build in a single run.
+expect_pass() {
+  pio pkg install --silent --project-dir "${1}" -e "${2}" > "${scratch}/log" 2>&1 || true
+  ln -snf conferences/9999demo.h "${1}/src/current_conf.h"
+  if build "${1}" "${2}"; then
+    printf 'ok    %-30s %-40s demo builds\n' "${1}" "${2}"
+    passed=$((passed + 1))
+  else
+    printf 'FAIL  %-30s %-40s demo does not build, every case below is suspect\n' "${1}" "${2}"
+    explain
+    failed=$((failed + 1))
+  fi
+}
+
+## expect_error <project> <env> <sed script> <text the compiler must print> [extra build flags]
+## The sed script turns 9999demo.h into the broken conference.
+expect_error() {
+  sed -e "${3}" "${1}/src/conferences/9999demo.h" > "${1}/src/conferences/${conf}.h"
+  ln -snf "conferences/${conf}.h" "${1}/src/current_conf.h"
+  if build "${1}" "${2}" "${5:-}"; then
+    printf 'FAIL  %-30s %-40s built anyway: %s\n' "${1}" "${2}" "${4}"
+    failed=$((failed + 1))
+  elif grep -qF -- "${4}" "${scratch}/log"; then
+    printf 'ok    %-30s %-40s %s\n' "${1}" "${2}" "${4}"
+    passed=$((passed + 1))
+  else
+    printf 'FAIL  %-30s %-40s failed for another reason, wanted: %s\n' "${1}" "${2}" "${4}"
+    explain
+    failed=$((failed + 1))
+  fi
+  rm -f "${1}/src/conferences/${conf}.h"
+  ln -snf conferences/9999demo.h "${1}/src/current_conf.h"
+}
+
+## sed scripts below edit the first (EASY) block unless they anchor on a value
+## that only one block has. GNU sed's 0,/re/ address does "first match only".
+first() {
+  printf '0,/^#define %s .*/s//#define %s %s/' "${1}" "${1}" "${2}"
+}
+
+if [ -z "${want_project}" ] || [ "${want_project}" = bluetooth/classic_discoverable ]; then
+  p=bluetooth/classic_discoverable; e=m5atom-easy
+  expect_pass "${p}" "${e}"
+  expect_error "${p}" "${e}" "$(first NAME '""')"                                            'NAME must be 1-32 characters'
+  expect_error "${p}" "${e}" "$(first NAME '"123456789012345678901234567890123"')"            'NAME must be 1-32 characters'
+  expect_error "${p}" "${e}" "$(first MAC_ADDR '{0xF2, 0x01, 0x02, 0x03, 0x04}')"             'MAC_ADDR must be exactly 6 bytes'
+  expect_error "${p}" "${e}" "$(first MAC_ADDR '{0xF3, 0x01, 0x02, 0x03, 0x04, 0x05}')"       'bit 0 of the first byte (I/G) must be 0'
+  expect_error "${p}" "${e}" "$(first MAC_ADDR '{0x00, 0x00, 0x00, 0x00, 0x00, 0x00}')"       'MAC_ADDR must not be all zeros'
+  expect_error "${p}" "${e}" "$(first MAC_ADDR '{0xF2, 0x01, 0x02, 0x9E, 0x8B, 0x33}')"       'Bluetooth inquiry access codes'
+  expect_error "${p}" "${e}" "$(first MAC_ADDR '{0xF2, 0x01, 0x02, 0x9E, 0x8B, 0x3F}')"       'Bluetooth inquiry access codes'
+  expect_error "${p}" "${e}" "$(first TIME_TO_WAKE 0)"                                         'TIME_TO_WAKE must be 1-2147483 seconds'
+  expect_error "${p}" "${e}" "$(first TIME_TO_SLEEP 2148)"                                     'TIME_TO_SLEEP must be 0-2147 seconds'
+  expect_error "${p}" "${e}" "$(first TIME_TO_SLEEP -1)"                                       'TIME_TO_SLEEP must be 0-2147 seconds'
+  expect_error "${p}" "${e}" '0,/^#define TIME_TO_SLEEP .*/s///'                               'TIME_TO_SLEEP must be defined'
+  expect_error "${p}" "${e}" 's/^$//'                                                           'exactly one of -D EASY or -D HARD' '-D HARD'
+fi
+
+if [ -z "${want_project}" ] || [ "${want_project}" = bluetooth/iBeacon ]; then
+  p=bluetooth/iBeacon; e=m5atom-easy
+  expect_pass "${p}" "${e}"
+  expect_error "${p}" "${e}" "$(first DEVICE_NAME '"123456789012345678901234567890"')"          'DEVICE_NAME must be 1-29 characters'
+  expect_error "${p}" "${e}" "$(first DEVICE_NAME '""')"                                        'DEVICE_NAME must be 1-29 characters'
+  expect_error "${p}" "${e}" "$(first BEACON_UUID '"00000001-0002-0003-0004-00000000000"')"     'BEACON_UUID must be 36 characters'
+  expect_error "${p}" "${e}" "$(first BEACON_UUID '"0000000g-0002-0003-0004-000000000005"')"    'BEACON_UUID must be 36 characters'
+  expect_error "${p}" "${e}" "$(first BEACON_UUID '"00000001000200030004000000000005XXXX"')"    'BEACON_UUID must be 36 characters'
+  expect_error "${p}" "${e}" "$(first MAJOR 65536)"                                             'MAJOR must be 0-65535'
+  expect_error "${p}" "${e}" "$(first MINOR -1)"                                                'MINOR must be 0-65535'
+  expect_error "${p}" "${e}" "$(first SIGNAL_POWER 256)"                                        'SIGNAL_POWER must be -128 to 127'
+  expect_error "${p}" "${e}" "$(first SIGNAL_POWER -129)"                                       'SIGNAL_POWER must be -128 to 127'
+  expect_error "${p}" "${e}" "$(first MAC_ADDR '{0x01, 0x01, 0x02, 0x03, 0x04, 0x05}')"        'bit 0 of the first byte (I/G) must be 0'
+  expect_error "${p}" "${e}" "$(first MAC_ADDR '{0xF2, 0x01, 0x02, 0x9E, 0x8B, 0x00}')"        'Bluetooth inquiry access codes'
+  expect_error "${p}" "${e}" 's/^$//'                                                           'exactly one of -D EASY, -D MEDIUM or -D HARD' '-D MEDIUM'
+fi
+
+if [ -z "${want_project}" ] || [ "${want_project}" = wifi/wifi_ap_client ]; then
+  p=wifi/wifi_ap_client; e=m5atom-easy-ap
+  expect_pass "${p}" "${e}"
+  expect_error "${p}" "${e}" "$(first FSSID '"123456789012345678901234567890123"')"            'FSSID must be 1-32 characters'
+  expect_error "${p}" "${e}" "$(first FSSID '""')"                                              'FSSID must be 1-32 characters'
+  expect_error "${p}" "${e}" "$(first PSK '"1234567"')"                                         'PSK must be 8-63 characters'
+  expect_error "${p}" "${e}" "$(first PSK '""')"                                                'PSK must be 8-63 characters'
+  expect_error "${p}" "${e}" "$(first PSK '"1234567890123456789012345678901234567890123456789012345678901234"')" 'PSK must be 8-63 characters'
+  expect_error "${p}" "${e}" "$(first MAC_ADDR '{0x01, 0x01, 0x02, 0x03, 0x04, 0x05}')"        'bit 0 of the first byte (I/G) must be 0'
+  expect_error "${p}" "${e}" "$(first MAC_ADDR '{0xF2, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06}')"  'MAC_ADDR must be exactly 6 bytes'
+  expect_error "${p}" "${e}" "$(first CHANNEL 12)"                                              '2.4 GHz CHANNEL must be 0 (random) or 1-11'
+  expect_error "${p}" "${e}" "$(first CHANNEL 36)"                                              '2.4 GHz CHANNEL must be 0 (random) or 1-11'
+  expect_error "${p}" "${e}" "$(first SSID_HIDDEN 2)"                                           'SSID_HIDDEN must be 0 or 1'
+  expect_error "${p}" "${e}" "$(first MAX_CLIENTS 11)"                                          'MAX_CLIENTS must be 1-10'
+  expect_error "${p}" "${e}" "$(first MAX_CLIENTS 0)"                                           'MAX_CLIENTS must be 1-10'
+  expect_error "${p}" "${e}" "$(first TXPOWER 68)"                                              'TXPOWER must be a WIFI_POWER_* name'
+  expect_error "${p}" "${e}" "$(first TIME_TO_WAKE 2147484)"                                    'TIME_TO_WAKE must be 1-2147483 seconds'
+  expect_error "${p}" "${e}" 's/^$//'                                                           'exactly one of -D AP or -D CLIENT' '-D CLIENT'
+  expect_error "${p}" "${e}" 's/^$//'                                                           'exactly one of -D EASY, -D HARD, -D FIVEEASY or -D FIVEHARD' '-D FIVEEASY'
+  e=seeed-xiao-esp32c5-fiveeasy-ap
+  expect_pass "${p}" "${e}"
+  expect_error "${p}" "${e}" 's/^#define CHANNEL 36$/#define CHANNEL 52/'                       '5 GHz CHANNEL must be 0 (random) or one of'
+  expect_error "${p}" "${e}" 's/^#define CHANNEL 36$/#define CHANNEL 1/'                        '5 GHz CHANNEL must be 0 (random) or one of'
+  expect_error "${p}" "${e}" '/^#define CHANNEL 36$/,/^#define TXPOWER/s/^#define TXPOWER .*/#define TXPOWER WIFI_POWER_20dBm/' 'TXPOWER must be between WIFI_POWER_19_5dBm and WIFI_POWER_MINUS_1dBm'
+  e=m5atom-easy-client
+  expect_pass "${p}" "${e}"
+  expect_error "${p}" "${e}" '/Demo Ng WiFi Client Easy Fox/a #define CHANNEL 1'               'only apply to AP mode'
+fi
+
+if [ -z "${want_project}" ] || [ "${want_project}" = zigbee/zigbee_coordinator ]; then
+  p=zigbee/zigbee_coordinator; e=seeed-xiao-esp32c5-easy-coordinator
+  expect_pass "${p}" "${e}"
+  expect_error "${p}" "${e}" "$(first CHANNEL 27)"                                              'CHANNEL must be 0 (random) or 11-26'
+  expect_error "${p}" "${e}" "$(first CHANNEL 5)"                                               'CHANNEL must be 0 (random) or 11-26'
+  expect_error "${p}" "${e}" "$(first TXPOWER 21)"                                              'TXPOWER must be -15 to 20 dBm'
+  expect_error "${p}" "${e}" "$(first TXPOWER -16)"                                             'TXPOWER must be -15 to 20 dBm'
+  expect_error "${p}" "${e}" "$(first TIME_TO_WAKE 10);$(first PACKET_INTERVAL 10)"            'PACKET_INTERVAL must be less than TIME_TO_WAKE'
+  expect_error "${p}" "${e}" "$(first PACKET_INTERVAL 256)"                                     'PACKET_INTERVAL must be 1-255 seconds'
+  expect_error "${p}" "${e}" "$(first PAN_ID 0xFFFF)"                                           'PAN_ID must be a bare 0 (random) or 0x0000-0xFFFE'
+  expect_error "${p}" "${e}" "$(first EXT_PAN_ID '{0, 0, 0, 0, 0, 0, 0, 0}')"                   'EXT_PAN_ID must not be all zeros'
+  expect_error "${p}" "${e}" "$(first EXT_PAN_ID '{0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF}')" 'EXT_PAN_ID must not be all 0xFF'
+  expect_error "${p}" "${e}" "$(first EXT_PAN_ID '{0xF2, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06}')" 'EXT_PAN_ID must be exactly 8 bytes'
+  expect_error "${p}" "${e}" "$(first MAC_ADDR '{0xF2, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06}')"   'MAC_ADDR must be exactly 8 bytes'
+  expect_error "${p}" "${e}" "$(first MAC_ADDR '{0xF1, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07}')" 'bit 0 of the first byte (I/G) must be 0'
+  expect_error "${p}" "${e}" "$(first TIME_TO_SLEEP 2148)"                                      'TIME_TO_SLEEP must be 0-2147 seconds'
+  expect_error "${p}" "${e}" 's/^$//'                                                           'exactly one of -D EASY or -D HARD' '-D HARD'
+fi
+
+printf '\n%d passed, %d failed\n' "${passed}" "${failed}"
+[ "${failed}" -eq 0 ]
