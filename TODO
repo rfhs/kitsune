@@ -1,2 +1,5 @@
 make bluetooth challengest perform self checks like wifi challenges
 divide instructions into removable fox vs not removable hunter instructions
+make fastcat loop but exit on control c
+make sure zigbee sniffer is automatic
+anything that doesn't require root should be automaticly used
