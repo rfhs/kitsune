@@ -4,7 +4,7 @@ A positional DEVICE argument is a plain name and is classified by what it is:
 
 - ``/sys/class/net/<name>`` exists: a Wi-Fi interface.
 - ``hci[0-9]+``: a Bluetooth adapter.
-- a serial port whose USB id is ``1915:154B``: the nRF 802.15.4 sniffer.
+- a serial port whose USB id is ``1915:154A``: the nRF 802.15.4 sniffer.
 - any other serial port: the fox.
 
 When no fox is given, the serial ports with an Espressif, Silicon Labs CP210x,
@@ -38,7 +38,7 @@ HCI = "hci"
 SNIFFER = "sniffer"
 FOX = "fox"
 
-NRF_SNIFFER_ID = (0x1915, 0x154B)
+NRF_SNIFFER_ID = (0x1915, 0x154A)
 # Vendor ids of the USB serial bridges and native USB stacks the foxes use:
 # Espressif (native USB, also the Arduino Nano ESP32 in TinyUSB mode), Silicon
 # Labs CP210x, WCH CH910x and FTDI.

@@ -65,7 +65,7 @@ ESP = (0x303A, 0x1001, "USB JTAG/serial debug unit", "F4:12:FA:00:11:22")
 CP210X = (0x10C4, 0xEA60, "CP2104 USB to UART Bridge Controller", "0123ABCD")
 CH9102 = (0x1A86, 0x55D4, "USB Single Serial", "5698001234")
 FTDI = (0x0403, 0x6001, "FT232R USB UART", "A50285BI")
-NRF = (0x1915, 0x154B, "nRF Sniffer for 802.15.4", "F1D2E3C4B5A6")
+NRF = (0x1915, 0x154A, "nRF Sniffer for 802.15.4", "F1D2E3C4B5A6")
 OTHER = (0x1234, 0x5678, "Some modem", "X1")
 
 
