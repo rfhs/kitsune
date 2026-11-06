@@ -43,9 +43,15 @@ the conference headers and the report scripts have to agree exactly.
   each demo build; without that the first pioarduino build after an
   official-platform build fails reinstalling `tool-esptoolpy`. CI never
   sees this because each job builds one board.
-- Confirm platform resolution after touching a `platformio.ini`:
-  `pio project config --project-dir <project> --json-output` must give
-  every environment an explicit pinned `platform`.
+- After touching a `platformio.ini`, run `./qa/build-test list`. It checks
+  every ini before printing the matrix: each value in a custom section
+  must be interpolated somewhere or inherited by an environment, and every
+  environment's `platform` must be pinned. A key that lands in the wrong
+  section (a `[flags]` header inserted above a `board_build.*` line, say)
+  builds cleanly and fails on the device; this is the check that catches
+  it. `./qa/build-test <project>` runs the same check before building and,
+  after every build, requires the partitions listed in
+  `required_partitions` at the top of the script in `partitions.bin`.
 - Run `./qa/report-format` whenever a conference header, `create_report`,
   `make_conference_full`, a `make_conference` or `qa/verify-report`
   changes. Zero failures is the bar. If a failure looks like your machine's

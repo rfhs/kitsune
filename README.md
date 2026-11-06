@@ -127,7 +127,7 @@ A script with `#!/bin/sh` has to work in bash, dash, mksh and busybox ash, so it
 
 ### Testing
 
-CI builds every environment of every project twice, once with the checked in `9999demo` conference and once with a conference freshly rolled off `9999skel`, and checks the generated conference reports line by line. Each project and board pair is its own job so a failure names the board that broke; a board with many environments is split by mode (`ap`, `client`) so one job doesn't set the pace. The same scripts run at home:
+CI builds every environment of every project twice, once with the checked in `9999demo` conference and once with a conference freshly rolled off `9999skel`, and checks the generated conference reports line by line. Before the builds it checks every `platformio.ini`: a value in a custom section must be interpolated or inherited by an environment, and every environment's platform must be pinned. After each build it checks the partition table for what the firmware needs at run time (the Zigbee stack aborts at boot without `zb_storage`); a clean build proves neither. Each project and board pair is its own job so a failure names the board that broke; a board with many environments is split by mode (`ap`, `client`) so one job doesn't set the pace. The same scripts run at home:
 ```
 ./qa/build-test                                             # everything, takes a while
 ./qa/build-test wifi/wifi_ap_client                         # one project
