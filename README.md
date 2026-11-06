@@ -53,7 +53,7 @@ What each fox needs on the air, and the privilege for it:
 - Wi-Fi: `tshark`, `iw` and `ip` put the named card into monitor mode and read beacons (AP) or probe requests (client); needs root. The card's type and state are put back when the script ends, including on Ctrl-C.
 - Zigbee: an nRF52840 dongle running Nordic's 802.15.4 sniffer firmware (the one Kismet uses) and `tshark`; no root needed, only access to the dongle's serial port. `PACKET_INTERVAL` needs two Link Status frames, so an interval above about 20 seconds cannot be confirmed within the 60 second limit and is reported `unverified`.
 
-The scripts never call `sudo` themselves; run them under it when the check above needs root. Packages:
+The `verify` scripts never call `sudo` themselves; run them under it when the check above needs root, or use `flash_verify` below, which does. Packages:
 - Debian and Ubuntu: `python3-serial python3-bleak tshark bluez iw`
 - Arch: `python-pyserial python-bleak wireshark-cli bluez-utils iw`
 - Gentoo: `dev-python/pyserial` from the main tree; `bleak` is only in the GURU overlay, so either enable that or use a venv that still sees the system packages:
@@ -62,6 +62,17 @@ python3 -m venv --system-site-packages .venv && .venv/bin/pip install bleak
 sudo .venv/bin/python3 bluetooth/iBeacon/verify hci0
 ```
 The iBeacon script prints the same hint when `import bleak` fails. Python 3.9 or newer is enough.
+
+### Flashing and verifying in one step
+
+`flash_verify`, next to `verify` in every project, builds one environment of the project's `platformio.ini`, uploads it to the fox and then runs `verify`. The environment comes first; everything after it goes to `verify` unchanged:
+```
+cd bluetooth/classic_discoverable && ./flash_verify m5atom-hard hci0
+cd bluetooth/iBeacon && ./flash_verify m5atom-medium
+cd wifi/wifi_ap_client && ./flash_verify m5atom-easy-ap wlan1
+cd zigbee/zigbee_coordinator && ./flash_verify seeed-xiao-esp32c5-easy-coordinator -v
+```
+Run it as yourself, never under `sudo`: PlatformIO would leave root-owned files in `~/.platformio` and the project's `.pio/`, so the script refuses to run as root. When `verify` needs root for the devices given (Classic with an adapter, Wi-Fi with an interface) the script asks for the `sudo` password before the build and runs only the `verify` step through `sudo`. The fox's serial port is autodetected with the rules above unless given, and is the upload port; a native USB board that comes back under another name after the flash is found again. The tool checks `verify` would make run before the build, so a missing `tshark` is said before a minute of compiling; an unknown environment exits 2 with the list of the project's environments. Before the build one line names the project, the environment and the conference `src/current_conf.h` points at, which is the moment to Ctrl-C if it is the wrong one.
 
 The shared code is in `foxverify/` at the repo root; `python3 -m foxverify.conf <header>` dumps a conference header as JSON and `python3 -m foxverify.devices` lists what the device rules see on your machine. `./qa/verify-test` runs its unit tests.
 
@@ -73,7 +84,7 @@ Each challenge is its own PlatformIO project: `bluetooth/classic_discoverable`, 
 
 `include/` at the repo root is shared by every project through a `<project>/include` symlink. A change there changes every challenge, so build them all.
 
-`foxverify/` at the repo root is the Python package behind each project's `verify` script (see "Verifying a fox"), with its unit tests and recorded serial transcripts under `foxverify/tests/`.
+`foxverify/` at the repo root is the Python package behind each project's `verify` and `flash_verify` scripts (see "Verifying a fox"), with its unit tests and recorded serial transcripts under `foxverify/tests/`.
 
 Inside a project, `src/main.cpp` includes `src/current_conf.h`, a symlink to one of the conference headers in `src/conferences/`:
 - `9999skel.h` is the template. Its identifiers, and in the Wi-Fi project the PSK, are placeholders that `make_conference` replaces.

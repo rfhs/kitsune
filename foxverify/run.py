@@ -187,14 +187,16 @@ class Run:
         except OSError as error:
             raise RunError("cannot read %s: %s" % (self.header_path, error.strerror or error))
 
-    def select_devices(self) -> Optional[devices.Selection]:
+    def select_devices(self, **kwargs) -> Optional[devices.Selection]:
+        """The devices of this run; ``kwargs`` reach ``devices.select`` so a
+        caller can stand in for the serial ports and the device tree."""
         if self.replay:
             return None
         try:
             return devices.select(self.args.devices, self.args.wait_for_fox, self.deadline,
                                   want_sniffer=self.want_sniffer and not self.serial_only,
                                   want_hci=self.want_hci and not self.serial_only,
-                                  say=self.report.say)
+                                  say=self.report.say, **kwargs)
         except ImportError:
             raise RunError("pyserial is not installed (Debian/Ubuntu: python3-serial, "
                            "Arch: python-pyserial, Gentoo: dev-python/pyserial)")
@@ -245,7 +247,23 @@ class Run:
     def no_sniffer(self, text: str) -> None:
         self.report.note(text + ", " + SERIAL_ONLY)
 
+    def check_privileges(self, selection: devices.Selection) -> None:
+        """What a run checks before it touches a radio: every tool the on-air
+        step runs is installed and the privilege it needs is held."""
+        what = self.check_tools(selection)
+        if what is not None:
+            privileges.require_net_admin(what)
+
     # The project specific steps.
+
+    def check_tools(self, selection: devices.Selection,
+                    which: Callable[[str], Optional[str]] = shutil.which) -> Optional[str]:
+        """Check that the tools the on-air step runs with these devices are
+        installed, raising ``RunError`` for a missing one, and return what
+        needs root or CAP_NET_ADMIN, None when nothing does. ``verify``
+        requires that privilege itself; ``flash_verify`` runs ``verify``
+        through sudo for it. A run without a sniffer needs nothing."""
+        return None
 
     def start_air(self, selection: devices.Selection, candidates: List[str]):
         """Check tools and privileges and start anything that must run before
@@ -267,13 +285,19 @@ class ClassicRun(Run):
     want_hci = True
     mac_field = "address"
 
+    def check_tools(self, selection, which=shutil.which):
+        if selection.hci is None:
+            return None
+        privileges.require_tools(["btmgmt"], which)
+        return "btmgmt"
+
     def start_air(self, selection, candidates):
         from . import btclassic
         if selection.hci is None:
             self.no_sniffer("no Bluetooth adapter given and not exactly one found")
             return None
-        btmgmt = privileges.require_tool("btmgmt")
-        privileges.require_net_admin("btmgmt")
+        self.check_privileges(selection)
+        btmgmt = shutil.which("btmgmt")
         self.bluetoothctl = shutil.which("bluetoothctl")
         self.report.debug("inquiry on %s for %s" % (selection.hci.path, ", ".join(candidates)))
         scan = btclassic.Inquiry(selection.hci.path, self.deadline, btmgmt, debug=self.report.debug)
@@ -304,11 +328,20 @@ class IBeaconRun(Run):
     want_hci = True
     mac_field = "address"
 
+    def check_tools(self, selection, which=shutil.which):
+        # bleak is the scanner here and the only thing the step can lack;
+        # BlueZ over D-Bus needs no privilege.
+        if selection.hci is not None:
+            from . import ble
+            ble.import_bleak()
+        return None
+
     def start_air(self, selection, candidates):
         from . import ble
         if selection.hci is None:
             self.no_sniffer("no Bluetooth adapter given and not exactly one found")
             return None
+        self.check_privileges(selection)
         self.report.debug("active scan on %s for %s" % (selection.hci.path, ", ".join(candidates)))
         scan = ble.BleScan(selection.hci.path, candidates, self.deadline, debug=self.report.debug)
         scan.start()
@@ -339,12 +372,17 @@ class IBeaconRun(Run):
 
 
 class WifiRun(Run):
+    def check_tools(self, selection, which=shutil.which):
+        if selection.wifi is None:
+            return None
+        privileges.require_tools(["ip", "iw", "tshark"], which)
+        return "monitor mode"
+
     def start_air(self, selection, candidates):
         if selection.wifi is None:
             self.no_sniffer("no Wi-Fi interface given (name one, for example wlan1)")
             return None
-        privileges.require_tools(["ip", "iw", "tshark"])
-        privileges.require_net_admin("monitor mode")
+        self.check_privileges(selection)
         self.tshark = shutil.which("tshark")
         return selection.wifi.path
 
@@ -389,11 +427,18 @@ class WifiRun(Run):
 class ZigbeeRun(Run):
     want_sniffer = True
 
+    def check_tools(self, selection, which=shutil.which):
+        if selection.sniffer is None:
+            return None
+        privileges.require_tools(["tshark"], which)
+        return None
+
     def start_air(self, selection, candidates):
         if selection.sniffer is None:
             self.no_sniffer("no nRF52840 sniffer given and not exactly one found")
             return None
-        self.tshark = privileges.require_tool("tshark")
+        self.check_privileges(selection)
+        self.tshark = shutil.which("tshark")
         return selection.sniffer.path
 
     def rows(self, block, readback, sniffer):

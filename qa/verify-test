@@ -1,8 +1,9 @@
 #!/bin/sh
-# Check the verify scripts and their foxverify package: pyflakes over every
-# Python file, then the unit tests. The tests need no hardware; the one that
-# decodes a generated pcap with tshark is skipped where tshark is missing and
-# runs in CI and in qa/in-ubuntu, where qa/setup installs it.
+# Check the verify and flash_verify scripts and their foxverify package:
+# pyflakes over every Python file, then the unit tests. The tests need no
+# hardware; the one that decodes a generated pcap with tshark is skipped
+# where tshark is missing and runs in CI and in qa/in-ubuntu, where qa/setup
+# installs it.
 #
 # Usage: qa/verify-test
 # Needs python3, pyserial and pyflakes (Debian and Ubuntu: python3-serial
@@ -17,6 +18,7 @@ for module in serial pyflakes; do
   fi
 done
 printf 'pyflakes %s\n' "$(python3 -m pyflakes --version | head -n 1)"
-python3 -m pyflakes foxverify bluetooth/*/verify wifi/*/verify zigbee/*/verify
+python3 -m pyflakes foxverify bluetooth/*/verify wifi/*/verify zigbee/*/verify \
+  bluetooth/*/flash_verify wifi/*/flash_verify zigbee/*/flash_verify
 printf 'pyflakes: no findings\n'
 python3 -m unittest discover -s foxverify/tests -t .

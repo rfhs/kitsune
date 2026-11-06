@@ -1,0 +1,17 @@
+#!/usr/bin/env python3
+"""Build and flash a Wi-Fi AP or client fox, then verify it against
+src/current_conf.h.
+Usage: ./flash_verify <env> [DEVICE ...] [verify options...]
+<env> is an environment of this project's platformio.ini; everything else is
+handed to ./verify after the flash, so name the monitor mode capable
+interface (for example wlan1) here too. Run as yourself, not as root: the
+script runs the verify step through sudo when that step needs root. The work
+is in foxverify/ at the repo root; see ./flash_verify --help and the README
+section "Verifying a fox".
+"""
+import os
+import sys
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+from foxverify.flash import main  # noqa: E402
+if __name__ == "__main__":
+    sys.exit(main("wifi_ap_client"))
