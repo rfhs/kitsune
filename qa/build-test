@@ -170,13 +170,19 @@ for project in $(projects); do
   cleanup_conf
 done
 
-## Summary table, also written to the job summary page on GitHub Actions
-{
-  printf '\n%-6s %-32s %-36s %-18s %s\n' "status" "project" "environment" "conference" "seconds"
+## Summary table. On GitHub Actions it also goes to the job summary page,
+## inside a code fence so the Markdown renderer keeps the columns.
+summary() {
+  printf '%-6s %-32s %-36s %-18s %s\n' "status" "project" "environment" "conference" "seconds"
   while read -r status project env built_conf seconds; do
     printf '%-6s %-32s %-36s %-18s %s\n' "${status}" "${project}" "${env}" "${built_conf}" "${seconds}"
   done < "${scratch}/results"
-} | tee -a "${GITHUB_STEP_SUMMARY:-/dev/null}"
+}
+printf '\n'
+summary
+if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+  { printf '```\n'; summary; printf '```\n'; } >> "${GITHUB_STEP_SUMMARY}"
+fi
 builds="$(wc -l < "${scratch}/results")"
 
 if [ "${failures}" -gt 0 ]; then
