@@ -31,3 +31,17 @@ rm -f 9999demo.txt
 ## Report for a conference just rolled off 9999skel
 ./make_conference_full qa-report-format
 ./qa/verify-report "${conf}.txt" ./*/*/src/conferences/"${conf}.h" non-kitsune-foxes/fm_fox/src/current_conf.h
+
+## The Wi-Fi make_conference gives every block its own PSK of 63 letters and
+## digits, so the rolled header must hold as many distinct PSKs of that form
+## as the skel has PSK lines. A placeholder left behind or one passphrase
+## shared by every block fails here.
+wifi_skel="wifi/wifi_ap_client/src/conferences/9999skel.h"
+wifi_conf="wifi/wifi_ap_client/src/conferences/${conf}.h"
+skel_psks="$(grep -c '^#define PSK ' "${wifi_skel}")"
+rolled_psks="$(sort -u "${wifi_conf}" | grep -cE '^#define PSK "[A-Za-z0-9]{63}"$' || true)"
+if [ "${rolled_psks}" -ne "${skel_psks}" ]; then
+  printf 'FAIL: %s has %s distinct 63-character PSKs, %s has %s PSK lines\n' "${wifi_conf}" "${rolled_psks}" "${wifi_skel}" "${skel_psks}"
+  exit 1
+fi
+printf '%s: %s distinct 63-character PSKs\n' "${wifi_conf}" "${rolled_psks}"

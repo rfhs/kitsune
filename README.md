@@ -76,7 +76,7 @@ Each challenge is its own PlatformIO project: `bluetooth/classic_discoverable`, 
 `foxverify/` at the repo root is the Python package behind each project's `verify` script (see "Verifying a fox"), with its unit tests and recorded serial transcripts under `foxverify/tests/`.
 
 Inside a project, `src/main.cpp` includes `src/current_conf.h`, a symlink to one of the conference headers in `src/conferences/`:
-- `9999skel.h` is the template. Its identifiers are placeholders that `make_conference` replaces.
+- `9999skel.h` is the template. Its identifiers, and in the Wi-Fi project the PSK, are placeholders that `make_conference` replaces.
 - `9999demo.h` has working demo values and is what the committed `current_conf.h` points at. Never commit the symlink pointing anywhere else.
 - `<year><conference>.h` files are real conferences, rolled from the skel.
 
@@ -84,7 +84,7 @@ Each header has one block per difficulty (`#if defined(EASY)`, `#if defined(HARD
 
 ### Conferences and reports
 
-`./make_conference_full <name>` runs each project's `make_conference`, which copies `9999skel.h` to `<year><name>.h` with fresh identifiers, then points every `current_conf.h` at the new header and writes `<year><name>.txt`, the report handed to foxes and hunters. `./switch_conference <year><name>` repoints the symlinks later and `./create_report <year><name>` regenerates the report. Reports are gitignored because they hold the flags; don't commit one.
+`./make_conference_full <name>` runs each project's `make_conference`, which copies `9999skel.h` to `<year><name>.h` with fresh identifiers (MAC addresses, iBeacon UUIDs, Zigbee PAN IDs) and, for every Wi-Fi block, a random WPA2 passphrase of 63 letters and digits, then points every `current_conf.h` at the new header and writes `<year><name>.txt`, the report handed to foxes and hunters. `./switch_conference <year><name>` repoints the symlinks later and `./create_report <year><name>` regenerates the report. Reports are gitignored because they hold the flags; don't commit one.
 
 The report is made by grepping the conference headers for `RFHS_CHALLENGE_NAME`, `FOX_KEYWORDS`, `NAME`, `UUID`, `MAC_ADDR`, `FSSID`, `CHANNEL` and `PAN_ID`. **Every line containing one of those words lands in the report, comments included.** Keep them out of comments in conference headers, apart from the intended `// RFHS_CHALLENGE_NAME` and `// FOX_KEYWORDS` lines. `./qa/report-format` catches a leak.
 

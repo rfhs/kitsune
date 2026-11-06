@@ -7,10 +7,10 @@ import unittest
 from foxverify import conf, report, tshark, wifi
 from foxverify.report import Deadline, RunError
 from foxverify.serial_fox import parse_transcript
-from foxverify.tests import project_header, read_fixture
+from foxverify.tests import frozen_text, read_fixture
 from foxverify.tests.fakes import FakeReader, Recorder, deadline
 
-HEADER = project_header("wifi/wifi_ap_client")
+HEADER = frozen_text("wifi_ap_client")
 BEACONS = read_fixture("tshark", "ap_beacons.tsv").splitlines()
 PROBES = read_fixture("tshark", "client_probes.tsv").splitlines()
 

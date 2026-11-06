@@ -4,7 +4,7 @@ import unittest
 from contextlib import redirect_stderr, redirect_stdout
 
 from foxverify import conf
-from foxverify.tests import fixture, project_header, read_fixture
+from foxverify.tests import fixture, frozen_text, project_header, read_fixture
 
 CLASSIC = "bluetooth/classic_discoverable"
 IBEACON = "bluetooth/iBeacon"
@@ -50,7 +50,10 @@ class EvaluateTest(unittest.TestCase):
 
 
 class DemoHeaderTest(unittest.TestCase):
-    """Every project's 9999demo.h and 9999skel.h parse to the expected blocks."""
+    """Every project's 9999demo.h and 9999skel.h parse to the expected blocks,
+    and the frozen copies under fixtures/headers/ parse to their known values.
+    The live demo is rolled anew each year, so only its structure is checked
+    here; LiveDemoRangeTest checks its values against the guards' ranges."""
 
     def check_blocks(self, text, expected_keys, names):
         found = conf.blocks(text)
@@ -89,8 +92,8 @@ class DemoHeaderTest(unittest.TestCase):
         for values in found.values():
             self.assertFalse(any(name.startswith("WIFI_POWER") for name in values))
 
-    def test_classic_demo_values(self):
-        block = conf.select(project_header(CLASSIC), conf.defined_for("classic_discoverable", "HARD"))
+    def test_classic_frozen_values(self):
+        block = conf.select(frozen_text("classic_discoverable"), conf.defined_for("classic_discoverable", "HARD"))
         self.assertEqual(block.string("NAME"), "Demo Case BTC Hard Fox")
         self.assertEqual(block.mac("MAC_ADDR"), "F2:F6:6D:BC:2A:80")
         self.assertEqual(block.integer("TIME_TO_WAKE"), 30)
@@ -99,8 +102,8 @@ class DemoHeaderTest(unittest.TestCase):
         self.assertEqual(block.display("MAC_ADDR"), "F2:F6:6D:BC:2A:80")
         self.assertEqual(block.display("TIME_TO_WAKE"), "30")
 
-    def test_ibeacon_demo_values(self):
-        block = conf.select(project_header(IBEACON), conf.defined_for("iBeacon", "MEDIUM"))
+    def test_ibeacon_frozen_values(self):
+        block = conf.select(frozen_text("iBeacon"), conf.defined_for("iBeacon", "MEDIUM"))
         self.assertEqual(block.string("DEVICE_NAME"), "Demo Cath BLE Medium Fox")
         self.assertEqual(block.string("BEACON_UUID"), "162EEB7B-743C-47E9-9414-BBD6149B4E40")
         self.assertEqual(block.integer("MAJOR"), 5)
@@ -108,8 +111,8 @@ class DemoHeaderTest(unittest.TestCase):
         self.assertEqual(block.integer("SIGNAL_POWER"), 0xC5)
         self.assertEqual(block.mac("MAC_ADDR"), "F2:63:89:10:8D:1D")
 
-    def test_wifi_demo_values(self):
-        text = project_header(WIFI)
+    def test_wifi_frozen_values(self):
+        text = frozen_text("wifi_ap_client")
         ap = conf.select(text, conf.defined_for("wifi_ap_client", "HARD", "AP"))
         self.assertEqual(ap.string("FSSID"), "Demo YT WiFi AP Hard Fox")
         self.assertEqual(ap.string("PSK"), "0123456789")
@@ -126,8 +129,8 @@ class DemoHeaderTest(unittest.TestCase):
         self.assertNotIn("CHANNEL", client)
         self.assertEqual(len(client), len(WIFI_CLIENT_NAMES))
 
-    def test_zigbee_demo_values(self):
-        block = conf.select(project_header(ZIGBEE), conf.defined_for("zigbee_coordinator", "EASY"))
+    def test_zigbee_frozen_values(self):
+        block = conf.select(frozen_text("zigbee_coordinator"), conf.defined_for("zigbee_coordinator", "EASY"))
         self.assertEqual(block.mac("MAC_ADDR"), "F2:5A:3C:91:0E:7B:44:D8")
         self.assertEqual(block.raw("EXT_PAN_ID"), "MAC_ADDR")
         self.assertEqual(block.mac("EXT_PAN_ID"), "F2:5A:3C:91:0E:7B:44:D8")
@@ -146,6 +149,68 @@ class DemoHeaderTest(unittest.TestCase):
     def test_difficulty_with_no_block_selects_nothing(self):
         block = conf.select(project_header(CLASSIC), conf.defined_for("classic_discoverable", "MEDIUM"))
         self.assertNotIn("MAC_ADDR", block)
+
+
+class LiveDemoRangeTest(unittest.TestCase):
+    """Every value in every block of the live 9999demo.h is one the shared
+    headers' compile time guards accept, whatever make_conference rolled.
+    Nothing here names a demo value."""
+
+    def unicast_mac(self, block, name, length, label):
+        data = conf.parse_byte_array(block.raw(name), name)
+        self.assertEqual(len(data), length, label)
+        self.assertEqual(data[0] & 0x01, 0, label)
+        self.assertTrue(any(data), label)
+
+    def test_classic(self):
+        for key in ("EASY", "HARD"):
+            block = conf.select(project_header(CLASSIC), conf.defined_for("classic_discoverable", key))
+            self.assertTrue(1 <= len(block.string("NAME")) <= 32, key)
+            self.unicast_mac(block, "MAC_ADDR", 6, key)
+            self.assertGreaterEqual(block.integer("TIME_TO_WAKE"), 15, key)
+            self.assertGreaterEqual(block.integer("TIME_TO_SLEEP"), 0, key)
+
+    def test_ibeacon(self):
+        for key in ("EASY", "MEDIUM", "HARD"):
+            block = conf.select(project_header(IBEACON), conf.defined_for("iBeacon", key))
+            self.assertTrue(1 <= len(block.string("DEVICE_NAME")) <= 29, key)
+            self.assertRegex(block.string("BEACON_UUID"), r"^[0-9A-Fa-f]{8}(-[0-9A-Fa-f]{4}){3}-[0-9A-Fa-f]{12}$")
+            self.assertTrue(0 <= block.integer("MAJOR") <= 65535, key)
+            self.assertTrue(0 <= block.integer("MINOR") <= 65535, key)
+            self.assertTrue(-128 <= block.integer("SIGNAL_POWER") <= 255, key)
+            self.unicast_mac(block, "MAC_ADDR", 6, key)
+
+    def test_wifi(self):
+        text = project_header(WIFI)
+        for mode in ("AP", "CLIENT"):
+            for difficulty in ("EASY", "HARD", "FIVEEASY", "FIVEHARD"):
+                block = conf.select(text, conf.defined_for("wifi_ap_client", difficulty, mode))
+                if not block:
+                    continue
+                label = mode + " " + difficulty
+                self.assertTrue(1 <= len(block.string("FSSID")) <= 32, label)
+                self.assertRegex(block.string("PSK"), r"^[ -~]{8,63}$", label)
+                self.unicast_mac(block, "MAC_ADDR", 6, label)
+                self.assertRegex(block.identifier("TXPOWER"), r"^WIFI_POWER_", label)
+                self.assertGreaterEqual(block.integer("TIME_TO_WAKE"), 1, label)
+                if mode == "AP":
+                    allowed = [0, 36, 40, 44, 48, 149, 153, 157, 161, 165] if difficulty.startswith("FIVE") else range(12)
+                    self.assertIn(block.integer("CHANNEL"), allowed, label)
+                    self.assertIn(block.integer("SSID_HIDDEN"), (0, 1), label)
+                    self.assertTrue(1 <= block.integer("MAX_CLIENTS") <= 10, label)
+
+    def test_zigbee(self):
+        for key in ("EASY", "HARD"):
+            block = conf.select(project_header(ZIGBEE), conf.defined_for("zigbee_coordinator", key))
+            self.unicast_mac(block, "MAC_ADDR", 8, key)
+            ext = conf.parse_byte_array(block.resolved("EXT_PAN_ID"), "EXT_PAN_ID")
+            self.assertEqual(len(ext), 8, key)
+            self.assertNotIn(ext, (bytes(8), bytes([0xFF] * 8)), key)
+            self.assertIn(block.integer("CHANNEL"), [0] + list(range(11, 27)), key)
+            self.assertTrue(0 <= block.integer("PAN_ID") <= 0xFFFE, key)
+            self.assertTrue(-15 <= block.integer("TXPOWER") <= 20, key)
+            self.assertTrue(1 <= block.integer("PACKET_INTERVAL") <= 255, key)
+            self.assertLess(block.integer("PACKET_INTERVAL"), block.integer("TIME_TO_WAKE"), key)
 
 
 class CommentHeaderTest(unittest.TestCase):

@@ -6,9 +6,9 @@ import unittest
 from foxverify import ble, conf, report
 from foxverify.report import RunError
 from foxverify.serial_fox import parse_transcript
-from foxverify.tests import project_header, read_fixture
+from foxverify.tests import frozen_text, read_fixture
 
-HEADER = project_header("bluetooth/iBeacon")
+HEADER = frozen_text("iBeacon")
 # The manufacturer data the demo EASY fox advertises, after the company id.
 PAYLOAD = bytes.fromhex("0215" "A2AFA582E4E84599B28B4E11AC6DD6E8" "0005" "0058" "C5")
 

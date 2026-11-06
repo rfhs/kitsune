@@ -5,7 +5,7 @@ from unittest import mock
 
 from foxverify import serial_fox
 from foxverify.report import Deadline, RunError
-from foxverify.tests import fixture, project_header, read_fixture
+from foxverify.tests import fixture, frozen_text, read_fixture
 
 PROJECT_DIRS = {
     "classic_discoverable": "bluetooth/classic_discoverable",
@@ -110,7 +110,7 @@ class TranscriptTest(unittest.TestCase):
             self.assertEqual(readback.get("initializing"), "Initializing...", name)
             self.assertIsNotNone(readback.integer("boot_count"), name)
             self.assertIn("since cold boot", readback.get("sleep_stats"), name)
-            block = serial_fox.block_for(readback, project, project_header(PROJECT_DIRS[project]))
+            block = serial_fox.block_for(readback, project, frozen_text(project))
             for field, macro in fields.items():
                 value = readback.get(field)
                 self.assertIsNotNone(value, "%s: %s" % (name, field))
@@ -241,7 +241,7 @@ class BlockForTest(unittest.TestCase):
     def test_wrong_project_names_the_other_script(self):
         readback = serial_fox.parse_transcript(transcript("zigbee_easy"))
         with self.assertRaises(RunError) as caught:
-            serial_fox.block_for(readback, "wifi_ap_client", project_header(PROJECT_DIRS["wifi_ap_client"]))
+            serial_fox.block_for(readback, "wifi_ap_client", frozen_text("wifi_ap_client"))
         self.assertEqual(str(caught.exception),
                          "this is a zigbee_coordinator fox; run zigbee/zigbee_coordinator/verify")
         self.assertEqual(caught.exception.exit_code, 2)
@@ -252,13 +252,13 @@ class BlockForTest(unittest.TestCase):
 
     def test_missing_block_is_named(self):
         readback = serial_fox.parse_transcript(transcript("wifi_hard_ap"))
-        header = project_header(PROJECT_DIRS["wifi_ap_client"]).replace("#if defined(HARD)", "#if defined(NEVER)")
+        header = frozen_text("wifi_ap_client").replace("#if defined(HARD)", "#if defined(NEVER)")
         with self.assertRaises(RunError) as caught:
             serial_fox.block_for(readback, "wifi_ap_client", header)
         self.assertEqual(str(caught.exception),
                          "src/current_conf.h has no HARD AP block; the fox was built with -D HARD -D AP")
         readback = serial_fox.parse_transcript(transcript("ibeacon_medium"))
-        header = project_header(PROJECT_DIRS["classic_discoverable"])
+        header = frozen_text("classic_discoverable")
         with self.assertRaises(RunError) as caught:
             serial_fox.block_for(readback, "iBeacon", header)
         self.assertEqual(str(caught.exception),
@@ -278,7 +278,7 @@ class BlockForTest(unittest.TestCase):
 
     def test_header_mac_against_serial_mac(self):
         readback = serial_fox.parse_transcript(transcript("classic_easy_mismatch"))
-        block = serial_fox.block_for(readback, "classic_discoverable", project_header(PROJECT_DIRS["classic_discoverable"]))
+        block = serial_fox.block_for(readback, "classic_discoverable", frozen_text("classic_discoverable"))
         self.assertFalse(serial_fox.same_mac(block.mac("MAC_ADDR"), readback.get("address")))
         self.assertTrue(serial_fox.same_mac("f2:81:5a:c1:a3:26", "F2:81:5A:C1:A3:26"))
         self.assertFalse(serial_fox.same_mac("F2:81:5A:C1:A3:26", None))

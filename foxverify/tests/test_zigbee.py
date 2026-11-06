@@ -9,10 +9,10 @@ import unittest
 from foxverify import conf, report, tshark, zigbee
 from foxverify.report import RunError
 from foxverify.serial_fox import parse_transcript
-from foxverify.tests import project_header, read_fixture
+from foxverify.tests import frozen_text, read_fixture
 from foxverify.tests.fakes import FakeReader, deadline
 
-HEADER = project_header("zigbee/zigbee_coordinator")
+HEADER = frozen_text("zigbee_coordinator")
 FRAMES = read_fixture("tshark", "zigbee_frames.tsv").splitlines()
 RECEIVED = read_fixture("sniffer", "received.log").splitlines()
 

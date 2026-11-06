@@ -1,7 +1,9 @@
 """End-to-end serial-only runs of every project's verify through transcript
 replay: the table rows, the notes, the exit codes and the not-a-fox outcomes.
-The header is named explicitly so a concurrent qa script that repoints
-current_conf.h cannot change what a test sees."""
+The header is named explicitly and is the frozen copy under fixtures/headers/,
+so neither a concurrent qa script that repoints current_conf.h nor the yearly
+roll of 9999demo.h can change what a test sees. LiveDemoTest is the one place
+the live demo header is used, with a transcript built from its own values."""
 import io
 import os
 import tempfile
@@ -10,7 +12,7 @@ from unittest import mock
 
 from foxverify import run, serial_fox
 from foxverify.report import EXIT_FAIL, EXIT_NO_RUN, EXIT_OK
-from foxverify.tests import REPO, fixture, project_header
+from foxverify.tests import REPO, fixture, frozen_header, frozen_text
 
 PROJECT_DIRS = serial_fox.PROJECT_DIRS
 
@@ -72,10 +74,6 @@ RUNS = {
 }
 
 
-def demo_header(project):
-    return os.path.join(REPO, PROJECT_DIRS[project], "src", "conferences", "9999demo.h")
-
-
 def table_rows(text):
     """(value, header, serial, air, verdict word) for every row of the table."""
     rows = []
@@ -108,7 +106,7 @@ def verify(project, transcript, header=None, args=(), env_transcript=False):
         environ[run.TRANSCRIPT_ENV] = transcript
     else:
         argv += ["--transcript", transcript]
-    argv += ["--header", header or demo_header(project)]
+    argv += ["--header", header or frozen_header(project)]
     with mock.patch.dict(os.environ, environ, clear=True):
         code = run.main(project, argv, out, err)
     return Result(code, out.getvalue(), err.getvalue())
@@ -207,7 +205,7 @@ class NotAFoxTest(unittest.TestCase):
             self.assertEqual(result.rows, [])
 
     def test_missing_block_is_named(self):
-        header = project_header("bluetooth/classic_discoverable").replace("#if defined(HARD)", "#if defined(NEVER)")
+        header = frozen_text("classic_discoverable").replace("#if defined(HARD)", "#if defined(NEVER)")
         with tempfile.NamedTemporaryFile("w", suffix=".h", delete=False) as handle:
             handle.write(header)
         self.addCleanup(os.unlink, handle.name)
@@ -227,7 +225,7 @@ class NotAFoxTest(unittest.TestCase):
 
 class DifferentHeaderTest(unittest.TestCase):
     def test_serial_mac_differs_from_the_header(self):
-        header = project_header("bluetooth/classic_discoverable").replace(
+        header = frozen_text("classic_discoverable").replace(
             "{0xF2, 0x81, 0x5A, 0xC1, 0xA3, 0x26}", "{0xF2, 0x81, 0x5A, 0xC1, 0xA3, 0x2A}")
         with tempfile.NamedTemporaryFile("w", suffix=".h", delete=False) as handle:
             handle.write(header)
@@ -258,7 +256,7 @@ class DifferentHeaderTest(unittest.TestCase):
         self.assertTrue(result.notes[0].startswith("the fox refused to run: Operating PAN ID != Requested PAN ID"))
 
     def test_changed_serial_only_value_fails(self):
-        header = project_header("wifi/wifi_ap_client").replace("#define TIME_TO_WAKE 15", "#define TIME_TO_WAKE 20", 1)
+        header = frozen_text("wifi_ap_client").replace("#define TIME_TO_WAKE 15", "#define TIME_TO_WAKE 20", 1)
         with tempfile.NamedTemporaryFile("w", suffix=".h", delete=False) as handle:
             handle.write(header)
         self.addCleanup(os.unlink, handle.name)
@@ -267,6 +265,85 @@ class DifferentHeaderTest(unittest.TestCase):
         rows = {row[0]: row for row in result.rows}
         self.assertEqual(rows["TIME_TO_WAKE"][1:], ("20", "15", "-", "FAIL"))
         self.assertEqual(rows["TIME_TO_SLEEP"][4], "serial")
+
+
+def live_demo(project):
+    return os.path.join(REPO, PROJECT_DIRS[project], "src", "conferences", "9999demo.h")
+
+
+def transcript_for(project, difficulty, mode, block):
+    """The readback lines a fox built from ``block`` prints, in the firmware's
+    formats, so a header can be replayed against itself. A random CHANNEL or
+    PAN_ID is printed as a fixed stand-in for what the fox would have picked."""
+    lines = ["Fox: %s %s%s" % (project, difficulty, " " + mode if mode else "")]
+    if "TIME_TO_WAKE" in block:
+        lines += ["Time to wake: %ss" % block.display("TIME_TO_WAKE"),
+                  "Time to sleep: %ss" % block.display("TIME_TO_SLEEP")]
+    if project == "classic_discoverable":
+        lines += ["Device name: " + block.string("NAME"), "Device address: " + block.mac("MAC_ADDR")]
+    elif project == "iBeacon":
+        power = block.integer("SIGNAL_POWER")
+        lines += ["Device name: " + block.string("DEVICE_NAME"), "Beacon UUID: " + block.string("BEACON_UUID"),
+                  "Major: 0x%04X (%d)" % (block.integer("MAJOR"), block.integer("MAJOR")),
+                  "Minor: 0x%04X (%d)" % (block.integer("MINOR"), block.integer("MINOR")),
+                  "Signal power: %d" % (power - 256 if power > 127 else power),
+                  "Device address: " + block.mac("MAC_ADDR"), "Advertising power: 0 dBm (level 4)"]
+    elif project == "wifi_ap_client" and mode == "AP":
+        lines += ["Started AP with MAC Address: " + block.mac("MAC_ADDR"),
+                  "Operating channel: %d" % (block.integer("CHANNEL") or 6),
+                  "Operating SSID: " + block.string("FSSID"), "Operating PSK: " + block.string("PSK"),
+                  "Hidden SSID: " + block.display("SSID_HIDDEN"), "Max clients: " + block.display("MAX_CLIENTS"),
+                  "Tx power: " + block.identifier("TXPOWER")]
+    elif project == "wifi_ap_client":
+        lines += ["Started Client with MAC Address: " + block.mac("MAC_ADDR"),
+                  "Operating SSID: " + block.string("FSSID"), "Operating PSK: " + block.string("PSK"),
+                  "Tx power: " + block.identifier("TXPOWER")]
+    else:
+        lines += ["Started Coordinator with MAC Address: " + block.mac("MAC_ADDR"),
+                  "Operating channel: %d" % (block.integer("CHANNEL") or 11),
+                  "Operating PAN ID: 0x%04X" % (0x1234 if block.is_bare_zero("PAN_ID") else block.integer("PAN_ID")),
+                  "Extended PAN ID: " + block.mac("EXT_PAN_ID"), "Short address: 0x0000",
+                  "Packet interval: %ss" % block.display("PACKET_INTERVAL"),
+                  "Tx power: %s dBm" % block.display("TXPOWER")]
+    return "\n".join(lines) + "\nAwake and screaming\n"
+
+
+class LiveDemoTest(unittest.TestCase):
+    """Every block of every project's live 9999demo.h verifies against a
+    transcript built from its own values. No value is written down here, so
+    the test holds for whatever make_conference rolled into the demo."""
+
+    def test_every_block_of_the_live_demo(self):
+        from foxverify import conf
+        for project in PROJECT_DIRS:
+            with open(live_demo(project), "r", encoding="utf-8") as handle:
+                text = handle.read()
+            for key in conf.blocks(text):
+                tokens = key.split()
+                mode = tokens[0] if tokens[0] in ("AP", "CLIENT") else None
+                difficulty = [t for t in tokens if t not in ("AP", "CLIENT", "COORDINATOR")][0]
+                block = conf.select(text, conf.defined_for(project, difficulty, mode))
+                with tempfile.NamedTemporaryFile("w", suffix=".log", delete=False) as handle:
+                    handle.write(transcript_for(project, difficulty, mode, block))
+                self.addCleanup(os.unlink, handle.name)
+                result = verify(project, handle.name, header=live_demo(project))
+                label = "%s %s" % (project, key)
+                self.assertEqual(result.code, EXIT_OK, label + "\n" + result.out + result.err)
+                self.assertTrue(result.summary.startswith("pass: 0 pass, 0 FAIL, "), label + " " + result.summary)
+                self.assertEqual([v for v, _ in result.verdicts],
+                                 [v for v, _ in RUNS[self.transcript_name(project, difficulty, mode)][1]], label)
+                for value, header, serial, air, verdict in result.rows:
+                    if value != "SECURITY" and header != "random":
+                        self.assertEqual(header, serial, "%s: %s" % (label, value))
+                if "PSK" in block:
+                    rows = {row[0]: row for row in result.rows}
+                    self.assertEqual(rows["PSK"][1:], (block.string("PSK"), block.string("PSK"), "-", "serial"), label)
+
+    @staticmethod
+    def transcript_name(project, difficulty, mode):
+        prefix = {"classic_discoverable": "classic", "iBeacon": "ibeacon",
+                  "wifi_ap_client": "wifi", "zigbee_coordinator": "zigbee"}[project]
+        return "_".join([prefix, difficulty.lower()] + ([mode.lower()] if mode else []))
 
 
 class FakeScan:
@@ -296,7 +373,7 @@ def air_run(cls, project, transcript, start_air, header=None, args=()):
     """A replayed run whose on-air step is replaced: ``start_air`` is called
     with the candidate MACs and returns the handle ``rows`` gets."""
     out = io.StringIO()
-    argv = list(args) + ["--transcript", transcript, "--header", header or demo_header(project)]
+    argv = list(args) + ["--transcript", transcript, "--header", header or frozen_header(project)]
     one = cls(project, run.parse_args(project, argv), out)
     one.serial_only = False
     one.air_reason = run.SERIAL_ONLY
@@ -368,7 +445,7 @@ class AirRunTest(unittest.TestCase):
             out = io.StringIO()
             one = run.ClassicRun("classic_discoverable", run.parse_args(
                 "classic_discoverable", ["--transcript", fixture("transcripts", "classic_hard.log"),
-                                         "--header", demo_header("classic_discoverable")]), out)
+                                         "--header", frozen_header("classic_discoverable")]), out)
             one.serial_only = False
             one.bluetoothctl = "/usr/bin/bluetoothctl"
             one.start_air = lambda selection, candidates: start_air(candidates)
@@ -425,7 +502,7 @@ class AirRunTest(unittest.TestCase):
             out = io.StringIO()
             one = run.WifiRun("wifi_ap_client", run.parse_args(
                 "wifi_ap_client", ["--transcript", fixture("transcripts", "wifi_easy_ap.log"),
-                                   "--header", demo_header("wifi_ap_client")]), out)
+                                   "--header", frozen_header("wifi_ap_client")]), out)
             one.serial_only = False
             one.tshark = "/usr/bin/tshark"
             one.start_air = lambda selection, candidates: start_air(candidates)
@@ -457,7 +534,7 @@ class AirRunTest(unittest.TestCase):
             out = io.StringIO()
             one = run.WifiRun("wifi_ap_client", run.parse_args(
                 "wifi_ap_client", ["--transcript", fixture("transcripts", "wifi_hard_client.log"),
-                                   "--header", demo_header("wifi_ap_client")]), out)
+                                   "--header", frozen_header("wifi_ap_client")]), out)
             one.serial_only = False
             one.tshark = "tshark"
             one.start_air = lambda selection, candidates: "wlan1"
@@ -562,7 +639,7 @@ class CommandLineTest(unittest.TestCase):
             self.assertIs(one.clock, run.time.monotonic)
 
     def test_header_macs(self):
-        macs = run.header_macs(project_header("bluetooth/iBeacon"))
+        macs = run.header_macs(frozen_text("iBeacon"))
         self.assertEqual(macs, ["F2:82:42:D0:84:BC", "F2:63:89:10:8D:1D", "F2:AC:87:05:0A:C7"])
         self.assertEqual(run.header_macs("#define X 1\n"), [])
         self.assertEqual(run.header_macs("#if defined(A)\n#define MAC_ADDR {0x100}\n#endif\n"), [])
@@ -582,7 +659,7 @@ class EntryPointTest(unittest.TestCase):
             transcript = {"classic_discoverable": "classic_easy", "iBeacon": "ibeacon_easy",
                           "wifi_ap_client": "wifi_easy_client", "zigbee_coordinator": "zigbee_easy"}[project]
             result = subprocess.run([sys.executable, script, "--transcript", fixture("transcripts", transcript + ".log"),
-                                     "--header", demo_header(project)],
+                                     "--header", frozen_header(project)],
                                     stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True,
                                     check=False, cwd="/")
             self.assertEqual(result.returncode, EXIT_OK, result.stdout + result.stderr)

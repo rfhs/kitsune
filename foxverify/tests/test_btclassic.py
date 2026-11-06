@@ -4,10 +4,10 @@ import unittest
 from foxverify import btclassic, conf, report
 from foxverify.report import RunError
 from foxverify.serial_fox import parse_transcript
-from foxverify.tests import project_header, read_fixture
+from foxverify.tests import frozen_text, read_fixture
 from foxverify.tests.fakes import FakeLineReader, Recorder, deadline
 
-HEADER = project_header("bluetooth/classic_discoverable")
+HEADER = frozen_text("classic_discoverable")
 WITH_NAME = read_fixture("btmgmt", "with_name.log")
 WITHOUT_NAME = read_fixture("btmgmt", "without_name.log")
 FOX = "F2:F6:6D:BC:2A:80"

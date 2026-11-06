@@ -20,7 +20,8 @@
 // FOX_KEYWORDS "Hunter should ask 'Are you the WiFi AP Easy Fox?'"
 // Network name, 1-32 characters
 #define FSSID "Hiro WiFi AP Easy Fox"
-// WPA2 passphrase, 8-63 characters
+// WPA2 passphrase, 8-63 characters. make_conference replaces this
+// placeholder with a random 63-character passphrase of letters and digits
 #define PSK "0123456789"
 // 6 bytes, first byte even (I/G bit clear)
 #define MAC_ADDR {0x00, 0x01, 0x02, 0x03, 0x04, 0x05}
@@ -44,7 +45,8 @@
 // FOX_KEYWORDS "Hunter should ask 'Are you the WiFi AP Hard Fox?'"
 // Network name, 1-32 characters
 #define FSSID "YT WiFi AP Hard Fox"
-// WPA2 passphrase, 8-63 characters
+// WPA2 passphrase, 8-63 characters. make_conference replaces this
+// placeholder with a random 63-character passphrase of letters and digits
 #define PSK "0123456789"
 // 6 bytes, first byte even (I/G bit clear)
 #define MAC_ADDR {0x00, 0x06, 0x07, 0x08, 0x09, 0x0a}
@@ -68,7 +70,8 @@
 // FOX_KEYWORDS "Hunter should ask 'Are you the WiFi 5GHz AP Easy Fox?'"
 // Network name, 1-32 characters
 #define FSSID "Enzo WiFi 5GHz AP Easy Fox"
-// WPA2 passphrase, 8-63 characters
+// WPA2 passphrase, 8-63 characters. make_conference replaces this
+// placeholder with a random 63-character passphrase of letters and digits
 #define PSK "0123456789"
 // 6 bytes, first byte even (I/G bit clear)
 #define MAC_ADDR {0x00, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f}
@@ -92,7 +95,8 @@
 // FOX_KEYWORDS "Hunter should ask 'Are you the WiFi 5GHz AP Hard Fox?'"
 // Network name, 1-32 characters
 #define FSSID "Lagos WiFi 5GHz AP Hard Fox"
-// WPA2 passphrase, 8-63 characters
+// WPA2 passphrase, 8-63 characters. make_conference replaces this
+// placeholder with a random 63-character passphrase of letters and digits
 #define PSK "0123456789"
 // 6 bytes, first byte even (I/G bit clear)
 #define MAC_ADDR {0x00, 0x10, 0x11, 0x12, 0x13, 0x14}
@@ -118,7 +122,8 @@
 // FOX_KEYWORDS "Hunter should ask 'Are you the WiFi Client Easy Fox?'"
 // Network name, 1-32 characters
 #define FSSID "Ng WiFi Client Easy Fox"
-// WPA2 passphrase, 8-63 characters
+// WPA2 passphrase, 8-63 characters. make_conference replaces this
+// placeholder with a random 63-character passphrase of letters and digits
 #define PSK "0123456789"
 // 6 bytes, first byte even (I/G bit clear)
 #define MAC_ADDR {0x00, 0x15, 0x16, 0x17, 0x18, 0x19}
@@ -136,7 +141,8 @@
 // FOX_KEYWORDS "Hunter should ask 'Are you the WiFi Client Hard Fox?'"
 // Network name, 1-32 characters
 #define FSSID "Mr Lee WiFi Client Hard Fox"
-// WPA2 passphrase, 8-63 characters
+// WPA2 passphrase, 8-63 characters. make_conference replaces this
+// placeholder with a random 63-character passphrase of letters and digits
 #define PSK "0123456789"
 // 6 bytes, first byte even (I/G bit clear)
 #define MAC_ADDR {0x00, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e}
