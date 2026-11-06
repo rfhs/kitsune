@@ -1,0 +1,19 @@
+ets Jul 29 2019 12:21:46
+
+rst:0x1 (POWERON_RESET),boot:0x13 (SPI_FAST_FLASH_BOOT)
+configsip: 0, SPIWP:0xee
+clk_drv:0x00,q_drv:0x00,d_drv:0x00,cs0_drv:0x00,hd_drv:0x00,wp_drv:0x00
+mode:DIO, clock div:1
+load:0x3fff0030,len:1344
+load:0x40078000,len:13964
+load:0x40080400,len:3600
+entry 0x400805f0
+Initializing...
+ESP32 boot count: 4
+Sleep stats: 245s since cold boot, 61s since last wakeup
+Fox: classic_discoverable HARD
+Time to wake: 30s
+Time to sleep: 30s
+Device name: Demo Case BTC Hard Fox
+Device address: F2:F6:6D:BC:2A:80
+Going to sleep

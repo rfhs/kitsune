@@ -4,6 +4,7 @@ RF CTF Fox code
 [![Report Format](https://github.com/rfhs/kitsune/actions/workflows/report-format.yaml/badge.svg)](https://github.com/rfhs/kitsune/actions/workflows/report-format.yaml)
 [![Shell Scripts](https://github.com/rfhs/kitsune/actions/workflows/shell-scripts.yaml/badge.svg)](https://github.com/rfhs/kitsune/actions/workflows/shell-scripts.yaml)
 [![Guard Test](https://github.com/rfhs/kitsune/actions/workflows/guard-test.yaml/badge.svg)](https://github.com/rfhs/kitsune/actions/workflows/guard-test.yaml)
+[![Verify Test](https://github.com/rfhs/kitsune/actions/workflows/verify-test.yaml/badge.svg)](https://github.com/rfhs/kitsune/actions/workflows/verify-test.yaml)
 
 
 |Hardware |Bluetooth iBeacon |Bluetooth Classic Discoverable |WiFi AP |WiFi Client |Zigbee Coordinator |
@@ -30,6 +31,40 @@ pip install -U platformio
 ```
 The ESP32-C5 boards use the [pioarduino](https://github.com/pioarduino/platform-espressif32) fork of the espressif32 platform, which needs Python 3.10 or newer.
 
+## Verifying a fox
+
+Each project has a `verify` script next to its `make_conference` that proves a freshly flashed fox transmits what `src/current_conf.h` says. It resets the fox, reads the boot readback over serial, listens for the fox on the air with a sniffer, and prints one row per conference value:
+```
+cd wifi/wifi_ap_client
+sudo ./verify wlan1                       # fox autodetected, wlan1 is the monitor mode card
+./verify /dev/ttyACM1 --serial-only       # two ESP32s plugged in, no radio check
+sudo ./verify hci0 --no-reset             # Classic or iBeacon: wait for the fox's own wake instead of resetting it
+```
+```
+./verify [DEVICE ...] [--serial-only] [--no-reset] [--timeout 60] [--wait-for-fox 30] [-v]
+```
+Every `DEVICE` is a plain name and the script works out what it is: a network interface (`wlan1`) is the Wi-Fi sniffer, `hciN` is the Bluetooth adapter, a serial port with the nRF52840 sniffer's USB id (`1915:154B`) is the 802.15.4 sniffer and any other serial port is the fox. Without a fox on the command line the one ESP32 serial device is used; if there is none the script waits `--wait-for-fox` seconds for a native USB board to wake, and if there are several it lists them and asks for one. The nRF sniffer and a lone `hci0` are found on their own; a Wi-Fi interface never is, because putting the wrong card into monitor mode takes the laptop offline. The whole run stays under `--timeout` seconds, 60 by default.
+
+The table has the columns `value | header | serial | air | verdict`. `pass` means header, serial and air agree; `FAIL` means any of them differs, and the exit status is 1; `serial` is a value that is not on the air by design (the sleep timers, the PSK text, `MAX_CLIENTS`, `TXPOWER`, `EXT_PAN_ID`) and agrees between header and serial; `unverified` is a value the sniffer should have seen but did not within the time, with the reason. A device that is not a fox, a fox built for another project, a fox built from another conference header, a missing tool or a missing privilege is said in plain words and the exit status is 2. Without a sniffer the run is serial-only and says so.
+
+What each fox needs on the air, and the privilege for it:
+- Bluetooth Classic: `btmgmt` (bluez) runs an inquiry on `hci0`; needs root or `CAP_NET_ADMIN`.
+- iBeacon: an active BLE scan with [bleak](https://github.com/hbldh/bleak) on `hci0`; no root needed.
+- Wi-Fi: `tshark`, `iw` and `ip` put the named card into monitor mode and read beacons (AP) or probe requests (client); needs root. The card's type and state are put back when the script ends, including on Ctrl-C.
+- Zigbee: an nRF52840 dongle running Nordic's 802.15.4 sniffer firmware (the one Kismet uses) and `tshark`; no root needed, only access to the dongle's serial port. `PACKET_INTERVAL` needs two Link Status frames, so an interval above about 20 seconds cannot be confirmed within the 60 second limit and is reported `unverified`.
+
+The scripts never call `sudo` themselves; run them under it when the check above needs root. Packages:
+- Debian and Ubuntu: `python3-serial python3-bleak tshark bluez iw`
+- Arch: `python-pyserial python-bleak wireshark-cli bluez-utils iw`
+- Gentoo: `dev-python/pyserial` from the main tree; `bleak` is only in the GURU overlay, so either enable that or use a venv that still sees the system packages:
+```
+python3 -m venv --system-site-packages .venv && .venv/bin/pip install bleak
+sudo .venv/bin/python3 bluetooth/iBeacon/verify hci0
+```
+The iBeacon script prints the same hint when `import bleak` fails. Python 3.9 or newer is enough.
+
+The shared code is in `foxverify/` at the repo root; `python3 -m foxverify.conf <header>` dumps a conference header as JSON and `python3 -m foxverify.devices` lists what the device rules see on your machine. `./qa/verify-test` runs its unit tests.
+
 ## Working on the code
 
 ### Layout
@@ -37,6 +72,8 @@ The ESP32-C5 boards use the [pioarduino](https://github.com/pioarduino/platform-
 Each challenge is its own PlatformIO project: `bluetooth/classic_discoverable`, `bluetooth/iBeacon`, `wifi/wifi_ap_client`, `zigbee/zigbee_coordinator`. `non-kitsune-foxes/` holds stubs for foxes that aren't firmware, so the conference report covers them too.
 
 `include/` at the repo root is shared by every project through a `<project>/include` symlink. A change there changes every challenge, so build them all.
+
+`foxverify/` at the repo root is the Python package behind each project's `verify` script (see "Verifying a fox"), with its unit tests and recorded serial transcripts under `foxverify/tests/`.
 
 Inside a project, `src/main.cpp` includes `src/current_conf.h`, a symlink to one of the conference headers in `src/conferences/`:
 - `9999skel.h` is the template. Its identifiers are placeholders that `make_conference` replaces.
@@ -60,7 +97,8 @@ The flags come from `threewords`, which reads `/usr/share/dict/cracklib-words`. 
 3. Add a case to `qa/guard-test` for each way the value can be wrong, and run it.
 4. If it should be different for every fox at every conference, give it a placeholder value in the skel and a `sed` in that project's `make_conference`. The randomizer must never produce a placeholder value, or a later `sed` replaces it again.
 5. If hunters need it, add it to the grep in `create_report` and `make_conference_full`, and a line pattern plus field name in `qa/verify-report`.
-6. Build every environment of the project with `./qa/build-test <project>` and run `./qa/report-format`.
+6. Give the readback line a regex in `foxverify/serial_fox.py`, add it to the transcripts under `foxverify/tests/fixtures/transcripts/`, and add its row to the project's run in `foxverify/run.py`, so `verify` checks it too.
+7. Build every environment of the project with `./qa/build-test <project>` and run `./qa/report-format` and `./qa/verify-test`.
 
 ### Adding a board
 
@@ -88,8 +126,9 @@ CI builds every environment of every project twice, once with the checked in `99
 ./qa/report-format                                          # generate and check the conference reports
 ./qa/shell-lint                                             # shellcheck and parse every shell script
 ./qa/guard-test [project]                                   # every bad conference value is refused at compile time
+./qa/verify-test                                            # pyflakes and the unit tests of the verify scripts
 ```
-`qa/build-test` puts the `current_conf.h` symlinks back when it finishes. `qa/setup` is what CI installs first; locally you only need `pio` on your PATH, `cracklib-runtime`, `dos2unix` and `uuid-runtime` for `qa/report-format`, and `shellcheck`, `dash`, `mksh` and `busybox` for `qa/shell-lint`.
+`qa/build-test` puts the `current_conf.h` symlinks back when it finishes. `qa/setup` is what CI installs first; locally you only need `pio` on your PATH, `cracklib-runtime`, `dos2unix` and `uuid-runtime` for `qa/report-format`, `shellcheck`, `dash`, `mksh` and `busybox` for `qa/shell-lint`, and `python3-serial`, `python3-pyflakes` and `tshark` for `qa/verify-test` (the one test that decodes a pcap with tshark is skipped without it).
 
 Your machine is not the CI runner. The runner is Ubuntu, where `/bin/sh` is dash, not bash, and it has only what `qa/setup` installs; a script can pass every local check and fail there. Before you push a change to a script, a workflow or anything under `qa/`, run it the way CI will:
 ```

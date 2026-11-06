@@ -55,6 +55,14 @@ the conference headers and the report scripts have to agree exactly.
 - Every unexpected line on stderr is a bug until you have explained it. A
   `grep: No such file` scrolling past a passing run means a fox is missing
   from the report.
+- The `verify` scripts read the fox's serial readback with the regexes in
+  `foxverify/serial_fox.py` and are tested against the recorded transcripts
+  in `foxverify/tests/fixtures/transcripts/`. A new or changed readback line
+  in firmware gets its regex and its line in those transcripts in the same
+  change, and a new conference value gets its row in `foxverify/run.py`.
+  `./qa/verify-test` runs pyflakes and the unit tests; run it before handing
+  off anything under `foxverify/` or a `verify` script, and
+  `./qa/in-ubuntu ./qa/verify-test` for the tshark test this machine skips.
 
 ## Test in the runner's image, not just on your machine
 
@@ -74,6 +82,7 @@ report generators, run the affected check inside the image:
 
     ./qa/in-ubuntu                                     # qa/report-format
     ./qa/in-ubuntu ./qa/build-test <project> <board> [mode]   # the CI leg you touched
+    ./qa/in-ubuntu ./qa/verify-test                    # the verify scripts, with tshark
 
 It copies the checkout into an `ubuntu:24.04` container, runs `qa/setup`
 exactly as CI does, then your command. A new external command in any

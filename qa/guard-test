@@ -121,6 +121,7 @@ if [ -z "${want_project}" ] || [ "${want_project}" = bluetooth/classic_discovera
   expect_error "${p}" "${e}" "$(first MAC_ADDR '{0xF2, 0x01, 0x02, 0x9E, 0x8B, 0x33}')"       'Bluetooth inquiry access codes'
   expect_error "${p}" "${e}" "$(first MAC_ADDR '{0xF2, 0x01, 0x02, 0x9E, 0x8B, 0x3F}')"       'Bluetooth inquiry access codes'
   expect_error "${p}" "${e}" "$(first TIME_TO_WAKE 0)"                                         'TIME_TO_WAKE must be 1-2147483 seconds'
+  expect_error "${p}" "${e}" "$(first TIME_TO_WAKE 14)"                                        'TIME_TO_WAKE must be at least 15 seconds'
   expect_error "${p}" "${e}" "$(first TIME_TO_SLEEP 2148)"                                     'TIME_TO_SLEEP must be 0-2147 seconds'
   expect_error "${p}" "${e}" "$(first TIME_TO_SLEEP -1)"                                       'TIME_TO_SLEEP must be 0-2147 seconds'
   expect_error "${p}" "${e}" '0,/^#define TIME_TO_SLEEP .*/s///'                               'TIME_TO_SLEEP must be defined'
@@ -142,6 +143,12 @@ if [ -z "${want_project}" ] || [ "${want_project}" = bluetooth/iBeacon ]; then
   expect_error "${p}" "${e}" "$(first MAC_ADDR '{0x01, 0x01, 0x02, 0x03, 0x04, 0x05}')"        'bit 0 of the first byte (I/G) must be 0'
   expect_error "${p}" "${e}" "$(first MAC_ADDR '{0xF2, 0x01, 0x02, 0x9E, 0x8B, 0x00}')"        'Bluetooth inquiry access codes'
   expect_error "${p}" "${e}" 's/^$//'                                                           'exactly one of -D EASY, -D MEDIUM or -D HARD' '-D MEDIUM'
+  ## The advertising window is hard-coded per difficulty in rfhsibeacon.h
+  ## and only a build flag can shorten it, so the guard is proved on a
+  ## sleeping (MEDIUM) environment with the demo header untouched.
+  e=m5atom-medium
+  expect_pass "${p}" "${e}"
+  expect_error "${p}" "${e}" 's/^$//'                                                           'ADVERTISING_DURATION must be at least 5 seconds when DEEP_SLEEP is defined' '-D ADVERTISING_DURATION=4'
 fi
 
 if [ -z "${want_project}" ] || [ "${want_project}" = wifi/wifi_ap_client ]; then

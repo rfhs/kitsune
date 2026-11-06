@@ -1,0 +1,14 @@
+Setting up WiFi Client…
+MAC address set successfully
+
+Initializing...
+ESP32 boot count: 7
+Sleep stats: 2107s since cold boot, 301s since last wakeup
+Fox: wifi_ap_client HARD CLIENT
+Time to wake: 300s
+Time to sleep: 0s
+Started Client with MAC Address: F2:83:27:31:80:C7
+Operating SSID: Demo Mr Lee WiFi Client Hard Fox
+Operating PSK: 0123456789
+Tx power: WIFI_POWER_17dBm
+Awake and screaming

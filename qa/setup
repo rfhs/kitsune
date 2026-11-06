@@ -1,5 +1,6 @@
 #!/bin/sh
-# What CI installs before qa/build-test and qa/report-format.
+# What CI installs before qa/build-test, qa/report-format, qa/shell-lint,
+# qa/guard-test and qa/verify-test.
 # Debian or Ubuntu only. Locally you just need pio on your PATH.
 set -e
 set -u
@@ -10,8 +11,12 @@ sudo apt-get update -qq
 ## git: the pioarduino platform refuses to run without it
 ## dash, mksh, busybox-static: the shells qa/shell-lint parses with
 ## curl, xz-utils: the shellcheck download below
-sudo apt-get install -y -qq cracklib-runtime dos2unix uuid-runtime git \
-  dash mksh busybox-static curl xz-utils
+## python3, python3-serial, python3-pyflakes, tshark: qa/verify-test, the
+## verify scripts' unit tests. wireshark-common asks a debconf question
+## about non-root capture, which the noninteractive frontend answers with
+## the default.
+sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq cracklib-runtime dos2unix uuid-runtime git \
+  dash mksh busybox-static curl xz-utils python3 python3-serial python3-pyflakes tshark
 ## threewords reads /usr/share/dict/cracklib-words; Debian and Ubuntu
 ## install the same list as cracklib-small.
 if [ ! -r /usr/share/dict/cracklib-words ] && [ -r /usr/share/dict/cracklib-small ]; then
