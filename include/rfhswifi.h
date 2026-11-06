@@ -97,6 +97,63 @@ static_assert(TXPOWER == WIFI_POWER_19_5dBm || TXPOWER == WIFI_POWER_19dBm || TX
 #error "CHANNEL, SSID_HIDDEN and MAX_CLIENTS only apply to AP mode, remove them from the CLIENT block"
 #endif
 
+// Prints the configuration the stack is running with and refuses to run
+// when it differs from the conference header. The values come from
+// esp_wifi_get_config(), the call WiFi.softAPSSID() reads the SSID through:
+// for the AP the PSK, the hidden flag and the client limit (main.cpp checks
+// the AP's SSID and channel), for the client the SSID and the PSK. The SSID
+// field is 32 bytes without a terminator when the name is 32 characters
+// long, so it is copied out before it is printed. TXPOWER is printed as
+// configured: the PHY maps the requested level to the nearest step it
+// supports, so the controller's own value can differ on a working fox.
+bool rfhscheckwificonfig() {
+  wifi_config_t conf;
+#if defined(AP)
+  esp_err_t err = esp_wifi_get_config(WIFI_IF_AP, &conf);
+  const char *psk = (const char *)conf.ap.password;
+#elif defined(CLIENT)
+  esp_err_t err = esp_wifi_get_config(WIFI_IF_STA, &conf);
+  const char *psk = (const char *)conf.sta.password;
+#endif
+  if (err != ESP_OK) {
+    Serial.printf("Error reading the Wi-Fi configuration: %s\r\n", esp_err_to_name(err));
+    return false;
+  }
+#if defined(CLIENT)
+  char ssid[sizeof(conf.sta.ssid) + 1];
+  memcpy(ssid, conf.sta.ssid, sizeof(conf.sta.ssid));
+  ssid[sizeof(conf.sta.ssid)] = '\0';
+  Serial.printf("Operating SSID: %s\r\n", ssid);
+  if (strcmp(ssid, FSSID) != 0) {
+    Serial.println("Requested SSID: " FSSID);
+    Serial.println("Operating SSID != Requested SSID");
+    return false;
+  }
+#endif
+  Serial.printf("Operating PSK: %s\r\n", psk);
+  if (strcmp(psk, PSK) != 0) {
+    Serial.println("Requested PSK: " PSK);
+    Serial.println("Operating PSK != Requested PSK");
+    return false;
+  }
+#if defined(AP)
+  Serial.printf("Hidden SSID: %d\r\n", conf.ap.ssid_hidden);
+  if (conf.ap.ssid_hidden != SSID_HIDDEN) {
+    Serial.printf("Requested hidden SSID: %d\r\n", SSID_HIDDEN);
+    Serial.println("Hidden SSID != Requested hidden SSID");
+    return false;
+  }
+  Serial.printf("Max clients: %d\r\n", conf.ap.max_connection);
+  if (conf.ap.max_connection != MAX_CLIENTS) {
+    Serial.printf("Requested max clients: %d\r\n", MAX_CLIENTS);
+    Serial.println("Max clients != Requested max clients");
+    return false;
+  }
+#endif
+  Serial.println("Tx power: " RFHS_STR(TXPOWER));
+  return true;
+}
+
 void disableWiFi() {
  // fixes a noisy log error when monitoring
 #if defined(AP)

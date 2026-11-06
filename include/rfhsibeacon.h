@@ -1,3 +1,6 @@
+#include <stdio.h>
+#include <string.h>
+#include <esp_bt.h>
 #include <BLEDevice.h>
 #include <BLEServer.h>
 #include <BLEUtils.h>
@@ -65,8 +68,14 @@ static_assert(sizeof(BEACON_UUID) == 37 && rfhs_uuid_ok(BEACON_UUID),
 #define ADV_MIN_INTERVAL    32
 #define ADV_MAX_INTERVAL    64
 #define ADV_TX_POWER        ESP_PWR_LVL_N0
-#define ADVERTISING_DURATION     1  // time to remain advertising
-#define GPIO_DEEP_SLEEP_DURATION 5  // sleep x seconds and then wake up
+// Seconds on air per wake and seconds asleep between wakes. Both can be
+// overridden with a -D build flag.
+#ifndef ADVERTISING_DURATION
+#define ADVERTISING_DURATION     5
+#endif
+#ifndef GPIO_DEEP_SLEEP_DURATION
+#define GPIO_DEEP_SLEEP_DURATION 5
+#endif
 
 #elif defined(HARD)
 
@@ -74,9 +83,24 @@ static_assert(sizeof(BEACON_UUID) == 37 && rfhs_uuid_ok(BEACON_UUID),
 #define ADV_MIN_INTERVAL    32
 #define ADV_MAX_INTERVAL    64
 #define ADV_TX_POWER        ESP_PWR_LVL_N12
-#define ADVERTISING_DURATION     10  // time to remain advertising
-#define GPIO_DEEP_SLEEP_DURATION 30  // sleep x seconds and then wake up
+// Seconds on air per wake and seconds asleep between wakes. Both can be
+// overridden with a -D build flag.
+#ifndef ADVERTISING_DURATION
+#define ADVERTISING_DURATION     10
+#endif
+#ifndef GPIO_DEEP_SLEEP_DURATION
+#define GPIO_DEEP_SLEEP_DURATION 30
+#endif
 
+#endif
+// A sleeping fox is only on air for ADVERTISING_DURATION seconds per wake.
+// An active scan needs the beacon to be heard and then answer a scan
+// request with its name, so a shorter window lets a scan miss the fox or
+// see it without the name.
+#ifdef DEEP_SLEEP
+#if ADVERTISING_DURATION < 5
+#error "ADVERTISING_DURATION must be at least 5 seconds when DEEP_SLEEP is defined, so an active scan can hear the beacon and read its name"
+#endif
 #endif
 //#MAX 40959ms
 // ADV_TX_POWER   Power level for advertisements
@@ -106,10 +130,12 @@ BLEServer *pServer;
 BLECharacteristic *pCharacteristic;
 bool deviceConnected = false;
 uint8_t value = 0;
+// The manufacturer data block of the advertisement; rfhscheckibeacon()
+// reads it back after it has been handed to the stack.
+BLEBeacon myBeacon;
 
 void init_beacon() {
   // iBeacon
-  BLEBeacon myBeacon;
   myBeacon.setManufacturerId(MANUFACTURER_ID);
   myBeacon.setMajor(MAJOR);
   myBeacon.setMinor(MINOR);
@@ -129,6 +155,10 @@ void rfhsstartibeacon() {
   BLEDevice::init(DEVICE_NAME);
  
   BLEDevice::setPower(ADV_TX_POWER);
+  // The advertising power type is set on its own as well, so the readback
+  // of that type in rfhscheckibeacon() asks the controller for a value it
+  // was given.
+  BLEDevice::setPower(ADV_TX_POWER, ESP_BLE_PWR_TYPE_ADV);
 
   pAdvertising = BLEDevice::getAdvertising();
   pAdvertising->setAdvertisementType(ADV_TYPE);
@@ -140,4 +170,70 @@ void rfhsstartibeacon() {
   init_beacon();
 
   pAdvertising->start();
+}
+
+// Prints what the beacon transmits and refuses to run when any of it
+// differs from the conference header. Bluedroid in Arduino core 2.x
+// returns the device name only through a GAP callback event, so the
+// configured DEVICE_NAME is printed. The stack has no call that returns
+// the advertisement, so the UUID, major, minor and signal power are read
+// back from the manufacturer data handed to it, which has the iBeacon
+// layout: company id, type, length, 16 byte UUID, major, minor and signal
+// power, the 16 bit fields most significant byte first. The address and
+// the advertising power are read back from the controller. Power levels
+// are 3 dBm apart around ESP_PWR_LVL_N0 on the ESP32 and the ESP32-S3.
+bool rfhscheckibeacon() {
+  Serial.println("Device name: " DEVICE_NAME);
+  std::string data = myBeacon.getData();
+  if (data.size() != 25) {
+    Serial.printf("Beacon data is %u bytes, not 25\r\n", (unsigned)data.size());
+    return false;
+  }
+  const uint8_t *d = (const uint8_t *)data.data();
+  char uuid[37];
+  snprintf(uuid, sizeof(uuid),
+      "%02X%02X%02X%02X-%02X%02X-%02X%02X-%02X%02X-%02X%02X%02X%02X%02X%02X",
+      d[4], d[5], d[6], d[7], d[8], d[9], d[10], d[11],
+      d[12], d[13], d[14], d[15], d[16], d[17], d[18], d[19]);
+  Serial.printf("Beacon UUID: %s\r\n", uuid);
+  if (strcasecmp(uuid, BEACON_UUID) != 0) {
+    Serial.println("Requested UUID: " BEACON_UUID);
+    Serial.println("Beacon UUID != Requested UUID");
+    return false;
+  }
+  unsigned major = ((unsigned)d[20] << 8) | d[21];
+  Serial.printf("Major: 0x%04X (%u)\r\n", major, major);
+  if (major != (unsigned)MAJOR) {
+    Serial.printf("Requested major: 0x%04X (%u)\r\n", (unsigned)MAJOR, (unsigned)MAJOR);
+    Serial.println("Major != Requested major");
+    return false;
+  }
+  unsigned minor = ((unsigned)d[22] << 8) | d[23];
+  Serial.printf("Minor: 0x%04X (%u)\r\n", minor, minor);
+  if (minor != (unsigned)MINOR) {
+    Serial.printf("Requested minor: 0x%04X (%u)\r\n", (unsigned)MINOR, (unsigned)MINOR);
+    Serial.println("Minor != Requested minor");
+    return false;
+  }
+  int power = (int8_t)d[24];
+  Serial.printf("Signal power: %d\r\n", power);
+  if (power != (int)(int8_t)SIGNAL_POWER) {
+    Serial.printf("Requested signal power: %d\r\n", (int)(int8_t)SIGNAL_POWER);
+    Serial.println("Signal power != Requested signal power");
+    return false;
+  }
+  BLEAddress address = BLEDevice::getAddress();
+  if (!rfhscheckbtaddress(*address.getNative())) {
+    return false;
+  }
+  esp_power_level_t level = esp_ble_tx_power_get(ESP_BLE_PWR_TYPE_ADV);
+  Serial.printf("Advertising power: %d dBm (level %d)\r\n",
+      3 * ((int)level - (int)ESP_PWR_LVL_N0), (int)level);
+  if (level != ADV_TX_POWER) {
+    Serial.printf("Requested advertising power: %d dBm (level %d)\r\n",
+        3 * ((int)ADV_TX_POWER - (int)ESP_PWR_LVL_N0), (int)ADV_TX_POWER);
+    Serial.println("Advertising power != Requested advertising power");
+    return false;
+  }
+  return true;
 }

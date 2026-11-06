@@ -3,6 +3,7 @@
 #include "current_conf.h"
 #include <rfhssleeptimers.h>
 #include <rfhsledmacros.h>
+#include <rfhsbanner.h>
 #include <rfhszigbee.h>
 
 void setup() {
@@ -26,7 +27,15 @@ void setup() {
   rfhsboottimer();
 
   Serial.println("Setting up Zigbee Coordinator…");
-  if (!rfhsstartzigbee() || !rfhscheckzigbee()) {
+  if (!rfhsstartzigbee()) {
+    Serial.flush();
+    disableZigbee();
+    rfhsledfatal();
+  }
+  // The radio is up, so the host has had time to open the port; see rfhsbanner.h.
+  RFHS_BANNER("zigbee_coordinator");
+  rfhsprintsleeptimers();
+  if (!rfhscheckzigbee()) {
     Serial.flush();
     disableZigbee();
     rfhsledfatal();

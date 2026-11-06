@@ -4,6 +4,7 @@
 
 #include <rfhsledmacros.h>
 #include <rfhssleeptimers.h>
+#include <rfhsbanner.h>
 #include <rfhsibeacon.h>
 
 void setup() {
@@ -15,6 +16,13 @@ void setup() {
   Serial.flush();
 
   rfhsstartibeacon();
+  // The radio is up, so the host has had time to open the port; see rfhsbanner.h.
+  RFHS_BANNER("iBeacon");
+  if (!rfhscheckibeacon()) {
+    Serial.flush();
+    pAdvertising->stop();
+    rfhsledfatal();
+  }
   ledcolor(0x0000FF); // BLUE
   Serial.println("iBeacon advertising!");
   #ifdef DEEP_SLEEP

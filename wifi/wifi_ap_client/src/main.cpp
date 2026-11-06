@@ -3,6 +3,7 @@
 #include "current_conf.h"
 #include <rfhssleeptimers.h>
 #include <rfhsledmacros.h>
+#include <rfhsbanner.h>
 #include <rfhswifi.h>
 #include <esp_mac.h>
 #include <esp_system.h>
@@ -99,6 +100,9 @@ void setup() {
   WiFi.mode(WIFI_AP);
   WiFi.softAP(FSSID, PSK, set_channel, SSID_HIDDEN, MAX_CLIENTS);
   delay(100); // Let AP start before we run our checks
+  // The radio is up, so the host has had time to open the port; see rfhsbanner.h.
+  RFHS_BANNER("wifi_ap_client");
+  rfhsprintsleeptimers();
   Serial.printf("Set power status: %s\r\n", WiFi.setTxPower(TXPOWER) ? "ok" : "failed");
   Serial.println("Started AP with MAC Address: " + WiFi.softAPmacAddress());
   if (WiFi.softAPmacAddress() != mac_str){
@@ -126,15 +130,28 @@ void setup() {
     disableWiFi();
     rfhsledfatal();
   }
+  if (!rfhscheckwificonfig()) {
+    Serial.flush();
+    disableWiFi();
+    rfhsledfatal();
+  }
   Serial.flush();
   ledcolor(0x00ff00); // GREEN
   #elif defined(CLIENT)
   WiFi.mode(WIFI_STA);
   WiFi.begin(FSSID, PSK);
   delay(100); // Let Client start before we run our checks
+  // The radio is up, so the host has had time to open the port; see rfhsbanner.h.
+  RFHS_BANNER("wifi_ap_client");
+  rfhsprintsleeptimers();
   Serial.println("Started Client with MAC Address: " + WiFi.macAddress());
   if (WiFi.macAddress() != mac_str){
     Serial.println("Read MAC Address != Requested Mac Address");
+    Serial.flush();
+    disableWiFi();
+    rfhsledfatal();
+  }
+  if (!rfhscheckwificonfig()) {
     Serial.flush();
     disableWiFi();
     rfhsledfatal();

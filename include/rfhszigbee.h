@@ -47,8 +47,6 @@
 #endif
 // A bare 0 means "random PAN ID", 0x0000 means PAN ID zero. #if sees the
 // same number either way, so compare the macro's text.
-#define RFHS_STR_(x) #x
-#define RFHS_STR(x) RFHS_STR_(x)
 constexpr bool rfhs_str_eq(const char *a, const char *b) {
   return *a == *b && (*a == '\0' || rfhs_str_eq(a + 1, b + 1));
 }
@@ -202,6 +200,16 @@ bool rfhscheckzigbee() {
   if (esp_zb_nwk_get_link_status_period() != PACKET_INTERVAL) {
     Serial.printf("Requested packet interval: %ds\r\n", PACKET_INTERVAL);
     Serial.println("Packet interval != Requested packet interval");
+    return false;
+  }
+  // The radio stores the power per channel; rfhsstartzigbee() set every
+  // channel to TXPOWER and this reads the operating channel's value back.
+  int8_t tx_power;
+  esp_zb_get_tx_power(&tx_power);
+  Serial.printf("Tx power: %d dBm\r\n", tx_power);
+  if (tx_power != TXPOWER) {
+    Serial.printf("Requested tx power: %d dBm\r\n", TXPOWER);
+    Serial.println("Tx power != Requested tx power");
     return false;
   }
   return true;

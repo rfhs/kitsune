@@ -1,4 +1,6 @@
+#include <Arduino.h>
 #include "esp_mac.h"
+#include "esp_bt_device.h"
 #include <rfhsconfcheck.h>
 
 #define STRINGIFY(x) #x
@@ -53,4 +55,26 @@ bool rfhssetbtmac() {
   } else {
     return false;
   }
+}
+
+// Prints the address the Bluetooth controller is using and refuses to run
+// when it differs from MAC_ADDR. addr is what esp_bt_dev_get_address()
+// returned: the six bytes, or NULL when the stack is not enabled.
+bool rfhscheckbtaddress(const uint8_t *addr) {
+  if (addr == NULL) {
+    Serial.println("Device address: unavailable, the Bluetooth stack is not enabled");
+    return false;
+  }
+  Serial.printf("Device address: %02X:%02X:%02X:%02X:%02X:%02X\r\n",
+      addr[0], addr[1], addr[2], addr[3], addr[4], addr[5]);
+  for (size_t i = 0; i < sizeof(rfhs_bt_mac); i++) {
+    if (addr[i] != rfhs_bt_mac[i]) {
+      Serial.printf("Requested address: %02X:%02X:%02X:%02X:%02X:%02X\r\n",
+          rfhs_bt_mac[0], rfhs_bt_mac[1], rfhs_bt_mac[2],
+          rfhs_bt_mac[3], rfhs_bt_mac[4], rfhs_bt_mac[5]);
+      Serial.println("Device address != Requested address");
+      return false;
+    }
+  }
+  return true;
 }
