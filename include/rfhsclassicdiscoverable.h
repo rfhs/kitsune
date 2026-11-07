@@ -18,8 +18,13 @@
 #error "NAME must be defined in the conference header, a string of 1-32 characters"
 #endif
 static_assert(sizeof(NAME) - 1 >= 1 && sizeof(NAME) - 1 <= 32, "NAME must be 1-32 characters");
+// A general inquiry takes 10.24 seconds and the fox answers about 2 seconds
+// after it boots, so a shorter wake can end before an inquiry that started
+// as the fox woke has reached it. rfhssleeptimers.h checks the upper bound.
 #if !defined(TIME_TO_WAKE) || !defined(TIME_TO_SLEEP)
 #error "TIME_TO_WAKE and TIME_TO_SLEEP must be defined in the conference header, in seconds"
+#elif TIME_TO_WAKE < 15
+#error "TIME_TO_WAKE must be at least 15 seconds: a Bluetooth inquiry takes 10.24 seconds and the fox needs about 2 seconds after boot to answer one"
 #endif
 
 BluetoothSerial SerialBT;
@@ -32,4 +37,13 @@ void rfhssetbtclassicname() {
 void rfhsstartclassicdiscoverable() {
   rfhssetbtmac();
   rfhssetbtclassicname();
+}
+
+// Prints the name and address hunters see and refuses to run when the
+// address differs from the conference header. Bluedroid in Arduino core
+// 2.x has no call that returns the Classic device name, so the configured
+// NAME is printed; the address is read back from the stack.
+bool rfhscheckclassicdiscoverable() {
+  Serial.println("Device name: " NAME);
+  return rfhscheckbtaddress(esp_bt_dev_get_address());
 }

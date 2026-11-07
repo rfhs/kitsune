@@ -1,0 +1,28 @@
+ets Jul 29 2019 12:21:46
+
+rst:0x1 (POWERON_RESET),boot:0x13 (SPI_FAST_FLASH_BOOT)
+configsip: 0, SPIWP:0xee
+clk_drv:0x00,q_drv:0x00,d_drv:0x00,cs0_drv:0x00,hd_drv:0x00,wp_drv:0x00
+mode:DIO, clock div:1
+load:0x3fff0030,len:1344
+load:0x40078000,len:13964
+load:0x40080400,len:3600
+entry 0x400805f0
+Setting up AP (Access Point)…
+MAC address set successfully
+
+Initializing...
+ESP32 boot count: 3
+Sleep stats: 61s since cold boot, 20s since last wakeup
+Fox: wifi_ap_client EASY AP
+Time to wake: 15s
+Time to sleep: 5s
+Set power status: ok
+Started AP with MAC Address: F2:F4:90:22:0D:0F
+Operating channel: 1
+Operating SSID: Demo Hiro WiFi AP Easy Fox
+Operating PSK: 0123456789
+Hidden SSID: 0
+Max clients: 1
+Tx power: WIFI_POWER_17dBm
+Awake and screaming

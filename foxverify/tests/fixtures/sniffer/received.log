@@ -1,0 +1,5 @@
+Nordic 802.15.4 sniffer
+received: 41882a3713ffff00000910fcff00000105d8447b0e913c5af20860 power: -45 lqi: 200 time: 123456
+received:  03083affffffff07  power: -70  lqi: 120  time: 223456
+garbage line
+received: 4188 power: -1 lqi: 0 time: -5

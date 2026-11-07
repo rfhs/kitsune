@@ -1,9 +1,14 @@
 // Compile time helpers for checking conference header values. Everything
-// here is constexpr so it can sit inside a static_assert and costs nothing
-// on the device. Written for C++11, the oldest standard any core builds with.
+// here is constexpr or a macro so it can sit inside a static_assert and
+// costs nothing on the device. Written for C++11, the oldest standard any
+// core builds with.
 #pragma once
 #include <stdint.h>
 #include <stddef.h>
+// The text of a macro's value as a string literal, so a header can compare
+// or print the way a value was written rather than the number it expands to.
+#define RFHS_STR_(x) #x
+#define RFHS_STR(x) RFHS_STR_(x)
 
 // Every byte of the array equals value. Catches an all zero or all 0xFF
 // address, which no radio accepts as a device address.

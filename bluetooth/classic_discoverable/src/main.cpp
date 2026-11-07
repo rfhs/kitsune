@@ -3,6 +3,7 @@
 #include "current_conf.h"
 #include <rfhsledmacros.h>
 #include <rfhssleeptimers.h>
+#include <rfhsbanner.h>
 #include <rfhsclassicdiscoverable.h>
 
 void setup() {
@@ -12,6 +13,14 @@ void setup() {
   rfhsboottimer();
 
   rfhsstartclassicdiscoverable();
+  // The radio is up, so the host has had time to open the port; see rfhsbanner.h.
+  RFHS_BANNER("classic_discoverable");
+  rfhsprintsleeptimers();
+  if (!rfhscheckclassicdiscoverable()) {
+    Serial.flush();
+    SerialBT.end();
+    rfhsledfatal();
+  }
 
   ledcolor(0x0000FF); // BLUE
   delay(TIME_TO_WAKE * mS_TO_S);

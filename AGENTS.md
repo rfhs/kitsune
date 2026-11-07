@@ -43,9 +43,15 @@ the conference headers and the report scripts have to agree exactly.
   each demo build; without that the first pioarduino build after an
   official-platform build fails reinstalling `tool-esptoolpy`. CI never
   sees this because each job builds one board.
-- Confirm platform resolution after touching a `platformio.ini`:
-  `pio project config --project-dir <project> --json-output` must give
-  every environment an explicit pinned `platform`.
+- After touching a `platformio.ini`, run `./qa/build-test list`. It checks
+  every ini before printing the matrix: each value in a custom section
+  must be interpolated somewhere or inherited by an environment, and every
+  environment's `platform` must be pinned. A key that lands in the wrong
+  section (a `[flags]` header inserted above a `board_build.*` line, say)
+  builds cleanly and fails on the device; this is the check that catches
+  it. `./qa/build-test <project>` runs the same check before building and,
+  after every build, requires the partitions listed in
+  `required_partitions` at the top of the script in `partitions.bin`.
 - Run `./qa/report-format` whenever a conference header, `create_report`,
   `make_conference_full`, a `make_conference` or `qa/verify-report`
   changes. Zero failures is the bar. If a failure looks like your machine's
@@ -55,6 +61,14 @@ the conference headers and the report scripts have to agree exactly.
 - Every unexpected line on stderr is a bug until you have explained it. A
   `grep: No such file` scrolling past a passing run means a fox is missing
   from the report.
+- The `verify` scripts read the fox's serial readback with the regexes in
+  `foxverify/serial_fox.py` and are tested against the recorded transcripts
+  in `foxverify/tests/fixtures/transcripts/`. A new or changed readback line
+  in firmware gets its regex and its line in those transcripts in the same
+  change, and a new conference value gets its row in `foxverify/run.py`.
+  `./qa/verify-test` runs pyflakes and the unit tests; run it before handing
+  off anything under `foxverify/` or a `verify` script, and
+  `./qa/in-ubuntu ./qa/verify-test` for the tshark test this machine skips.
 
 ## Test in the runner's image, not just on your machine
 
@@ -74,6 +88,7 @@ report generators, run the affected check inside the image:
 
     ./qa/in-ubuntu                                     # qa/report-format
     ./qa/in-ubuntu ./qa/build-test <project> <board> [mode]   # the CI leg you touched
+    ./qa/in-ubuntu ./qa/verify-test                    # the verify scripts, with tshark
 
 It copies the checkout into an `ubuntu:24.04` container, runs `qa/setup`
 exactly as CI does, then your command. A new external command in any

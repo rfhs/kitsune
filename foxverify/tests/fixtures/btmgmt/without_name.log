@@ -1,0 +1,6 @@
+Discovery started
+hci0 type 1 discovering on
+hci0 dev_found: F2:F6:6D:BC:2A:80 type BR/EDR rssi -58 flags 0x0001 
+hci0 dev_found: 70:10:5C:11:22:33 type BR/EDR rssi -72 flags 0x0000 
+short name Kitchen spe
+hci0 type 1 discovering off

@@ -27,10 +27,49 @@ get_uuid() {
   uuidgen | tr '[:lower:]' '[:upper:]'
 }
 
+# A WPA2 passphrase of 63 random characters from A-Z, a-z and 0-9. Letters
+# and digits need no escaping in a C string literal, in the sed that writes
+# the header, or in the table the verify script prints, and 63 of them are
+# far beyond what a conference-long hunt can brute force. Each random byte
+# modulo 62 picks one character of the set; that favours A-H slightly
+# (5 of 256 byte values each instead of 4), which does not matter at this
+# length. set -- holds the set as positional arguments and shift moves the
+# chosen one to $1. create_report greps the header for a few words and
+# prints every line holding one, so a passphrase that contains such a word
+# would land on the paper report; that roll is thrown away.
+get_psk() {
+  while :; do
+    psk=""
+    for byte in $(od -An -N63 -tu1 /dev/urandom); do
+      set -- A B C D E F G H I J K L M N O P Q R S T U V W X Y Z \
+        a b c d e f g h i j k l m n o p q r s t u v w x y z 0 1 2 3 4 5 6 7 8 9
+      shift $((byte % 62))
+      psk="${psk}$1"
+    done
+    case "${psk}" in
+      *NAME*|*UUID*|*FSSID*|*CHANNEL*) continue ;;
+    esac
+    printf '%s\n' "${psk}"
+    return
+  done
+}
+
+# Every block of the skel has the same PSK placeholder, so one substitution
+# would give all of them one passphrase. Each placeholder line is found by
+# its number and gets a sed command of its own with its own roll; the
+# commands are collected in a script file for the sed below.
+psk_script="$(mktemp)"
+trap 'rm -f "${psk_script}"' EXIT
+sed -n '/^#define PSK "0123456789"$/=' src/conferences/9999skel.h |
+while read -r line; do
+  printf '%ss|"0123456789"|"%s"|\n' "${line}" "$(get_psk)"
+done > "${psk_script}"
+
 sed -e "s#{0x00, 0x01, 0x02, 0x03, 0x04, 0x05}#$(get_mac)#" \
   -e "s#{0x00, 0x06, 0x07, 0x08, 0x09, 0x0a}#$(get_mac)#" \
   -e "s#{0x00, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f}#$(get_mac)#" \
   -e "s#{0x00, 0x10, 0x11, 0x12, 0x13, 0x14}#$(get_mac)#" \
   -e "s#{0x00, 0x15, 0x16, 0x17, 0x18, 0x19}#$(get_mac)#" \
   -e "s#{0x00, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e}#$(get_mac)#" \
+  -f "${psk_script}" \
   src/conferences/9999skel.h > "src/conferences/$(date +"%Y")${1}.h"

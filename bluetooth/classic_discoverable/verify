@@ -1,0 +1,18 @@
+#!/usr/bin/env python3
+"""Verify a flashed Bluetooth Classic fox against src/current_conf.h.
+
+Usage: ./verify [DEVICE ...] [--serial-only] [--no-reset] [--timeout 60]
+                [--wait-for-fox 30] [-v]
+
+The work is in foxverify/ at the repo root; see ./verify --help and the
+README section "Verifying a fox".
+"""
+import os
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+
+from foxverify.run import main  # noqa: E402
+
+if __name__ == "__main__":
+    sys.exit(main("classic_discoverable"))

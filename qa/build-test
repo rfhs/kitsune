@@ -2,6 +2,9 @@
 # Build every environment of a board for the demo conference, roll a new
 # conference off the skel, build them all again. This is what CI runs,
 # one project and board per runner, so the same script runs it at home.
+# Before building, every value in the project's platformio.ini must reach
+# an environment and every platform must be pinned; after each build, the
+# partition table must hold what the firmware needs at run time.
 #
 # Usage:
 #   qa/build-test                             every project and board, in series
@@ -26,6 +29,14 @@ split_by_mode="
 wifi/wifi_ap_client seeed_xiao_esp32c5
 "
 
+## Partitions a project's firmware needs at run time, looked for in the
+## partitions.bin of every build. A clean build says nothing about the
+## partition table, and the Zigbee stack aborts at boot without zb_storage.
+## One "project partition..." per line.
+required_partitions="
+zigbee/zigbee_coordinator zb_storage zb_fct
+"
+
 if ! command -v pio > /dev/null 2>&1; then
   printf 'pio not found. Install platformio, see README.md\n'
   exit 1
@@ -48,11 +59,76 @@ for section, items in json.load(sys.stdin):
         sys.exit(f"{sys.argv[1]} {section} has no board")
     print(board, section[4:])' "${1}"
 }
+## check_config <project>: every value written in platformio.ini must do
+## something. A key of a custom section is either interpolated somewhere as
+## ${section.key} or inherited by an environment that extends the section;
+## one that is neither is in the wrong section, and pio builds without a
+## word about it. Every environment's platform must also be pinned, to a
+## version or a release URL, so a build can't pick up whichever platform
+## is installed. pio has resolved the extends chain and the interpolation,
+## so the inherited values are compared after resolution.
+check_config() {
+  # shellcheck disable=SC2016  # the ${section.key} text is Python's, not the shell's
+  pio project config --project-dir "${1}" --json-output | python3 -c '
+import json, sys
+project = sys.argv[1]
+with open(project + "/platformio.ini", encoding="utf8") as fp:
+    ini = fp.read()
+sections = {name: dict(items) for name, items in json.load(sys.stdin)}
+envs = {name: keys for name, keys in sections.items() if name.startswith("env:")}
+errors = []
+for name, keys in sections.items():
+    if name in ("env", "platformio") or name.startswith("env:"):
+        continue
+    for key, value in keys.items():
+        if "${%s.%s}" % (name, key) in ini:
+            continue
+        if any(env.get(key) == value for env in envs.values()):
+            continue
+        errors.append("[%s] %s = %s reaches no environment and nothing interpolates ${%s.%s}; is it in the wrong section?"
+                      % (name, key, value, name, key))
+for name, env in envs.items():
+    platform = env.get("platform", "")
+    if "@" not in platform and "://" not in platform:
+        errors.append("[%s] platform = %s is not pinned to a version or a release URL" % (name, platform or "(unset)"))
+if errors:
+    sys.exit("\n".join("%s/platformio.ini: %s" % (project, e) for e in errors))' "${1}"
+}
+## check_partitions <project> <env>: the partition table of a finished build
+## holds every name required_partitions lists for the project. Entries are
+## 32 bytes, magic 0xAA 0x50, the name at bytes 12-27 padded with NULs; the
+## table ends at the first entry without the magic.
+check_partitions() {
+  names="$(printf '%s\n' "${required_partitions}" | awk -v p="${1}" '$1 == p {$1 = ""; print}')"
+  if [ -z "${names}" ]; then
+    return 0
+  fi
+  # shellcheck disable=SC2086  # names is a space separated list on purpose
+  python3 -c '
+import sys
+path, wanted = sys.argv[1], sys.argv[2:]
+with open(path, "rb") as fp:
+    table = fp.read()
+found = []
+for offset in range(0, len(table), 32):
+    entry = table[offset:offset + 32]
+    if entry[:2] != b"\xaa\x50":
+        break
+    found.append(entry[12:28].split(b"\0")[0].decode("ascii", "replace"))
+missing = [name for name in wanted if name not in found]
+if missing:
+    sys.exit("%s lacks partition(s) %s; it has %s" % (path, " ".join(missing), " ".join(found)))' \
+    "${1}/.pio/build/${2}/partitions.bin" ${names}
+}
 
 ## list: every (project, board) pair as a GitHub Actions matrix. It comes
 ## from the ini files, so a board added to any project gets a CI job without
-## anyone editing the workflow.
+## anyone editing the workflow. Every ini is checked first, so a misplaced
+## key fails the run once, here, before any job builds.
 if [ "${1:-}" = "list" ]; then
+  for project in $(projects); do
+    check_config "${project}"
+  done
   for project in $(projects); do
     board_envs "${project}" | awk -v p="${project}" '{print p, $1, $2}'
   done | python3 -c '
@@ -119,11 +195,12 @@ endgroup() {
 }
 
 failures=0
-## build <project> <env> <conference>: one pio run, recorded for the summary
+## build <project> <env> <conference>: one pio run and the partition table
+## check, recorded for the summary
 build() {
   group "${1} ${2} (${3})"
   start="$(date +%s)"
-  if pio run --silent --project-dir "${1}" -e "${2}"; then
+  if pio run --silent --project-dir "${1}" -e "${2}" && check_partitions "${1}" "${2}"; then
     status="ok"
   else
     status="FAIL"
@@ -145,6 +222,21 @@ for project in $(projects); do
     printf 'No environments for board %s mode %s in %s\n' "${want_board:-any}" "${want_mode:-any}" "${project}"
     exit 1
   fi
+  ## The ini is checked before anything is built, so a misplaced key fails
+  ## in a second instead of after a clean build
+  group "check_config ${project}"
+  check_config "${project}"
+  endgroup
+
+  ## The official espressif32 platform and the pioarduino fork both provide
+  ## tool-esptoolpy under one name, and the first build after switching
+  ## between them reinstalls it and fails inside the install. Installing
+  ## the packages first, as qa/guard-test does, makes a run over several
+  ## projects reliable. It costs a second per environment when nothing is
+  ## missing; CI builds one board per job and never switches.
+  for env in ${envs}; do
+    pio pkg install --silent --project-dir "${project}" -e "${env}" > /dev/null 2>&1 || true
+  done
 
   ## First pass: 9999demo, the conference checked in to every project
   ln -snf conferences/9999demo.h "${project}/src/current_conf.h"
@@ -170,13 +262,19 @@ for project in $(projects); do
   cleanup_conf
 done
 
-## Summary table, also written to the job summary page on GitHub Actions
-{
-  printf '\n%-6s %-32s %-36s %-18s %s\n' "status" "project" "environment" "conference" "seconds"
+## Summary table. On GitHub Actions it also goes to the job summary page,
+## inside a code fence so the Markdown renderer keeps the columns.
+summary() {
+  printf '%-6s %-32s %-36s %-18s %s\n' "status" "project" "environment" "conference" "seconds"
   while read -r status project env built_conf seconds; do
     printf '%-6s %-32s %-36s %-18s %s\n' "${status}" "${project}" "${env}" "${built_conf}" "${seconds}"
   done < "${scratch}/results"
-} | tee -a "${GITHUB_STEP_SUMMARY:-/dev/null}"
+}
+printf '\n'
+summary
+if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+  { printf '```\n'; summary; printf '```\n'; } >> "${GITHUB_STEP_SUMMARY}"
+fi
 builds="$(wc -l < "${scratch}/results")"
 
 if [ "${failures}" -gt 0 ]; then

@@ -1,0 +1,18 @@
+Setting up AP (Access Point)…
+MAC address set successfully
+
+Initializing...
+ESP32 boot count: 0
+Sleep stats: 0s since cold boot, 0s since last wakeup
+Fox: wifi_ap_client HARD AP
+Time to wake: 30s
+Time to sleep: 45s
+Set power status: ok
+Started AP with MAC Address: F2:72:C1:79:16:1B
+Operating channel: 7
+Operating SSID: Demo YT WiFi AP Hard Fox
+Operating PSK: 0123456789
+Hidden SSID: 0
+Max clients: 1
+Tx power: WIFI_POWER_7dBm
+Awake and screaming

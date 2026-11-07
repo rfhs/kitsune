@@ -22,6 +22,13 @@
 #elif TIME_TO_SLEEP < 0 || TIME_TO_SLEEP > 2147
 #error "TIME_TO_SLEEP must be 0-2147 seconds"
 #endif
+// Prints both timers for the verify scripts. They are compile time constants
+// that main.cpp hands to delay() and esp_deep_sleep(), so the configured
+// values are printed; there is no stack to read them back from.
+void rfhsprintsleeptimers() {
+  Serial.printf("Time to wake: %ds\r\n", TIME_TO_WAKE);
+  Serial.printf("Time to sleep: %ds\r\n", TIME_TO_SLEEP);
+}
 #endif
 
 RTC_DATA_ATTR static time_t last;    // remember last boot in RTC Memory
