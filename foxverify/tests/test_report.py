@@ -134,6 +134,24 @@ class RenderTest(unittest.TestCase):
         self.assertEqual(rep.summary(), "FAIL: 0 pass, 1 FAIL, 0 serial only, 0 unverified")
         self.assertEqual(rep.emit(), report.EXIT_FAIL)
 
+    def test_suggestion_follows_the_summary(self):
+        out = io.StringIO()
+        rep = report.Report(out=out)
+        rep.add("CYCLE_TIME", 300, None, "first boot: 301.8 s", report.PASS)
+        rep.suggest("run with --timeout 605 for the exact cycle time; this run judged the first boot with wider tolerances")
+        rep.emit()
+        lines = out.getvalue().splitlines()
+        self.assertEqual(lines[1], "CYCLE_TIME | 300    | -      | first boot: 301.8 s | pass")
+        self.assertEqual(lines[2], "pass: 1 pass, 0 FAIL, 0 serial only, 0 unverified")
+        self.assertEqual(lines[3], "run with --timeout 605 for the exact cycle time; this run judged the first boot "
+                                   "with wider tolerances")
+        self.assertEqual(len(lines), 4)
+        rep.suggest(None)
+        out.truncate(0)
+        out.seek(0)
+        rep.emit()
+        self.assertEqual(len(out.getvalue().splitlines()), 3)
+
     def test_say_and_debug(self):
         out = io.StringIO()
         rep = report.Report(out=out, verbose=False)

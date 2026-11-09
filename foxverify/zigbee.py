@@ -32,15 +32,16 @@ the capture whether that fits in the time left and gives the reason for the
 
 Every frame from the fox, with the RSSI the TAP header carries
 (``wpan-tap.rss``), feeds the run's ``cycle.Cycle``; when the cycle is being
-measured the capture goes on through the fox's first sleep, and a
-random-channel fox's wake 2 channel, read from its serial port, retunes the
+measured the capture goes on through the fox's sleeps, and the channel each
+later wake of a random-channel fox prints on its serial port retunes the
 dongle with the ``channel`` command, which the sniffer firmware takes while
 receiving.
 
-``EXT_PAN_ID`` is never checked on the air: a coordinator sends its extended
-PAN ID only in a beacon, only in reply to a beacon request, and the nRF
-sniffer firmware has no transmit path (its commands are ``channel``,
-``receive`` and ``sleep``), so nothing here can ask for one.
+``EXT_PAN_ID`` is never checked on the air, and its row says ``serial only:
+unable to trigger``: a coordinator sends its extended PAN ID only in a
+beacon, only in reply to a beacon request, and the nRF sniffer firmware has
+no transmit path (its commands are ``channel``, ``receive`` and ``sleep``),
+so nothing here can ask for one.
 """
 from __future__ import annotations
 
@@ -86,9 +87,9 @@ FIELDS = ("frame.time_epoch", "wpan-tap.ch_num", "wpan.src_pan", "wpan.dst_pan",
           "wpan.src64", "zbee_nwk.frame_type", "zbee_nwk.cmd.id", "zbee_nwk.src", "zbee_nwk.dst",
           "zbee_nwk.src64", "zbee.sec.src64", "wpan-tap.rss")
 
-# The reason the EXT_PAN_ID row stays serial only.
-EXT_PAN_ID_REASON = ("only in beacons, which the fox sends in reply to a beacon request the "
-                     "receive-only nRF sniffer cannot send")
+# The reason the EXT_PAN_ID row stays serial only; the module docstring says
+# why the sniffer cannot ask for the beacon that carries it.
+EXT_PAN_ID_REASON = "unable to trigger"
 
 RECEIVED = re.compile(r"received:\s+([0-9a-fA-F]+)\s+power:\s+(-?\d+)\s+lqi:\s+(\d+)\s+time:\s+(-?\d+)")
 
@@ -346,9 +347,10 @@ def collect(reader: tshark.FieldReader, deadline: Deadline, pan_id: Optional[int
             mac: Optional[str] = None) -> Observation:
     """Read coordinator frames until ``want_link_status`` Link Status frames
     from ``pan_id`` (any PAN when None) arrived or the deadline passed. Every
-    frame from the fox, told by ``mac`` and by ``pan_id`` or the PAN its wake
-    2 prints, feeds ``cycle``; with a cycle being measured the read goes on
-    through the sleep, and ``retune`` moves the dongle to wake 2's channel."""
+    frame from the fox, told by ``mac`` and by ``pan_id`` or a PAN a later
+    wake prints, feeds ``cycle``; with a cycle being measured the read goes
+    on through the fox's sleeps, and ``retune`` moves the dongle to each
+    later wake's channel."""
     frames: List[Frame] = []
     link_status: List[Frame] = []
 
@@ -368,7 +370,9 @@ def collect(reader: tshark.FieldReader, deadline: Deadline, pan_id: Optional[int
         frames.append(frame)
         if frame.is_link_status() and (pan_id is None or frame.pan == pan_id):
             link_status.append(frame)
-        pans = [pan_id, follower.pan_id() if follower is not None else None]
+        pans: List[Optional[int]] = [pan_id]
+        if follower is not None:
+            pans.extend(follower.pan_ids())
         heard = frame.heard()
         return [heard] if heard is not None and frame.from_fox(mac, pans) else []
 
@@ -384,7 +388,7 @@ def observe(sniffer_path: str, channel: int, deadline: Deadline, tshark_path: st
     """Capture on ``channel`` with the sniffer at ``sniffer_path`` until the
     wanted Link Status frames arrived or the deadline passed, feeding
     ``cycle`` as ``collect`` says; with ``random_channel`` the dongle follows
-    wake 2's channel from the serial port. tshark reads the pcap stream from
+    each later wake's channel from the serial port. tshark reads the pcap stream from
     a FIFO in a temporary directory; the dongle is put to sleep and the
     directory removed on every exit path."""
     workdir = tempfile.mkdtemp(prefix="foxverify-")

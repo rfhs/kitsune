@@ -29,7 +29,8 @@ like on the air.
 Every advertisement or scan response from a candidate address is also logged
 as ``cycle.Heard`` with its RSSI, and ``BleScan.take_heard`` hands the run
 what arrived for the fox; with ``keep_scanning`` the scan goes on after the
-fox is complete so the run can hear it through its first sleep into wake 2.
+fox is complete so the run can hear it through its sleeps into its later
+wakes.
 """
 from __future__ import annotations
 

@@ -7,7 +7,7 @@ import tempfile
 import unittest
 
 from foxverify import conf, report, serial_fox, tshark, zigbee
-from foxverify.cycle import Cycle, Heard
+from foxverify.cycle import NONE, ONE_CYCLE, Cycle, Heard
 from foxverify.report import RunError
 from foxverify.serial_fox import parse_transcript
 from foxverify.tests import frozen_text, read_fixture
@@ -237,7 +237,7 @@ class FrameTest(unittest.TestCase):
         source = serial_fox.TranscriptSource([(12.3, "Going to sleep\n"), (3.0, "Operating channel: 22\n"),
                                               (0.1, "Operating PAN ID: 0xBEEF\n")], clock)
         follower = serial_fox.Follower(source, clock)
-        one = Cycle(0.0, 1.0, measure=True, wake=10, clock=clock)
+        one = Cycle(0.0, 1.0, ONE_CYCLE, wake=10, clock=clock)
         tuned = []
         observation = zigbee.collect(reader, dl, 0x1337, 2, cycle=one, follower=follower, retune=tuned.append,
                                      mac=MAC)
@@ -254,7 +254,7 @@ class FrameTest(unittest.TestCase):
     def test_collect_without_a_cycle_keeps_the_old_stop(self):
         dl, clock = deadline(60)
         reader = FakeReader(zigbee.FIELDS, [(0.5, line) for line in FRAMES], clock)
-        one = Cycle(1000.0, 1.0, measure=False, clock=clock)
+        one = Cycle(1000.0, 1.0, NONE, clock=clock)
         observation = zigbee.collect(reader, dl, 0x1337, 2, cycle=one, mac=MAC)
         self.assertEqual(len(observation.link_status), 2)
         # The frame from short address 0x1a2b is not the fox's.

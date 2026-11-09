@@ -1,12 +1,14 @@
-"""The wake and sleep cycle measured on synthetic timestamps: the budget rule,
-the end of wake 1 by the serial port and by silence, the span, gap and period
-rules, the FAIL texts for a wake 2 that was not heard, the first transmission
-line and the median RSSI."""
+"""The wake and sleep cycle measured on synthetic timestamps: the budget tiers
+and their lines, the end of each wake by the serial port and by silence, the
+two-cycle rows from wake 2 and wake 3, the first-boot rows from wake 1 and the
+gap to wake 2, the FAIL texts for a wake that was not heard, the capture loop's
+early exit and retunes, the first transmission and first wake lines and the
+median RSSI."""
 import io
 import unittest
 
 from foxverify import conf, cycle, report
-from foxverify.cycle import BOOT_ALLOWANCE, Cycle, Heard
+from foxverify.cycle import BOOT_ALLOWANCE, NONE, ONE_CYCLE, TWO_CYCLES, Cycle, Heard
 from foxverify.serial_fox import FakeClock, parse_transcript
 from foxverify.tests import frozen_text, read_fixture
 from foxverify.tests.fakes import deadline
@@ -20,54 +22,99 @@ def heard(start, count, spacing, rssi=-50):
 def fed(frames, **kwargs):
     kwargs.setdefault("reset_time", 0.0)
     kwargs.setdefault("granularity", 1.0)
-    kwargs.setdefault("measure", True)
+    kwargs.setdefault("tier", ONE_CYCLE)
     one = Cycle(**kwargs)
     for frame in frames:
         one.feed(frame)
     return one
 
 
-class BudgetTest(unittest.TestCase):
-    """--timeout against TIME_TO_WAKE + TIME_TO_SLEEP + 5 for the demo blocks."""
+def block_and_readback(project, tokens, transcript, replace=()):
+    """The frozen block and the parsed transcript of a project, with the
+    given (old, new) replacements made in the header and the transcript."""
+    text, log = frozen_text(project), read_fixture("transcripts", transcript)
+    for old, new in replace:
+        text = text.replace(old, new)
+    for old, new in replace:
+        log = log.replace(old, new)
+    return conf.select(text, tokens), parse_transcript(log)
+
+
+class TierTest(unittest.TestCase):
+    """--timeout against one and two cycles plus the 5 s boot allowance for
+    the demo blocks, and the lines each tier prints."""
 
     def test_constant_and_formula(self):
         self.assertEqual(BOOT_ALLOWANCE, 5.0)
-        self.assertEqual(cycle.needed(30, 30), 65.0)
-        self.assertEqual(cycle.needed(300, 0), 305.0)
+        self.assertEqual(cycle.needed(30, 30, 1), 65.0)
+        self.assertEqual(cycle.needed(30, 30), 125.0)
+        self.assertEqual(cycle.needed(300, 0, 1), 305.0)
+        self.assertEqual(cycle.needed(300, 0, 2), 605.0)
+        self.assertEqual(cycle.full_timeout(300, 0), 605)
+        self.assertEqual(cycle.full_timeout(15, 5), 45)
 
-    def test_classic_hard_needs_65(self):
-        self.assertFalse(cycle.fits(30, 30, 60))
-        self.assertTrue(cycle.fits(30, 30, 65))
-        self.assertEqual(cycle.budget_note(30, 30, 60),
-                         "TIME_TO_WAKE and TIME_TO_SLEEP: serial only, --timeout 60 is under the 65 s "
-                         "the cycle needs (TIME_TO_WAKE + TIME_TO_SLEEP + 5)")
+    def test_classic_hard_none_at_60_one_at_65_two_at_125(self):
+        self.assertEqual(cycle.tier(30, 30, 60), NONE)
+        self.assertEqual(cycle.tier(30, 30, 64.9), NONE)
+        self.assertEqual(cycle.tier(30, 30, 65), ONE_CYCLE)
+        self.assertEqual(cycle.tier(30, 30, 124.9), ONE_CYCLE)
+        self.assertEqual(cycle.tier(30, 30, 125), TWO_CYCLES)
 
-    def test_ibeacon_medium_and_wifi_easy_ap_fit_in_60(self):
-        self.assertTrue(cycle.fits(5, 5, 60))
-        self.assertTrue(cycle.fits(15, 5, 60))
-        self.assertTrue(cycle.fits(15, 5, 25))
-        self.assertFalse(cycle.fits(15, 5, 24.9))
+    def test_ibeacon_medium_and_wifi_easy_ap_fit_two_cycles_in_60(self):
+        self.assertEqual(cycle.tier(5, 5, 60), TWO_CYCLES)
+        self.assertEqual(cycle.needed(5, 5), 25.0)
+        self.assertEqual(cycle.tier(15, 5, 60), TWO_CYCLES)
+        self.assertEqual(cycle.needed(15, 5), 45.0)
+        self.assertEqual(cycle.tier(15, 5, 44.9), ONE_CYCLE)
+        self.assertEqual(cycle.tier(15, 5, 25), ONE_CYCLE)
+        self.assertEqual(cycle.tier(15, 5, 24.9), NONE)
 
-    def test_zigbee_demo_needs_305(self):
-        self.assertFalse(cycle.fits(300, 0, 60))
-        self.assertTrue(cycle.fits(300, 0, 305))
-        self.assertIn("--timeout 60 is under the 305 s the cycle needs", cycle.budget_note(300, 0, 60))
+    def test_zigbee_demo_none_at_60_one_at_305_two_at_605(self):
+        self.assertEqual(cycle.tier(300, 0, 60), NONE)
+        self.assertEqual(cycle.tier(300, 0, 305), ONE_CYCLE)
+        self.assertEqual(cycle.tier(300, 0, 604), ONE_CYCLE)
+        self.assertEqual(cycle.tier(300, 0, 605), TWO_CYCLES)
+        self.assertEqual(cycle.suggestion(NONE, 300, 0), "run with --timeout 605 to measure the cycle time")
 
-    def test_demo_blocks_of_every_project(self):
+    def test_demo_blocks_of_every_project_at_60(self):
         expect = [
-            ("classic_discoverable", ["HARD"], False),
-            ("iBeacon", ["MEDIUM"], True),
-            ("wifi_ap_client", ["AP", "EASY"], True),
-            ("zigbee_coordinator", ["COORDINATOR", "EASY"], False),
+            ("classic_discoverable", ["HARD"], NONE),
+            ("iBeacon", ["MEDIUM"], TWO_CYCLES),
+            ("wifi_ap_client", ["AP", "EASY"], TWO_CYCLES),
+            ("zigbee_coordinator", ["COORDINATOR", "EASY"], NONE),
         ]
-        for project, tokens, fits in expect:
+        for project, tokens, which in expect:
             block = conf.select(frozen_text(project), tokens)
-            self.assertEqual(cycle.fits(block.integer("TIME_TO_WAKE"), block.integer("TIME_TO_SLEEP"), 60),
-                             fits, project)
+            self.assertEqual(cycle.tier(block.integer("TIME_TO_WAKE"), block.integer("TIME_TO_SLEEP"), 60),
+                             which, project)
+
+    def test_suggestion_lines(self):
+        self.assertEqual(cycle.suggestion(NONE, 30, 30), "run with --timeout 125 to measure the cycle time")
+        self.assertEqual(cycle.suggestion(ONE_CYCLE, 30, 30),
+                         "run with --timeout 125 for the exact cycle time; this run judged the first boot "
+                         "with wider tolerances")
+        self.assertEqual(cycle.suggestion(ONE_CYCLE, 300, 0),
+                         "run with --timeout 605 for the exact cycle time; this run judged the first boot "
+                         "with wider tolerances")
+        self.assertIsNone(cycle.suggestion(TWO_CYCLES, 15, 5))
+
+    def test_tier_lines(self):
+        self.assertEqual(cycle.tier_line(TWO_CYCLES, 300, 0, 605),
+                         "measuring the cycle time from wake 2 and wake 3 (--timeout 605 covers two cycles of "
+                         "300 s plus the 5 s boot allowance)")
+        self.assertEqual(cycle.tier_line(ONE_CYCLE, 300, 0, 305),
+                         "judging the first boot with wider tolerances (--timeout 305 covers one cycle of 300 s "
+                         "plus the 5 s boot allowance; two cycles need 605)")
+        self.assertEqual(cycle.tier_line(NONE, 300, 0, 60),
+                         "TIME_TO_WAKE and TIME_TO_SLEEP serial only (--timeout 60 is under the 305 s one "
+                         "cycle of 300 s plus the 5 s boot allowance needs)")
+        self.assertEqual(cycle.tier_line(NONE, 15, 5, 24.5),
+                         "TIME_TO_WAKE and TIME_TO_SLEEP serial only (--timeout 24.5 is under the 25 s one "
+                         "cycle of 20 s plus the 5 s boot allowance needs)")
 
 
 class BoundaryTest(unittest.TestCase):
-    """How the end of wake 1 is found."""
+    """How the end of each wake is found."""
 
     def test_going_to_sleep_splits_the_frames_exactly(self):
         one = fed(heard(2.0, 10, 1.0) + heard(17.0, 3, 1.0))
@@ -81,6 +128,7 @@ class BoundaryTest(unittest.TestCase):
         self.assertAlmostEqual(one.span(), 9.0)
         self.assertAlmostEqual(one.gap(), 6.0)
         self.assertAlmostEqual(one.period(), 15.0)
+        self.assertAlmostEqual(one.first_cycle(), 17.0)
 
     def test_sleep_learned_late_moves_frames_already_fed(self):
         one = fed(heard(2.0, 5, 1.0) + [Heard(9.0, -50)])
@@ -97,7 +145,7 @@ class BoundaryTest(unittest.TestCase):
         self.assertEqual(len(one.wake2()), 1)
         self.assertAlmostEqual(one.gap(), 29.0)
 
-    def test_silence_with_a_serial_port_waits_for_the_latest_end_of_wake_1(self):
+    def test_silence_with_a_serial_port_waits_for_the_latest_end_of_the_wake(self):
         one = fed(heard(2.0, 10, 1.0), wake=30, serial=True)
         # Quiet for 20 s is not the sleep while the port may still speak and
         # the wake could last until 2 + 30 + 5.
@@ -109,6 +157,43 @@ class BoundaryTest(unittest.TestCase):
         one.feed(Heard(45.0, -50))
         self.assertEqual(len(one.wake2()), 1)
 
+    def test_three_wakes_by_sleep_lines_and_by_silence(self):
+        """Two sleep instants split three wakes; without the second the end
+        of wake 2 is found by silence, which a serial port delays to the
+        latest end of that wake."""
+        frames = heard(2.0, 10, 1.0) + heard(22.0, 10, 1.0) + heard(42.0, 3, 1.0)
+        one = fed(frames, tier=TWO_CYCLES, wake=10)
+        one.mark_sleep(11.5)
+        one.mark_sleep(31.5)
+        self.assertEqual(one.wakes(), 3)
+        self.assertEqual([len(one.frames_of(n)) for n in (1, 2, 3)], [10, 10, 3])
+        self.assertAlmostEqual(one.span(2), 9.0)
+        self.assertAlmostEqual(one.gap(2), 11.0)
+        self.assertAlmostEqual(one.period(2), 20.0)
+        self.assertTrue(one.complete())
+        self.assertTrue(one.ended(wake=2))
+        self.assertEqual(one.frames_of(4), [])
+        one = fed(frames, tier=TWO_CYCLES, wake=10)
+        one.mark_sleep(11.5)
+        self.assertEqual(one.wakes(), 3)
+        self.assertEqual(len(one.frames_of(2)), 10)
+        one = fed(heard(2.0, 10, 1.0) + heard(22.0, 10, 1.0) + heard(36.0, 3, 1.0), tier=TWO_CYCLES, wake=10)
+        one.mark_sleep(11.5)
+        # 36 - 31 = 5 s of silence is under the granularity plus the
+        # allowance, so the frames at 36 still belong to wake 2.
+        self.assertEqual(one.wakes(), 2)
+        self.assertFalse(one.complete())
+        self.assertFalse(one.ended(39.0, wake=2))
+        self.assertTrue(one.ended(45.0, wake=2))
+
+    def test_sleep_instants_count_once_and_in_order(self):
+        one = fed(heard(2.0, 3, 1.0))
+        one.mark_sleep(5.0)
+        one.mark_sleep(5.0)
+        one.mark_sleep(4.0)
+        one.mark_sleep(25.0)
+        self.assertEqual(one.sleep_times, [5.0, 25.0])
+
     def test_adaptive_granularity_is_the_largest_gap_in_wake_1(self):
         one = fed([Heard(2.0, -40), Heard(2.1, -40), Heard(4.5, -40), Heard(4.6, -40), Heard(7.0, -40)],
                   granularity=None, serial=False)
@@ -118,15 +203,24 @@ class BoundaryTest(unittest.TestCase):
         one = fed([Heard(2.0, -40), Heard(2.2, -40)], granularity=None, serial=False)
         self.assertEqual(one.granularity(), cycle.MIN_GRANULARITY)
 
-    def test_done_and_complete(self):
-        one = fed(heard(2.0, 3, 1.0), measure=False)
+    def test_done_and_complete_per_tier(self):
+        one = fed(heard(2.0, 3, 1.0), tier=NONE)
+        self.assertFalse(one.measure)
         self.assertTrue(one.done())
         self.assertFalse(one.complete())
-        one = fed(heard(2.0, 3, 1.0), measure=True)
+        one = fed(heard(2.0, 3, 1.0), tier=ONE_CYCLE)
+        self.assertTrue(one.measure)
         self.assertFalse(one.done())
         one.mark_sleep(5.0)
         one.feed(Heard(10.0, -50))
         self.assertTrue(one.done())
+        one = fed(heard(2.0, 3, 1.0) + [Heard(10.0, -50)], tier=TWO_CYCLES, wake=3)
+        one.mark_sleep(5.0)
+        self.assertFalse(one.done())
+        one.mark_sleep(11.0)
+        one.feed(Heard(20.0, -50))
+        self.assertTrue(one.done())
+        self.assertEqual(one.wakes_wanted, 3)
 
 
 class TextTest(unittest.TestCase):
@@ -142,7 +236,7 @@ class TextTest(unittest.TestCase):
         one = fed(heard(6.2, 3, 1.0))
         self.assertEqual(cycle.first_transmission_line(one, False),
                          "first transmission: 6.2 s after reset, over the 5 s boot allowance")
-        one = fed(heard(6.2, 3, 1.0), measure=False)
+        one = fed(heard(6.2, 3, 1.0), tier=NONE)
         self.assertEqual(cycle.first_transmission_line(one, False), "first transmission: 6.2 s after reset")
         one = fed(heard(2.0, 3, 1.0), reset_time=None)
         self.assertIsNone(one.first_transmission())
@@ -154,221 +248,6 @@ class TextTest(unittest.TestCase):
         self.assertEqual(cycle.first_transmission_line(one, False),
                          "first transmission: not measured (the fox was not reset)")
         self.assertEqual(cycle.first_transmission_line(one, True), "first transmission: not measured (--no-reset)")
-
-    def test_median_rssi(self):
-        one = fed([Heard(1.0, -40), Heard(2.0, -44), Heard(3.0, -42), Heard(4.0, None)])
-        self.assertEqual(one.rssi_text(), "median -42 dBm over 3 frames")
-        self.assertEqual(fed([Heard(1.0, -61)]).rssi_text(), "median -61 dBm over 1 frame")
-        self.assertEqual(fed([Heard(1.0, -41), Heard(2.0, -42)]).rssi_text(), "median -42 dBm over 2 frames")
-        self.assertIsNone(fed([]).rssi_text())
-        self.assertIsNone(fed([Heard(1.0, None)]).rssi_text())
-
-
-class RowsTest(unittest.TestCase):
-    """The TIME_TO_WAKE and TIME_TO_SLEEP rows from measured cycles. The Wi-Fi
-    EASY AP block is 15/5 with granularity 1, so a wake passes between 14 and
-    20 s on the air, a period within 19-21 s and a gap of at most 11 s."""
-
-    def setUp(self):
-        self.report = report.Report(out=io.StringIO())
-        self.block = conf.select(frozen_text("wifi_ap_client"), ["AP", "EASY"])
-        self.readback = parse_transcript(read_fixture("transcripts", "wifi_easy_ap.log"))
-
-    def rows(self, one, random_channel=False, block=None, readback=None):
-        cycle.rows(self.report, block or self.block, readback or self.readback, one, random_channel)
-        return {row.value: row for row in self.report.rows}
-
-    def exact_cycle(self, wake, sleep, boot=1.5, granularity=1.0, spacing=0.1024, sleep_line=True):
-        """Frames of a fox that boots in ``boot`` seconds, beacons every
-        ``spacing`` for ``wake`` seconds and keeps its cycle exact."""
-        first1 = boot
-        count = int(wake / spacing) + 1
-        first2 = wake + sleep + boot
-        one = fed(heard(first1, count, spacing) + heard(first2, 3, spacing), granularity=granularity)
-        if sleep_line:
-            one.mark_sleep(first1 + wake + 0.2)
-        return one
-
-    def test_wifi_easy_ap_passes(self):
-        rows = self.rows(self.exact_cycle(15, 5))
-        self.assertEqual(rows["TIME_TO_WAKE"].verdict, "pass")
-        self.assertEqual(rows["TIME_TO_WAKE"].air, "on the air 15.0 s")
-        self.assertEqual(rows["TIME_TO_SLEEP"].verdict, "pass")
-        self.assertEqual(rows["TIME_TO_SLEEP"].air, "off the air 5.0 s")
-        self.assertEqual((rows["TIME_TO_WAKE"].header, rows["TIME_TO_WAKE"].serial), ("15", "15"))
-        self.assertEqual(self.report.exit_code(), report.EXIT_OK)
-
-    def test_span_tolerances(self):
-        one = fed(heard(1.0, 2, 14.0) + [Heard(40.0, -50)])
-        one.mark_sleep(16.0)
-        rows = self.rows(one)
-        self.assertEqual(rows["TIME_TO_WAKE"].verdict, "pass")
-        self.report.rows.clear()
-        one = fed(heard(1.0, 2, 13.9) + [Heard(40.0, -50)])
-        one.mark_sleep(16.0)
-        rows = self.rows(one)
-        self.assertEqual(rows["TIME_TO_WAKE"].verdict, "FAIL")
-        self.assertEqual(rows["TIME_TO_WAKE"].cells(), ["TIME_TO_WAKE", "15", "15", "on the air 13.9 s", "FAIL"])
-        self.report.rows.clear()
-        one = fed(heard(1.0, 2, 20.0) + [Heard(40.0, -50)])
-        one.mark_sleep(22.0)
-        self.assertEqual(self.rows(one)["TIME_TO_WAKE"].verdict, "pass")
-        self.report.rows.clear()
-        one = fed(heard(1.0, 2, 20.1) + [Heard(40.0, -50)])
-        one.mark_sleep(22.0)
-        self.assertEqual(self.rows(one)["TIME_TO_WAKE"].verdict, "FAIL")
-
-    def test_period_three_seconds_off_fails_with_the_three_values(self):
-        one = fed(heard(1.5, 2, 15.0) + [Heard(24.5, -50)])
-        one.mark_sleep(17.0)
-        rows = self.rows(one)
-        self.assertEqual(rows["TIME_TO_WAKE"].verdict, "pass")
-        self.assertEqual(rows["TIME_TO_SLEEP"].cells(),
-                         ["TIME_TO_SLEEP", "5", "5", "off the air 8.0 s, cycle 23.0 s", "FAIL"])
-        self.assertEqual(self.report.exit_code(), report.EXIT_FAIL)
-
-    def test_period_tolerance_is_one_second_or_one_percent(self):
-        one = fed(heard(1.5, 2, 15.0) + [Heard(22.5, -50)])
-        one.mark_sleep(17.0)
-        self.assertEqual(self.rows(one)["TIME_TO_SLEEP"].verdict, "pass")
-        self.report.rows.clear()
-        one = fed(heard(1.5, 2, 15.0) + [Heard(22.6, -50)])
-        one.mark_sleep(17.0)
-        self.assertEqual(self.rows(one)["TIME_TO_SLEEP"].verdict, "FAIL")
-        # A 255/45 fox: one percent of 300 s is 3 s.
-        text = frozen_text("wifi_ap_client").replace("#define TIME_TO_WAKE 30", "#define TIME_TO_WAKE 255")
-        block = conf.select(text, ["AP", "HARD"])
-        readback = parse_transcript(read_fixture("transcripts", "wifi_hard_ap.log").replace(
-            "Time to wake: 30s", "Time to wake: 255s"))
-        self.report.rows.clear()
-        one = fed(heard(2.0, 2, 255.0) + [Heard(304.9, -50)], granularity=1.0)
-        one.mark_sleep(257.5)
-        self.assertEqual(self.rows(one, block=block, readback=readback)["TIME_TO_SLEEP"].verdict, "pass")
-        self.report.rows.clear()
-        one = fed(heard(2.0, 2, 255.0) + [Heard(305.1, -50)], granularity=1.0)
-        one.mark_sleep(257.5)
-        self.assertEqual(self.rows(one, block=block, readback=readback)["TIME_TO_SLEEP"].verdict, "FAIL")
-
-    def test_time_to_sleep_zero_passes_a_quick_reboot_and_fails_a_slow_one(self):
-        block = conf.select(frozen_text("zigbee_coordinator"), ["COORDINATOR", "EASY"])
-        readback = parse_transcript(read_fixture("transcripts", "zigbee_easy.log"))
-        # 300/0, boot 2 s each time: the fox reboots as soon as its wake is
-        # over, so the cycle is 300 s plus the boot and the gap is the boot.
-        one = fed(heard(2.0, 301, 1.0) + [Heard(304.0, -50)], granularity=1.0)
-        one.mark_sleep(302.4)
-        rows = self.rows(one, block=block, readback=readback)
-        self.assertEqual(rows["TIME_TO_WAKE"].air, "on the air 300.0 s")
-        self.assertEqual(rows["TIME_TO_WAKE"].verdict, "pass")
-        self.assertEqual(rows["TIME_TO_SLEEP"].cells(), ["TIME_TO_SLEEP", "0", "0", "off the air 2.0 s", "pass"])
-        self.report.rows.clear()
-        # The same fox booting in 7 s: the gap is over the allowance plus the
-        # granularity.
-        one = fed(heard(7.0, 301, 1.0) + [Heard(314.0, -50)], granularity=1.0)
-        one.mark_sleep(307.4)
-        rows = self.rows(one, block=block, readback=readback)
-        self.assertEqual(rows["TIME_TO_SLEEP"].cells(),
-                         ["TIME_TO_SLEEP", "0", "0", "off the air 7.0 s, cycle 307.0 s", "FAIL"])
-        self.report.rows.clear()
-        # A boot of exactly the allowance plus the granularity still passes.
-        one = fed(heard(6.0, 301, 1.0) + [Heard(312.0, -50)], granularity=1.0)
-        one.mark_sleep(306.4)
-        rows = self.rows(one, block=block, readback=readback)
-        self.assertEqual(rows["TIME_TO_SLEEP"].cells(), ["TIME_TO_SLEEP", "0", "0", "off the air 6.0 s", "pass"])
-
-    def test_zigbee_last_link_status_precedes_the_stop_by_the_interval(self):
-        """A HARD coordinator sends a Link Status every 15 s, so the last one
-        can come up to 15 s before the radio stops; the span may be short by
-        the granularity."""
-        text = frozen_text("zigbee_coordinator").replace("#define TIME_TO_WAKE 300", "#define TIME_TO_WAKE 60")
-        block = conf.select(text, ["COORDINATOR", "HARD"])
-        readback = parse_transcript(read_fixture("transcripts", "zigbee_hard.log").replace(
-            "Time to wake: 300s", "Time to wake: 60s"))
-        # First frame 3 s after reset, Link Status at 3, 18, 33, 48; radio
-        # stops at 63; next wake's first frame at 63 + 3.
-        one = fed(heard(3.0, 4, 15.0) + [Heard(66.0, -50)], granularity=15.0)
-        one.mark_sleep(63.2)
-        rows = self.rows(one, block=block, readback=readback)
-        self.assertEqual(rows["TIME_TO_WAKE"].cells(), ["TIME_TO_WAKE", "60", "60", "on the air 45.0 s", "pass"])
-        self.assertEqual(rows["TIME_TO_SLEEP"].cells(), ["TIME_TO_SLEEP", "0", "0", "off the air 18.0 s", "pass"])
-
-    def test_wake_2_never_comes_is_a_fail(self):
-        one = fed(heard(1.5, 2, 15.0))
-        one.mark_sleep(17.0)
-        rows = self.rows(one)
-        self.assertEqual(rows["TIME_TO_WAKE"].verdict, "pass")
-        self.assertEqual(rows["TIME_TO_SLEEP"].cells(),
-                         ["TIME_TO_SLEEP", "5", "5", "wake 2 not heard before the deadline", "FAIL"])
-        self.assertEqual(self.report.exit_code(), report.EXIT_FAIL)
-
-    def test_random_channel_without_wake_2_channel_on_serial(self):
-        one = fed(heard(1.5, 2, 15.0))
-        one.mark_sleep(17.0)
-        rows = self.rows(one, random_channel=True)
-        self.assertEqual(rows["TIME_TO_SLEEP"].air, "wake 2 not heard: its channel was not seen on serial")
-        self.assertEqual(rows["TIME_TO_SLEEP"].verdict, "FAIL")
-
-    def test_random_channel_retuned_but_nothing_heard(self):
-        one = fed(heard(1.5, 2, 15.0))
-        one.mark_sleep(17.0)
-        one.retuned = (9, 23.4)
-        rows = self.rows(one, random_channel=True)
-        self.assertEqual(rows["TIME_TO_SLEEP"].air, "wake 2 not heard on channel 9 after retuning at +23.4 s")
-        self.assertEqual(rows["TIME_TO_SLEEP"].verdict, "FAIL")
-
-    def test_slow_retune_that_misses_the_period_says_so(self):
-        one = fed(heard(1.5, 2, 15.0) + [Heard(25.0, -50)])
-        one.mark_sleep(17.0)
-        one.retuned = (9, 24.0)
-        rows = self.rows(one, random_channel=True)
-        self.assertEqual(rows["TIME_TO_SLEEP"].air, "off the air 8.5 s, cycle 23.5 s, retuned at +24.0 s")
-        self.assertEqual(rows["TIME_TO_SLEEP"].verdict, "FAIL")
-
-    def test_wake_1_not_over_at_the_deadline(self):
-        clock = FakeClock(0.0)
-        one = fed(heard(1.5, 10, 1.0), clock=clock)
-        clock.now = 12.0
-        rows = self.rows(one)
-        self.assertEqual(rows["TIME_TO_WAKE"].verdict, "unverified")
-        self.assertEqual(rows["TIME_TO_WAKE"].reason, "wake 1 not over before the deadline")
-        self.assertEqual(rows["TIME_TO_SLEEP"].cells(),
-                         ["TIME_TO_SLEEP", "5", "5", "wake 1 had not ended at the deadline", "FAIL"])
-        self.report.rows.clear()
-        # A fox still on the air past TIME_TO_WAKE + 5 has failed its wake.
-        one = fed(heard(1.5, 30, 1.0), clock=clock)
-        clock.now = 31.0
-        rows = self.rows(one)
-        self.assertEqual(rows["TIME_TO_WAKE"].cells(), ["TIME_TO_WAKE", "15", "15", "on the air 29.0 s", "FAIL"])
-
-    def test_late_capture_lowers_the_span_and_period_floors(self):
-        """A Wi-Fi capture starts after the readback, here 3 s after the
-        reset: the first 1.5 s of beacons were never heard, so the span and
-        the period come out 1.5 s short of the firmware's exact figures and
-        still pass."""
-        one = fed(heard(3.0, 2, 13.5) + [Heard(21.5, -50)], listen_time=3.0, radio_time=1.4)
-        one.mark_sleep(16.7)
-        self.assertAlmostEqual(one.late(), 3.0)
-        self.assertTrue(one.heard_at_once())
-        rows = self.rows(one)
-        self.assertEqual(rows["TIME_TO_WAKE"].cells(), ["TIME_TO_WAKE", "15", "15", "on the air 13.5 s", "pass"])
-        self.assertEqual(rows["TIME_TO_SLEEP"].cells(), ["TIME_TO_SLEEP", "5", "5", "off the air 5.0 s", "pass"])
-        self.report.rows.clear()
-        # Without the late start the same numbers would fail.
-        one = fed(heard(3.0, 2, 13.5) + [Heard(21.5, -50)])
-        one.mark_sleep(16.7)
-        rows = self.rows(one)
-        self.assertEqual(rows["TIME_TO_WAKE"].verdict, "FAIL")
-        self.assertEqual(rows["TIME_TO_SLEEP"].verdict, "FAIL")
-        self.report.rows.clear()
-        # Short by more than the late start is still a FAIL.
-        one = fed(heard(3.0, 2, 10.9) + [Heard(21.5, -50)], listen_time=3.0)
-        one.mark_sleep(16.7)
-        self.assertEqual(self.rows(one)["TIME_TO_WAKE"].verdict, "FAIL")
-
-    def test_fox_heard_after_the_capture_began_is_not_late(self):
-        one = fed(heard(4.5, 2, 15.0) + [Heard(24.5, -50)], listen_time=3.0)
-        self.assertFalse(one.heard_at_once())
-        self.assertAlmostEqual(one.late(), 3.0)
-        self.assertEqual(cycle.first_transmission_line(one, False), "first transmission: 4.5 s after reset")
 
     def test_first_transmission_when_the_capture_began_late(self):
         one = fed(heard(3.1, 3, 1.0), listen_time=3.0, radio_time=1.4)
@@ -382,39 +261,438 @@ class RowsTest(unittest.TestCase):
         self.assertEqual(cycle.first_transmission_line(one, False),
                          "first transmission: by 7.1 s after reset (the sniffer started listening at 7.0 s; "
                          "the radio was up at 6.2 s by serial), over the 5 s boot allowance")
-        one = fed(heard(7.1, 3, 1.0), listen_time=7.0, radio_time=6.2, measure=False)
+        one = fed(heard(7.1, 3, 1.0), listen_time=7.0, radio_time=6.2, tier=NONE)
         self.assertNotIn("allowance", cycle.first_transmission_line(one, False))
 
+    def test_fox_heard_after_the_capture_began_is_not_late(self):
+        one = fed(heard(4.5, 2, 15.0) + [Heard(24.5, -50)], listen_time=3.0)
+        self.assertFalse(one.heard_at_once())
+        self.assertAlmostEqual(one.late(), 3.0)
+        self.assertAlmostEqual(one.boot_bound(), 7.5)
+        self.assertEqual(cycle.first_transmission_line(one, False), "first transmission: 4.5 s after reset")
+
+    def test_boot_bound_is_the_first_transmission_plus_the_late_start(self):
+        self.assertAlmostEqual(fed(heard(2.3, 3, 1.0)).boot_bound(), 2.3)
+        self.assertAlmostEqual(fed(heard(15.0, 3, 1.0), listen_time=15.0).boot_bound(), 30.0)
+        self.assertIsNone(fed([]).boot_bound())
+        self.assertIsNone(fed(heard(2.0, 3, 1.0), reset_time=None).boot_bound())
+
+    def test_first_wake_line(self):
+        """The owner's Zigbee first boot: heard from 15 s, on the air 285 s,
+        back 1.8 s after its last frame, which is 301.8 s after the reset."""
+        one = fed(heard(15.0, 286, 1.0) + [Heard(301.8, -50)], tier=TWO_CYCLES, listen_time=15.0)
+        one.mark_sleep(300.4)
+        self.assertEqual(cycle.first_wake_line(one),
+                         "first wake: on the air 285.0 s, then off the air 1.8 s, cycle time 301.8 s")
+        one = fed(heard(15.0, 286, 1.0), tier=TWO_CYCLES, listen_time=15.0)
+        self.assertEqual(cycle.first_wake_line(one), "first wake: on the air 285.0 s")
+        self.assertIsNone(cycle.first_wake_line(fed([], tier=TWO_CYCLES)))
+
+    def test_median_rssi(self):
+        one = fed([Heard(1.0, -40), Heard(2.0, -44), Heard(3.0, -42), Heard(4.0, None)])
+        self.assertEqual(one.rssi_text(), "median -42 dBm over 3 frames")
+        self.assertEqual(fed([Heard(1.0, -61)]).rssi_text(), "median -61 dBm over 1 frame")
+        self.assertEqual(fed([Heard(1.0, -41), Heard(2.0, -42)]).rssi_text(), "median -42 dBm over 2 frames")
+        self.assertIsNone(fed([]).rssi_text())
+        self.assertIsNone(fed([Heard(1.0, None)]).rssi_text())
+
+
+class ExactRowsTest(unittest.TestCase):
+    """The two-cycle tier: TIME_TO_WAKE from wake 2's span, TIME_TO_SLEEP from
+    the gap to wake 3, CYCLE_TIME from the period between them. The Classic
+    HARD block is 30/30 with granularity 3, so wake 2 passes between 27 and
+    35 s on the air, the gap between 22 and 38 s and the period within 59-61 s."""
+
+    def setUp(self):
+        self.report = report.Report(out=io.StringIO())
+        self.block, self.readback = block_and_readback("classic_discoverable", ["HARD"], "classic_hard.log")
+
+    def rows(self, one, random_channel=False, block=None, readback=None, last_cycle=None):
+        self.report.rows.clear()
+        cycle.rows(self.report, block or self.block, readback or self.readback, one, random_channel, last_cycle)
+        return {row.value: row for row in self.report.rows}
+
+    def classic(self, first2=62.0, span2=29.0, first3=122.0, granularity=3.0, sleeps=(32.5, 92.5)):
+        """A 30/30 fox heard from 2 s after the reset, with wake 2 and wake 3
+        where the arguments put them."""
+        frames = heard(2.0, 15, 2.0) + heard(first2, int(span2) + 1, 1.0) + heard(first3, 3, 1.0)
+        one = fed(frames, tier=TWO_CYCLES, granularity=granularity, wake=30)
+        for when in sleeps:
+            one.mark_sleep(when)
+        return one
+
+    def test_healthy_30_30_fox_passes_all_three(self):
+        rows = self.rows(self.classic())
+        self.assertEqual(rows["TIME_TO_WAKE"].cells(), ["TIME_TO_WAKE", "30", "30", "on the air 29.0 s", "pass"])
+        self.assertEqual(rows["TIME_TO_SLEEP"].cells(), ["TIME_TO_SLEEP", "30", "30", "off the air 31.0 s", "pass"])
+        self.assertEqual(rows["CYCLE_TIME"].cells(), ["CYCLE_TIME", "60", "-", "60.0 s", "pass"])
+        self.assertEqual([row.value for row in self.report.rows], ["TIME_TO_WAKE", "TIME_TO_SLEEP", "CYCLE_TIME"])
+        self.assertEqual(self.report.exit_code(), report.EXIT_OK)
+
+    def test_cycle_time_serial_column_is_the_last_cycle_figure(self):
+        rows = self.rows(self.classic(), last_cycle=60.0)
+        self.assertEqual(rows["CYCLE_TIME"].cells(), ["CYCLE_TIME", "60", "60.0", "60.0 s", "pass"])
+
+    def test_owners_zigbee_figures_pass_with_time_to_sleep_0(self):
+        """Wake 1 heard from 15 s for 285 s, back after 1.8 s; wake 2 on the
+        air the full 300 s; wake 3 after a 2.1 s reboot: the period runs
+        302.1 s, within TIME_TO_WAKE + BOOT_ALLOWANCE + tolerance."""
+        block, readback = block_and_readback("zigbee_coordinator", ["COORDINATOR", "EASY"], "zigbee_easy.log")
+        frames = heard(15.0, 286, 1.0) + heard(301.8, 301, 1.0) + heard(603.9, 2, 1.0)
+        one = fed(frames, tier=TWO_CYCLES, listen_time=15.0, wake=300)
+        one.mark_sleep(300.4)
+        one.mark_sleep(602.1)
+        rows = self.rows(one, block=block, readback=readback)
+        self.assertEqual(rows["TIME_TO_WAKE"].cells(), ["TIME_TO_WAKE", "300", "300", "on the air 300.0 s", "pass"])
+        self.assertEqual(rows["TIME_TO_SLEEP"].cells(), ["TIME_TO_SLEEP", "0", "0", "off the air 2.1 s", "pass"])
+        self.assertEqual(rows["CYCLE_TIME"].cells(), ["CYCLE_TIME", "300", "-", "302.1 s", "pass"])
+        self.assertEqual(cycle.first_wake_line(one),
+                         "first wake: on the air 285.0 s, then off the air 1.8 s, cycle time 301.8 s")
+        # The same fox rebooting in 9 s is off the air past 0 + 5 + 1 and
+        # runs its cycle past 300 + 5 + 3.
+        frames = heard(15.0, 286, 1.0) + heard(301.8, 301, 1.0) + heard(610.9, 2, 1.0)
+        one = fed(frames, tier=TWO_CYCLES, listen_time=15.0, wake=300)
+        one.mark_sleep(300.4)
+        one.mark_sleep(602.1)
+        rows = self.rows(one, block=block, readback=readback)
+        self.assertEqual(rows["TIME_TO_SLEEP"].cells(), ["TIME_TO_SLEEP", "0", "0", "off the air 9.1 s", "FAIL"])
+        self.assertEqual(rows["CYCLE_TIME"].cells(), ["CYCLE_TIME", "300", "-", "309.1 s", "FAIL"])
+
+    def test_span_tolerances(self):
+        self.assertEqual(self.rows(self.classic(span2=27.0))["TIME_TO_WAKE"].verdict, "pass")
+        rows = self.rows(self.classic(span2=26.0))
+        self.assertEqual(rows["TIME_TO_WAKE"].cells(), ["TIME_TO_WAKE", "30", "30", "on the air 26.0 s", "FAIL"])
+        self.assertEqual(self.rows(self.classic(span2=35.0, sleeps=(32.5, 97.5)))["TIME_TO_WAKE"].verdict, "pass")
+        self.assertEqual(self.rows(self.classic(span2=36.0, sleeps=(32.5, 98.5)))["TIME_TO_WAKE"].verdict, "FAIL")
+
+    def test_period_four_seconds_off_fails_cycle_time_with_the_number(self):
+        rows = self.rows(self.classic(first3=126.0))
+        self.assertEqual(rows["TIME_TO_WAKE"].verdict, "pass")
+        self.assertEqual(rows["TIME_TO_SLEEP"].cells(), ["TIME_TO_SLEEP", "30", "30", "off the air 35.0 s", "pass"])
+        self.assertEqual(rows["CYCLE_TIME"].cells(), ["CYCLE_TIME", "60", "-", "64.0 s", "FAIL"])
+        self.assertEqual(self.report.exit_code(), report.EXIT_FAIL)
+        rows = self.rows(self.classic(first3=118.0))
+        self.assertEqual(rows["CYCLE_TIME"].cells(), ["CYCLE_TIME", "60", "-", "56.0 s", "FAIL"])
+
+    def test_period_tolerance_is_one_second_or_one_percent(self):
+        self.assertEqual(self.rows(self.classic(first3=123.0))["CYCLE_TIME"].verdict, "pass")
+        self.assertEqual(self.rows(self.classic(first3=123.1))["CYCLE_TIME"].verdict, "FAIL")
+        # A 255/45 fox: one percent of 300 s is 3 s.
+        block, readback = block_and_readback("wifi_ap_client", ["AP", "HARD"], "wifi_hard_ap.log",
+                                             [("TIME_TO_WAKE 30", "TIME_TO_WAKE 255"), ("Time to wake: 30s", "Time to wake: 255s")])
+        frames = heard(2.0, 2, 255.0) + heard(302.0, 2, 255.0) + [Heard(604.9, -50)]
+        one = fed(frames, tier=TWO_CYCLES, wake=255)
+        one.mark_sleep(257.5)
+        one.mark_sleep(557.5)
+        rows = self.rows(one, block=block, readback=readback)
+        self.assertEqual(rows["CYCLE_TIME"].cells(), ["CYCLE_TIME", "300", "-", "302.9 s", "pass"])
+        self.assertEqual(rows["TIME_TO_SLEEP"].cells(), ["TIME_TO_SLEEP", "45", "45", "off the air 47.9 s", "pass"])
+        frames = heard(2.0, 2, 255.0) + heard(302.0, 2, 255.0) + [Heard(605.1, -50)]
+        one = fed(frames, tier=TWO_CYCLES, wake=255)
+        one.mark_sleep(257.5)
+        one.mark_sleep(557.5)
+        self.assertEqual(self.rows(one, block=block, readback=readback)["CYCLE_TIME"].verdict, "FAIL")
+
+    def test_sleeping_fox_heard_during_its_sleep_fails_time_to_sleep(self):
+        """A 30/30 fox back on the air 20 s after its last frame slept less
+        than TIME_TO_SLEEP - BOOT_ALLOWANCE - g; the period is then short
+        too, and CYCLE_TIME says by how much."""
+        one = self.classic(first3=111.0)
+        rows = self.rows(one)
+        self.assertEqual(rows["TIME_TO_SLEEP"].cells(), ["TIME_TO_SLEEP", "30", "30", "off the air 20.0 s", "FAIL"])
+        self.assertEqual(rows["CYCLE_TIME"].cells(), ["CYCLE_TIME", "60", "-", "49.0 s", "FAIL"])
+        self.assertEqual(self.rows(self.classic(first3=113.0))["TIME_TO_SLEEP"].verdict, "pass")
+        # A gap over TIME_TO_SLEEP + BOOT_ALLOWANCE + g fails too.
+        self.assertEqual(self.rows(self.classic(first3=130.0))["TIME_TO_SLEEP"].cells()[3:],
+                         ["off the air 39.0 s", "FAIL"])
+        self.assertEqual(self.rows(self.classic(first3=129.0))["TIME_TO_SLEEP"].verdict, "pass")
+
+    def test_time_to_sleep_0_has_no_lower_bound(self):
+        block, readback = block_and_readback("zigbee_coordinator", ["COORDINATOR", "EASY"], "zigbee_easy.log")
+        frames = heard(2.0, 301, 1.0) + heard(304.0, 301, 1.0) + [Heard(606.0, -50)]
+        one = fed(frames, tier=TWO_CYCLES, wake=300)
+        one.mark_sleep(302.4)
+        one.mark_sleep(604.4)
+        rows = self.rows(one, block=block, readback=readback)
+        self.assertEqual(rows["TIME_TO_SLEEP"].cells(), ["TIME_TO_SLEEP", "0", "0", "off the air 2.0 s", "pass"])
+        self.assertEqual(rows["CYCLE_TIME"].cells(), ["CYCLE_TIME", "300", "-", "302.0 s", "pass"])
+
+    def test_zigbee_last_link_status_precedes_the_stop_by_the_interval(self):
+        """A HARD coordinator sends a Link Status every 15 s, so the last one
+        can come up to 15 s before the radio stops; wake 2's span may be short
+        by the granularity."""
+        block, readback = block_and_readback("zigbee_coordinator", ["COORDINATOR", "HARD"], "zigbee_hard.log",
+                                             [("TIME_TO_WAKE 300", "TIME_TO_WAKE 60"), ("Time to wake: 300s", "Time to wake: 60s")])
+        # Wake 2 from 66 s: Link Status at 66, 81, 96, 111; radio stops at
+        # 126; wake 3's first frame at 126 + 3.
+        frames = heard(3.0, 4, 15.0) + heard(66.0, 4, 15.0) + [Heard(129.0, -50)]
+        one = fed(frames, tier=TWO_CYCLES, granularity=15.0, wake=60)
+        one.mark_sleep(63.2)
+        one.mark_sleep(126.2)
+        rows = self.rows(one, block=block, readback=readback)
+        self.assertEqual(rows["TIME_TO_WAKE"].cells(), ["TIME_TO_WAKE", "60", "60", "on the air 45.0 s", "pass"])
+        self.assertEqual(rows["TIME_TO_SLEEP"].cells(), ["TIME_TO_SLEEP", "0", "0", "off the air 18.0 s", "pass"])
+        self.assertEqual(rows["CYCLE_TIME"].cells(), ["CYCLE_TIME", "60", "-", "63.0 s", "pass"])
+
+    def test_wake_3_never_comes_fails_time_to_sleep_and_cycle_time(self):
+        one = fed(heard(2.0, 15, 2.0) + heard(62.0, 30, 1.0), tier=TWO_CYCLES, granularity=3.0, wake=30)
+        one.mark_sleep(32.5)
+        one.mark_sleep(92.5)
+        rows = self.rows(one)
+        self.assertEqual(rows["TIME_TO_WAKE"].cells(), ["TIME_TO_WAKE", "30", "30", "on the air 29.0 s", "pass"])
+        self.assertEqual(rows["TIME_TO_SLEEP"].cells(),
+                         ["TIME_TO_SLEEP", "30", "30", "wake 3 not heard before the deadline", "FAIL"])
+        self.assertEqual(rows["CYCLE_TIME"].cells(), ["CYCLE_TIME", "60", "-", "wake 3 not heard before the deadline", "FAIL"])
+        self.assertEqual(self.report.exit_code(), report.EXIT_FAIL)
+
+    def test_wake_2_never_comes_fails_all_three(self):
+        one = fed(heard(2.0, 15, 2.0), tier=TWO_CYCLES, granularity=3.0, wake=30)
+        one.mark_sleep(32.5)
+        rows = self.rows(one)
+        for value in ("TIME_TO_WAKE", "TIME_TO_SLEEP", "CYCLE_TIME"):
+            self.assertEqual(rows[value].air, "wake 2 not heard before the deadline", value)
+            self.assertEqual(rows[value].verdict, "FAIL", value)
+
+    def test_random_channel_wake_3_texts(self):
+        one = fed(heard(2.0, 15, 2.0) + heard(62.0, 30, 1.0), tier=TWO_CYCLES, granularity=3.0, wake=30)
+        one.mark_sleep(32.5)
+        one.mark_sleep(92.5)
+        one.retunes[2] = (9, 61.0)
+        rows = self.rows(one, random_channel=True)
+        self.assertEqual(rows["TIME_TO_SLEEP"].air, "wake 3 not heard: its channel was not seen on serial")
+        self.assertEqual(rows["CYCLE_TIME"].air, "wake 3 not heard: its channel was not seen on serial")
+        one.retunes[3] = (4, 123.4)
+        rows = self.rows(one, random_channel=True)
+        self.assertEqual(rows["TIME_TO_SLEEP"].air, "wake 3 not heard on channel 4 after retuning at +123.4 s")
+        self.assertEqual(rows["CYCLE_TIME"].verdict, "FAIL")
+        # A retune slow enough to miss the period says so.
+        one.feed(Heard(126.0, -50))
+        rows = self.rows(one, random_channel=True)
+        self.assertEqual(rows["TIME_TO_SLEEP"].cells()[3:], ["off the air 35.0 s", "pass"])
+        self.assertEqual(rows["CYCLE_TIME"].cells()[3:], ["64.0 s, retuned at +123.4 s", "FAIL"])
+
+    def test_wake_2_not_over_at_the_deadline(self):
+        clock = FakeClock(0.0)
+        one = fed(heard(2.0, 15, 2.0) + heard(62.0, 10, 1.0), tier=TWO_CYCLES, granularity=3.0, wake=30, clock=clock)
+        one.mark_sleep(32.5)
+        clock.now = 73.0
+        rows = self.rows(one)
+        self.assertEqual(rows["TIME_TO_WAKE"].cells()[3:], ["-", "unverified: wake 2 not over before the deadline"])
+        self.assertEqual(rows["TIME_TO_SLEEP"].cells()[3:], ["wake 2 had not ended at the deadline", "FAIL"])
+        self.assertEqual(rows["CYCLE_TIME"].cells()[3:], ["wake 2 had not ended at the deadline", "FAIL"])
+        # A fox still on the air past TIME_TO_WAKE + 5 has failed its wake.
+        one = fed(heard(2.0, 15, 2.0) + heard(62.0, 40, 1.0), tier=TWO_CYCLES, granularity=3.0, wake=30, clock=clock)
+        one.mark_sleep(32.5)
+        clock.now = 102.0
+        rows = self.rows(one)
+        self.assertEqual(rows["TIME_TO_WAKE"].cells(), ["TIME_TO_WAKE", "30", "30", "on the air 39.0 s", "FAIL"])
+
     def test_no_frame_from_the_fox(self):
-        rows = self.rows(fed([]))
-        self.assertEqual(rows["TIME_TO_WAKE"].cells(), ["TIME_TO_WAKE", "15", "15", "-", "unverified: no frame from the fox"])
-        self.assertEqual(rows["TIME_TO_SLEEP"].cells(), ["TIME_TO_SLEEP", "5", "5", "-", "unverified: no frame from the fox"])
+        rows = self.rows(fed([], tier=TWO_CYCLES))
+        for value in ("TIME_TO_WAKE", "TIME_TO_SLEEP", "CYCLE_TIME"):
+            self.assertEqual(rows[value].cells()[3:], ["-", "unverified: no frame from the fox"], value)
+        self.assertEqual(rows["CYCLE_TIME"].header, "60")
 
     def test_serial_disagreement_is_a_fail_before_the_air(self):
-        readback = parse_transcript(read_fixture("transcripts", "wifi_easy_ap.log").replace(
-            "Time to wake: 15s", "Time to wake: 20s"))
-        rows = self.rows(self.exact_cycle(15, 5), readback=readback)
+        block, readback = block_and_readback("classic_discoverable", ["HARD"], "classic_hard.log",
+                                             [("Time to wake: 30s", "Time to wake: 20s")])
+        rows = self.rows(self.classic(), block=block, readback=readback)
+        self.assertEqual(rows["TIME_TO_WAKE"].cells(), ["TIME_TO_WAKE", "30", "20", "-", "FAIL"])
+        self.assertEqual(rows["TIME_TO_SLEEP"].verdict, "pass")
+        self.assertEqual(rows["CYCLE_TIME"].verdict, "pass")
+
+
+class FirstBootRowsTest(unittest.TestCase):
+    """The one-cycle tier: the three rows judge wake 1 and the gap to wake 2
+    with the first-boot tolerances, and say so with ``first boot:``."""
+
+    def setUp(self):
+        self.report = report.Report(out=io.StringIO())
+        self.classic_block, self.classic_readback = block_and_readback("classic_discoverable", ["HARD"],
+                                                                       "classic_hard.log")
+        self.zigbee_block, self.zigbee_readback = block_and_readback("zigbee_coordinator", ["COORDINATOR", "EASY"],
+                                                                     "zigbee_easy.log")
+        self.wifi_block, self.wifi_readback = block_and_readback("wifi_ap_client", ["AP", "EASY"], "wifi_easy_ap.log")
+
+    def rows(self, one, block, readback, random_channel=False, last_cycle=None):
+        self.report.rows.clear()
+        cycle.rows(self.report, block, readback, one, random_channel, last_cycle)
+        return {row.value: row for row in self.report.rows}
+
+    def test_owners_zigbee_first_boot_passes_all_three(self):
+        """Reset at 0, the capture listening from 15 s and hearing the fox at
+        once, on the air 285 s, back 1.8 s after the last frame: the span may
+        be short by the 30 s boot bound plus the granularity, the gap of a
+        TIME_TO_SLEEP 0 fox has no lower bound, and the 301.8 s first cycle is
+        under 300 + 30 + 5 + 3."""
+        one = fed(heard(15.0, 286, 1.0) + [Heard(301.8, -50)], listen_time=15.0, wake=300)
+        one.mark_sleep(300.4)
+        self.assertAlmostEqual(one.boot_bound(), 30.0)
+        rows = self.rows(one, self.zigbee_block, self.zigbee_readback)
+        self.assertEqual(rows["TIME_TO_WAKE"].cells(),
+                         ["TIME_TO_WAKE", "300", "300", "first boot: on the air 285.0 s", "pass"])
+        self.assertEqual(rows["TIME_TO_SLEEP"].cells(),
+                         ["TIME_TO_SLEEP", "0", "0", "first boot: off the air 1.8 s", "pass"])
+        self.assertEqual(rows["CYCLE_TIME"].cells(), ["CYCLE_TIME", "300", "-", "first boot: 301.8 s", "pass"])
+        self.assertEqual(self.report.exit_code(), report.EXIT_OK)
+        rows = self.rows(one, self.zigbee_block, self.zigbee_readback, last_cycle=301.6)
+        self.assertEqual(rows["CYCLE_TIME"].serial, "301.6")
+
+    def test_classic_30_30_with_a_3_s_boot_passes(self):
+        """The sleep absorbed the boot, so the first cycle is exactly 60 s
+        from the reset to wake 2's first frame when wake 2 is heard at once."""
+        one = fed(heard(3.0, 28, 1.0) + [Heard(60.0, -50)], granularity=3.0, wake=30)
+        one.mark_sleep(30.5)
+        rows = self.rows(one, self.classic_block, self.classic_readback)
+        self.assertEqual(rows["TIME_TO_WAKE"].cells(), ["TIME_TO_WAKE", "30", "30", "first boot: on the air 27.0 s", "pass"])
+        self.assertEqual(rows["TIME_TO_SLEEP"].cells(), ["TIME_TO_SLEEP", "30", "30", "first boot: off the air 30.0 s", "pass"])
+        self.assertEqual(rows["CYCLE_TIME"].cells(), ["CYCLE_TIME", "60", "-", "first boot: 60.0 s", "pass"])
+
+    def test_classic_first_cycle_includes_wake_2_boot(self):
+        """The firmware's cycle ends at wake 2's boot and the first frame
+        comes its own boot later, so a 63 s first cycle of a fox that boots
+        in 3 s passes; 70 s is past 60 + 5 + 1 and fails."""
+        one = fed(heard(3.0, 28, 1.0) + [Heard(63.0, -50)], granularity=3.0, wake=30)
+        one.mark_sleep(30.5)
+        rows = self.rows(one, self.classic_block, self.classic_readback)
+        self.assertEqual(rows["CYCLE_TIME"].cells(), ["CYCLE_TIME", "60", "-", "first boot: 63.0 s", "pass"])
+        self.assertEqual(rows["TIME_TO_SLEEP"].cells()[3:], ["first boot: off the air 33.0 s", "pass"])
+        one = fed(heard(3.0, 28, 1.0) + [Heard(70.0, -50)], granularity=3.0, wake=30)
+        one.mark_sleep(30.5)
+        rows = self.rows(one, self.classic_block, self.classic_readback)
+        self.assertEqual(rows["CYCLE_TIME"].cells(), ["CYCLE_TIME", "60", "-", "first boot: 70.0 s", "FAIL"])
+        self.assertEqual(rows["TIME_TO_SLEEP"].cells()[3:], ["first boot: off the air 40.0 s", "FAIL"])
+        self.assertEqual(self.report.exit_code(), report.EXIT_FAIL)
+
+    def test_classic_heard_10_s_short_fails_time_to_wake(self):
+        one = fed(heard(3.0, 18, 1.0) + [Heard(60.0, -50)], granularity=3.0, wake=30)
+        one.mark_sleep(30.5)
+        rows = self.rows(one, self.classic_block, self.classic_readback)
+        self.assertEqual(rows["TIME_TO_WAKE"].cells(), ["TIME_TO_WAKE", "30", "30", "first boot: on the air 17.0 s", "FAIL"])
+        self.assertEqual(rows["CYCLE_TIME"].verdict, "pass")
+        # Short by exactly the boot bound plus the granularity still passes.
+        one = fed(heard(3.0, 25, 1.0) + [Heard(60.0, -50)], granularity=3.0, wake=30)
+        one.mark_sleep(30.5)
+        self.assertEqual(self.rows(one, self.classic_block, self.classic_readback)["TIME_TO_WAKE"].verdict, "pass")
+        # Never long: past TIME_TO_WAKE + 5 is a FAIL.
+        one = fed(heard(3.0, 36, 1.0) + [Heard(60.0, -50)], granularity=3.0, wake=30)
+        one.mark_sleep(38.5)
+        rows = self.rows(one, self.classic_block, self.classic_readback)
+        self.assertEqual(rows["TIME_TO_WAKE"].cells()[3:], ["first boot: on the air 35.0 s", "pass"])
+        one = fed(heard(3.0, 37, 1.0) + [Heard(60.0, -50)], granularity=3.0, wake=30)
+        one.mark_sleep(39.5)
+        rows = self.rows(one, self.classic_block, self.classic_readback)
+        self.assertEqual(rows["TIME_TO_WAKE"].cells()[3:], ["first boot: on the air 36.0 s", "FAIL"])
+
+    def test_classic_heard_during_its_first_sleep_fails_time_to_sleep(self):
+        """A 30/30 fox back 15 s after its last frame: under TIME_TO_SLEEP
+        minus the boot bound, the allowance and the granularity (30 - 3 - 5 - 3)."""
+        one = fed(heard(3.0, 28, 1.0) + [Heard(45.0, -50)], granularity=3.0, wake=30)
+        one.mark_sleep(30.5)
+        rows = self.rows(one, self.classic_block, self.classic_readback)
+        self.assertEqual(rows["TIME_TO_SLEEP"].cells()[3:], ["first boot: off the air 15.0 s", "FAIL"])
+        one = fed(heard(3.0, 28, 1.0) + [Heard(49.0, -50)], granularity=3.0, wake=30)
+        one.mark_sleep(30.5)
+        self.assertEqual(self.rows(one, self.classic_block, self.classic_readback)["TIME_TO_SLEEP"].verdict, "pass")
+
+    def test_wifi_15_5_with_a_3_s_boot_absorbed_by_the_sleep_passes(self):
+        one = fed(heard(3.0, 13, 1.0) + [Heard(20.0, -50)], wake=15)
+        one.mark_sleep(15.3)
+        self.assertAlmostEqual(one.boot_bound(), 3.0)
+        rows = self.rows(one, self.wifi_block, self.wifi_readback)
+        self.assertEqual(rows["TIME_TO_WAKE"].cells()[3:], ["first boot: on the air 12.0 s", "pass"])
+        self.assertEqual(rows["TIME_TO_SLEEP"].cells()[3:], ["first boot: off the air 5.0 s", "pass"])
+        self.assertEqual(rows["CYCLE_TIME"].cells(), ["CYCLE_TIME", "20", "-", "first boot: 20.0 s", "pass"])
+
+    def test_late_wifi_capture_hears_the_first_wake_short(self):
+        """A Wi-Fi capture that began 3 s after the reset and heard the fox
+        at once: the first 1.5 s of beacons went unheard, and the bound of
+        3 + 3 s covers it."""
+        one = fed(heard(3.0, 2, 13.5) + [Heard(21.5, -50)], listen_time=3.0, radio_time=1.4, wake=15)
+        one.mark_sleep(16.7)
+        self.assertTrue(one.heard_at_once())
+        self.assertAlmostEqual(one.boot_bound(), 6.0)
+        rows = self.rows(one, self.wifi_block, self.wifi_readback)
+        self.assertEqual(rows["TIME_TO_WAKE"].cells()[3:], ["first boot: on the air 13.5 s", "pass"])
+        self.assertEqual(rows["TIME_TO_SLEEP"].cells()[3:], ["first boot: off the air 5.0 s", "pass"])
+        self.assertEqual(rows["CYCLE_TIME"].cells()[3:], ["first boot: 21.5 s", "pass"])
+        # Short by more than the bound is still a FAIL.
+        one = fed(heard(3.0, 2, 7.9) + [Heard(21.5, -50)], listen_time=3.0, wake=15)
+        one.mark_sleep(16.7)
+        self.assertEqual(self.rows(one, self.wifi_block, self.wifi_readback)["TIME_TO_WAKE"].verdict, "FAIL")
+
+    def test_wake_2_never_comes_fails_time_to_sleep_and_cycle_time(self):
+        one = fed(heard(1.5, 2, 15.0), wake=15)
+        one.mark_sleep(17.0)
+        rows = self.rows(one, self.wifi_block, self.wifi_readback)
+        self.assertEqual(rows["TIME_TO_WAKE"].cells()[3:], ["first boot: on the air 15.0 s", "pass"])
+        self.assertEqual(rows["TIME_TO_SLEEP"].cells(),
+                         ["TIME_TO_SLEEP", "5", "5", "wake 2 not heard before the deadline", "FAIL"])
+        self.assertEqual(rows["CYCLE_TIME"].cells(), ["CYCLE_TIME", "20", "-", "wake 2 not heard before the deadline", "FAIL"])
+        self.assertEqual(self.report.exit_code(), report.EXIT_FAIL)
+
+    def test_random_channel_wake_2_texts(self):
+        one = fed(heard(1.5, 2, 15.0), wake=15)
+        one.mark_sleep(17.0)
+        rows = self.rows(one, self.wifi_block, self.wifi_readback, random_channel=True)
+        self.assertEqual(rows["TIME_TO_SLEEP"].air, "wake 2 not heard: its channel was not seen on serial")
+        self.assertEqual(rows["CYCLE_TIME"].air, "wake 2 not heard: its channel was not seen on serial")
+        one.retunes[2] = (9, 23.4)
+        rows = self.rows(one, self.wifi_block, self.wifi_readback, random_channel=True)
+        self.assertEqual(rows["TIME_TO_SLEEP"].air, "wake 2 not heard on channel 9 after retuning at +23.4 s")
+        self.assertEqual(rows["TIME_TO_SLEEP"].verdict, "FAIL")
+        # A slow retune that pushed the first cycle past its bound says so.
+        one.feed(Heard(30.0, -50))
+        rows = self.rows(one, self.wifi_block, self.wifi_readback, random_channel=True)
+        self.assertEqual(rows["TIME_TO_SLEEP"].cells()[3:], ["first boot: off the air 13.5 s, retuned at +23.4 s", "FAIL"])
+        self.assertEqual(rows["CYCLE_TIME"].cells()[3:], ["first boot: 30.0 s, retuned at +23.4 s", "FAIL"])
+
+    def test_wake_1_not_over_at_the_deadline(self):
+        clock = FakeClock(0.0)
+        one = fed(heard(1.5, 10, 1.0), clock=clock, wake=15)
+        clock.now = 12.0
+        rows = self.rows(one, self.wifi_block, self.wifi_readback)
+        self.assertEqual(rows["TIME_TO_WAKE"].verdict, "unverified")
+        self.assertEqual(rows["TIME_TO_WAKE"].reason, "wake 1 not over before the deadline")
+        self.assertEqual(rows["TIME_TO_SLEEP"].cells()[3:], ["wake 1 had not ended at the deadline", "FAIL"])
+        self.assertEqual(rows["CYCLE_TIME"].cells()[3:], ["wake 1 had not ended at the deadline", "FAIL"])
+        one = fed(heard(1.5, 30, 1.0), clock=clock, wake=15)
+        clock.now = 31.0
+        rows = self.rows(one, self.wifi_block, self.wifi_readback)
+        self.assertEqual(rows["TIME_TO_WAKE"].cells(), ["TIME_TO_WAKE", "15", "15", "first boot: on the air 29.0 s", "FAIL"])
+
+    def test_no_frame_and_serial_disagreement(self):
+        rows = self.rows(fed([], wake=15), self.wifi_block, self.wifi_readback)
+        for value in ("TIME_TO_WAKE", "TIME_TO_SLEEP", "CYCLE_TIME"):
+            self.assertEqual(rows[value].cells()[3:], ["-", "unverified: no frame from the fox"], value)
+        block, readback = block_and_readback("wifi_ap_client", ["AP", "EASY"], "wifi_easy_ap.log",
+                                             [("Time to wake: 15s", "Time to wake: 20s")])
+        one = fed(heard(3.0, 13, 1.0) + [Heard(20.0, -50)], wake=15)
+        one.mark_sleep(15.3)
+        rows = self.rows(one, block, readback)
         self.assertEqual(rows["TIME_TO_WAKE"].cells(), ["TIME_TO_WAKE", "15", "20", "-", "FAIL"])
         self.assertEqual(rows["TIME_TO_SLEEP"].verdict, "pass")
+        self.assertEqual(rows["CYCLE_TIME"].verdict, "pass")
 
 
 class ListenTest(unittest.TestCase):
-    """The capture loop: frames fed, the follower polled, the retune made once."""
+    """The capture loop: frames fed, the follower polled, the retune made once
+    per wake, the loop ending as soon as the tier's last wake is heard."""
 
     class Follower:
-        def __init__(self, boundary=None, channel=None):
-            self._boundary = boundary
-            self._channel = channel
+        def __init__(self, boundaries=(), channels=None):
+            self._boundaries = list(boundaries)
+            self._channels = channels or {}
             self.polls = 0
 
         def poll(self):
             self.polls += 1
 
-        def boundary(self):
-            return self._boundary
+        def boundaries(self):
+            return list(self._boundaries)
 
-        def channel(self):
-            return self._channel
+        def channel(self, wake=2):
+            return self._channels.get(wake)
 
     def test_stops_at_the_goal_without_a_cycle_to_measure(self):
         dl, clock = deadline(60)
@@ -425,37 +703,60 @@ class ListenTest(unittest.TestCase):
             clock.advance(timeout)
             return [Heard(clock.now, -50)]
 
-        one = Cycle(0.0, 1.0, measure=False, clock=clock)
+        one = Cycle(0.0, 1.0, NONE, clock=clock)
         cycle.listen(one, dl, read, lambda: len(one.frames) >= 2)
         self.assertEqual(len(one.frames), 2)
         self.assertEqual(reads, [cycle.POLL, cycle.POLL])
         # The loop stamps when the capture began; a stamp given is kept.
         self.assertEqual(one.listen_time, 1000.0)
-        one = Cycle(0.0, 1.0, measure=False, clock=clock, listen_time=0.0)
+        one = Cycle(0.0, 1.0, NONE, clock=clock, listen_time=0.0)
         cycle.listen(one, dl, read, lambda: True)
         self.assertEqual(one.listen_time, 0.0)
 
-    def test_goes_on_until_wake_2_when_measuring(self):
+    def test_one_cycle_tier_stops_at_wake_2_first_frame(self):
         dl, clock = deadline(60, start=0.0)
-        frames = iter([[Heard(1.0, -50)], [Heard(2.0, -50)]] + [[]] * 100 + [[Heard(30.0, -50)]])
+        frames = iter([[Heard(1.0, -50)], [Heard(2.0, -50)]] + [[]] * 100 + [[Heard(30.0, -50)], [Heard(30.3, -50)]])
 
         def read(timeout):
             clock.advance(timeout)
             return next(frames, [])
 
-        follower = self.Follower(boundary=3.0, channel=9)
+        follower = self.Follower(boundaries=[3.0], channels={2: 9})
         tuned = []
-        one = Cycle(0.0, 1.0, measure=True, clock=clock)
+        one = Cycle(0.0, 1.0, ONE_CYCLE, clock=clock)
         cycle.listen(one, dl, read, lambda: True, follower, tuned.append)
         self.assertEqual(tuned, [9])
-        self.assertEqual(one.retuned[0], 9)
-        self.assertEqual(one.sleep_time, 3.0)
+        self.assertEqual(one.retunes[2][0], 9)
+        self.assertEqual(one.sleep_times, [3.0])
         self.assertTrue(one.complete())
+        self.assertEqual([f.time for f in one.frames], [1.0, 2.0, 30.0])
         self.assertGreater(follower.polls, 100)
+        self.assertLess(clock.now, 26.0)
+
+    def test_two_cycle_tier_goes_on_to_wake_3_and_retunes_each_wake(self):
+        dl, clock = deadline(120, start=0.0)
+        batches = {1.0: [Heard(1.0, -50)], 30.0: [Heard(30.0, -50)], 60.0: [Heard(60.0, -50)], 60.25: [Heard(60.25, -50)]}
+
+        def read(timeout):
+            clock.advance(timeout)
+            return batches.get(round(clock.now, 2), [])
+
+        follower = self.Follower(boundaries=[3.0, 33.0], channels={2: 9, 3: 4})
+        tuned = []
+        one = Cycle(0.0, 1.0, TWO_CYCLES, clock=clock)
+        cycle.listen(one, dl, read, lambda: True, follower, tuned.append)
+        self.assertEqual(tuned, [9, 4])
+        self.assertEqual(one.retunes[2][0], 9)
+        self.assertEqual(one.retunes[3][0], 4)
+        self.assertEqual(one.sleep_times, [3.0, 33.0])
+        self.assertEqual(one.wakes(), 3)
+        self.assertTrue(one.complete())
+        self.assertEqual([f.time for f in one.frames], [1.0, 30.0, 60.0])
+        self.assertLess(clock.now, 61.0)
 
     def test_stops_at_the_deadline(self):
         dl, clock = deadline(2, start=0.0)
-        one = Cycle(0.0, 1.0, measure=True, clock=clock)
+        one = Cycle(0.0, 1.0, TWO_CYCLES, clock=clock)
         cycle.listen(one, dl, lambda timeout: clock.advance(timeout) or [], lambda: True)
         self.assertTrue(dl.expired())
         self.assertFalse(one.complete())

@@ -17,7 +17,8 @@ target answered with a name, and another one starts while the remaining time
 allows, because the fox may still have been booting during the first. With
 ``keep_going`` the inquiries run back to back, each to its end, until the
 caller stops them or the deadline passes: the fox only answers while the host
-inquires, so that is how it is heard through its sleep into wake 2. Every
+inquires, so that is how it is heard through its sleeps into its later
+wakes. Every
 ``dev_found`` for a candidate address is logged as ``cycle.Heard`` with its
 RSSI. btmgmt needs root or CAP_NET_ADMIN, checked by the caller through
 ``privileges`` before the fox is reset.

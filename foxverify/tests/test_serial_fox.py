@@ -744,6 +744,82 @@ class FollowerTest(unittest.TestCase):
         for _ in range(4):
             follower.poll()
         self.assertEqual((follower.channel(), follower.pan_id()), (22, 0xBEEF))
+        self.assertEqual(follower.pan_ids(), [0xBEEF])
+
+    def test_two_sleeps_give_two_boundaries_and_wake_3_lines(self):
+        """A UART bridge port through two sleeps: each Going to sleep line is
+        a boundary, the Cycle behind line printed on the way to sleep stays
+        with the ending wake, and wake 3's lines answer for wake 3."""
+        clock = serial_fox.FakeClock(0.0)
+        source = serial_fox.TranscriptSource([
+            (10.0, "Going to sleep\n"), (0.1, "Cycle behind by 1.3s, rebooting at once\n"),
+            (5.0, "Initializing...\n"), (0.1, "Last cycle: 16.4s, target 15s\n"), (0.1, "Operating channel: 9\n"),
+            (0.1, "Operating PAN ID: 0xBEEF\n"), (0.1, "Awake and screaming\n"),
+            (10.0, "Going to sleep\n"),
+            (5.0, "Initializing...\n"), (0.1, "Last cycle: 15.5s, target 15s\n"), (0.1, "Operating channel: 4\n"),
+            (0.1, "Operating PAN ID: 0xCAFE\n")], clock)
+        follower = serial_fox.Follower(source, clock)
+        clock.advance(10.05)
+        follower.poll()
+        self.assertEqual(follower.boundaries(), [10.05])
+        clock.advance(0.1)
+        follower.poll()
+        self.assertEqual(follower.boundaries(), [10.05])
+        self.assertEqual(follower.wakes, [])
+        clock.advance(5.5)
+        for _ in range(6):
+            follower.poll()
+        self.assertEqual(follower.boundaries(), [10.05])
+        self.assertEqual(len(follower.wakes), 1)
+        self.assertEqual(follower.channel(2), 9)
+        self.assertIsNone(follower.channel(3))
+        self.assertEqual(follower.last_cycle(2), 16.4)
+        clock.advance(10.0)
+        follower.poll()
+        self.assertEqual(follower.boundaries(), [10.05, 25.65])
+        self.assertAlmostEqual(follower.boundary(), 10.05)
+        clock.advance(5.5)
+        for _ in range(5):
+            follower.poll()
+        self.assertEqual(len(follower.wakes), 2)
+        self.assertEqual(follower.channel(3), 4)
+        self.assertEqual(follower.channel(2), 9)
+        self.assertEqual(follower.pan_ids(), [0xBEEF, 0xCAFE])
+        self.assertEqual(follower.last_cycle(3), 15.5)
+        self.assertIsNone(follower.last_cycle(4))
+        self.assertEqual(follower.wake2.integer("channel"), 9)
+
+    def test_native_usb_port_vanishing_twice_with_reopens(self):
+        """A native USB board through two sleeps: the port vanishes at each
+        sleep, once per wake even after the sleep line, and comes back for the
+        next wake's lines."""
+        clock = serial_fox.FakeClock(0.0)
+        items = [(26.0, "Initializing...\n"), (0.1, "Last cycle: 20.3s, target 20s\n"), (0.1, "Operating channel: 9\n"),
+                 (0.1, "Going to sleep\n"), (40.0, "Operating channel: 4\n")]
+        source = Vanishing(items, clock, gone_at=20.0, away=5.0)
+        follower = serial_fox.Follower(source, clock, reopen=True)
+        clock.advance(20.5)
+        follower.poll()
+        self.assertEqual(follower.boundaries(), [20.5])
+        clock.advance(6.0)
+        for _ in range(6):
+            follower.poll()
+        self.assertEqual(follower.channel(2), 9)
+        self.assertEqual(follower.last_cycle(2), 20.3)
+        self.assertEqual(follower.boundaries(), [20.5, 26.5])
+        # The port vanishes again after the sleep line: no third boundary.
+        source.vanished = False
+        source.gone_at = 27.0
+        source.back_at = 30.0
+        clock.advance(1.0)
+        follower.poll()
+        self.assertTrue(follower.gone)
+        self.assertEqual(follower.boundaries(), [20.5, 26.5])
+        clock.advance(40.0)
+        for _ in range(3):
+            follower.poll()
+        self.assertEqual(source.reopens, 2)
+        self.assertEqual(follower.channel(3), 4)
 
 
 class TranscriptSourceTest(unittest.TestCase):

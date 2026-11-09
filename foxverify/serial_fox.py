@@ -25,12 +25,14 @@ the run with the reset-button hint, since the ROM never leaves download mode
 on its own.
 
 ``Follower`` reads the port after the readback while the sniffer listens
-through the fox's first sleep. It watches for ``Going to sleep``, the exact
-end of wake 1, and takes the port vanishing, as a native USB board's does in
-deep sleep, as the same signal. Every line after that belongs to wake 2 and
-is parsed into its own ``Readback``, so a random-channel fox's wake 2
-``Operating channel`` line can retune the sniffer; the port is opened again
-after it vanished only when those lines are wanted.
+through the fox's sleeps. It watches for ``Going to sleep``, the exact end of
+a wake, and takes the port vanishing, as a native USB board's does in deep
+sleep, as the same signal. The lines after a sleep belong to the next wake
+and are parsed into that wake's own ``Readback``, so a random-channel fox's
+``Operating channel`` line can retune the sniffer for each wake and its
+``Last cycle`` line gives the fox's own cycle figure; a vanished port is
+opened again on every poll when the run follows the fox past its first
+sleep.
 
 Not-a-fox outcomes after the reset, each a ``RunError`` (exit 2) with the text
 in the constants below: nothing at all within 10 s, or output without a banner
@@ -132,8 +134,9 @@ _U16 = r"(0x[0-9A-Fa-f]{4})"
 LINES: List[Tuple[str, "re.Pattern[str]"]] = [
     # include/rfhsfox.h and include/rfhssleeptimers.h, the same in every fox.
     # "Last cycle" comes with a timer wake-up and "Cycle behind" when a
-    # fox with a non-zero TIME_TO_SLEEP ran past its cycle; both are
-    # informational, no row reads them.
+    # fox with a non-zero TIME_TO_SLEEP ran past its cycle. The first boot's
+    # readback has neither; the Follower reads a later wake's "Last cycle"
+    # for the serial column of the CYCLE_TIME row.
     ("initializing", re.compile(r"^Initializing\.\.\.$")),
     ("boot_count", re.compile(r"^ESP32 boot count: (\d+)$")),
     ("sleep_stats", re.compile(r"^Sleep stats: (-?\d+s since cold boot, -?\d+s since last wakeup)$")),
@@ -610,14 +613,19 @@ def download_mode_line(line: str) -> Optional[str]:
 
 class Follower:
     """Reads the fox's port after the readback, without blocking, while the
-    sniffer listens through the first sleep.
+    sniffer listens through the fox's sleeps.
 
-    ``poll`` takes whatever arrived. Until the fox has gone to sleep only the
-    ``Going to sleep`` line matters and is stamped on ``clock``; the port
-    vanishing is stamped the same way. From then on every line is wake 2's
-    and goes into ``wake2``. With ``reopen`` the port is tried again on every
-    poll after it vanished, which a random-channel fox needs for its wake 2
-    channel; without it a vanished port is left alone.
+    ``poll`` takes whatever arrived. The ``Going to sleep`` line ends the wake
+    the port is printing and is stamped on ``clock``; the port vanishing, as
+    a native USB board's does in deep sleep, is stamped the same way unless
+    the sleep line already ended that wake. ``boundaries`` lists those
+    instants in order, one per sleep. The ``Cycle behind`` line, which the
+    fox prints while going to sleep, still belongs to the ending wake; any
+    other line after a sleep opens the next wake and goes into that wake's
+    ``Readback``, which ``channel``, ``pan_id`` and ``last_cycle`` answer
+    from. With ``reopen`` the port is tried again on every poll after it
+    vanished, which is how a native USB board's later wakes are read; without
+    it a vanished port is left alone.
     """
 
     def __init__(self, source, clock: Callable[[], float] = time.time, reopen: bool = False,
@@ -626,13 +634,15 @@ class Follower:
         self.clock = clock
         self.reopen = reopen
         self.debug = debug
-        self.wake2 = Readback()
-        self.sleep_time: Optional[float] = None
-        self.gone_time: Optional[float] = None
+        # The readbacks of wake 2 onwards, in order.
+        self.wakes: List[Readback] = []
+        self._sleeps: List[float] = []
+        # True from a Going to sleep line until a line of the next wake, so
+        # that the port vanishing for the same sleep is not a second end.
+        self._line_ended_wake = False
         self.gone = False
         self.reopened = False
         self._buffer = ""
-        self._asleep = False
 
     def poll(self) -> None:
         if self.gone:
@@ -640,17 +650,15 @@ class Follower:
                 return
             self.gone = False
             self.reopened = True
-            self._asleep = True
             self._buffer = ""
-            self.debug("serial device is back, reading wake 2")
+            self.debug("serial device is back, reading wake %d" % (len(self._sleeps) + 1))
         try:
             chunk = self.source.read(0.0)
         except PortGone:
             self.gone = True
-            if self.gone_time is None:
-                self.gone_time = self.clock()
-                self._asleep = True
-                self.debug("serial device gone, taking it as the end of wake 1")
+            if not self._line_ended_wake:
+                self._sleeps.append(self.clock())
+                self.debug("serial device gone, taking it as the end of wake %d" % len(self._sleeps))
             return
         if chunk is None:
             return
@@ -663,23 +671,60 @@ class Follower:
 
     def _line(self, line: str) -> None:
         self.debug("serial: " + line)
-        if self._asleep:
-            self.wake2.feed(line)
-            return
         if LINES_BY_FIELD["sleeping"].match(line):
-            self.sleep_time = self.clock()
-            self._asleep = True
+            self._sleeps.append(self.clock())
+            self._line_ended_wake = True
+            return
+        if LINES_BY_FIELD["cycle_behind"].match(line):
+            return
+        self._line_ended_wake = False
+        # The first line after a sleep opens the next wake; a wake whose
+        # lines were all missed gets an empty readback, so every wake keeps
+        # its place.
+        while len(self.wakes) < len(self._sleeps):
+            self.wakes.append(Readback())
+        if self.wakes:
+            self.wakes[-1].feed(line)
+
+    def boundaries(self) -> List[float]:
+        """When each wake ended, by the sleep line or the port vanishing, in
+        order."""
+        return list(self._sleeps)
 
     def boundary(self) -> Optional[float]:
-        """When wake 1 ended, by the sleep line or the port vanishing."""
-        return self.sleep_time if self.sleep_time is not None else self.gone_time
+        """When wake 1 ended, None while it goes on."""
+        return self._sleeps[0] if self._sleeps else None
 
-    def channel(self) -> Optional[int]:
-        """Wake 2's operating channel once the fox printed it."""
-        return self.wake2.integer("channel")
+    def readback(self, wake: int) -> Optional[Readback]:
+        """What wake ``wake``, 2 or later, has printed so far; None before
+        its first line."""
+        index = wake - 2
+        return self.wakes[index] if 0 <= index < len(self.wakes) else None
 
-    def pan_id(self) -> Optional[int]:
-        return self.wake2.integer("pan_id")
+    @property
+    def wake2(self) -> Readback:
+        return self.readback(2) or Readback()
+
+    def channel(self, wake: int = 2) -> Optional[int]:
+        """Wake ``wake``'s operating channel once the fox printed it."""
+        readback = self.readback(wake)
+        return readback.integer("channel") if readback is not None else None
+
+    def pan_id(self, wake: int = 2) -> Optional[int]:
+        readback = self.readback(wake)
+        return readback.integer("pan_id") if readback is not None else None
+
+    def pan_ids(self) -> List[int]:
+        """Every PAN ID printed by wake 2 onwards."""
+        pans = [readback.integer("pan_id") for readback in self.wakes]
+        return [pan for pan in pans if pan is not None]
+
+    def last_cycle(self, wake: int) -> Optional[float]:
+        """The seconds of the ``Last cycle`` line wake ``wake`` printed, the
+        fox's own measure of the cycle that ended with its boot."""
+        readback = self.readback(wake)
+        text = readback.get("last_cycle") if readback is not None else None
+        return None if text is None else float(text.split("s", 1)[0])
 
 
 def block_for(readback: Readback, project: str, header_text: str) -> Block:

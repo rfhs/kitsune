@@ -22,11 +22,17 @@ below takes what is left of it. The steps are the same for every project:
    FAILs and nothing else is checked.
 6. The on-air rows for the project, then the rows the air does not decide
    (PSK, MAX_CLIENTS, TXPOWER with the median RSSI heard, EXT_PAN_ID) and
-   the two timers: measured on the air when ``--timeout`` covers one cycle
-   plus the boot allowance (``cycle``), ``serial only`` with a note naming
-   the ``--timeout`` that would measure them otherwise.
-7. The table, the ``first transmission`` line, the notes and the summary;
-   exit 0, 1 on any FAIL, 2 when the run could not happen.
+   the timers. ``--timeout`` against the block's cycle picks the tier
+   (``cycle.tier``), announced before the table: with two cycles plus the
+   boot allowance the sniffer listens to wake 3 and TIME_TO_WAKE,
+   TIME_TO_SLEEP and CYCLE_TIME are judged from wake 2 and wake 3; with one
+   cycle plus the allowance it listens to wake 2 and the three rows judge
+   the first boot with wider tolerances; with less the two timer rows are
+   ``serial only`` and the run ends with the identity rows.
+7. The table, the ``first transmission`` and ``first wake`` lines, the
+   notes, the summary and, below the two-cycle tier, the ``--timeout`` that
+   measures the exact cycle time; exit 0, 1 on any FAIL, 2 when the run
+   could not happen.
 
 Without a sniffer, or with ``--serial-only``, the on-air rows are
 ``unverified`` with that reason and a note says so.
@@ -201,6 +207,10 @@ class Run:
             self.serial_rows(block, readback)
             if self.cycle is not None:
                 self.report.line(cycle.first_transmission_line(self.cycle, self.args.no_reset))
+                if self.cycle.tier == cycle.TWO_CYCLES:
+                    first_wake = cycle.first_wake_line(self.cycle)
+                    if first_wake is not None:
+                        self.report.line(first_wake)
         finally:
             self.stop_air(air)
             if self.source is not None:
@@ -208,13 +218,14 @@ class Run:
         return self.report.emit()
 
     def plan(self, block: Block, readback: Readback) -> None:
-        """Decide whether the sniffer listens through the first sleep to
-        measure the timers: only when the fox was reset by this run, which
-        ``--no-reset`` and a USB stack without a reset both rule out, and
-        ``--timeout`` covers TIME_TO_WAKE + TIME_TO_SLEEP + BOOT_ALLOWANCE.
-        Either way the frames heard feed the first transmission line and the
-        median RSSI."""
-        measure = False
+        """Decide how far the sniffer listens: the budget tier of
+        ``--timeout`` against the block's cycle, when the fox was reset by
+        this run, which ``--no-reset`` and a USB stack without a reset both
+        rule out. The tier is announced before the table and, below two
+        cycles, the ``--timeout`` for the exact cycle time is suggested after
+        the summary. Either way the frames heard feed the first transmission
+        line and the median RSSI."""
+        tier = cycle.NONE
         wake = block.integer("TIME_TO_WAKE") if "TIME_TO_WAKE" in block else None
         sleep = block.integer("TIME_TO_SLEEP") if "TIME_TO_SLEEP" in block else None
         if self.args.no_reset:
@@ -222,29 +233,47 @@ class Run:
         elif readback.reset_time is None:
             self.timer_reason = NOT_RESET
         elif wake is not None and sleep is not None:
-            if cycle.fits(wake, sleep, self.args.timeout):
-                measure = True
-            else:
-                self.report.note(cycle.budget_note(wake, sleep, self.args.timeout))
+            tier = cycle.tier(wake, sleep, self.args.timeout)
+            self.report.say(cycle.tier_line(tier, wake, sleep, self.args.timeout))
+            self.report.suggest(cycle.suggestion(tier, wake, sleep))
         # A Bluetooth scan runs from before the reset; a Wi-Fi or Zigbee
         # capture starts after the readback has named the channel.
         listen_time = readback.reset_time if self.want_hci else None
-        self.cycle = cycle.Cycle(readback.reset_time, self.granularity(block, readback), measure, wake,
+        self.cycle = cycle.Cycle(readback.reset_time, self.granularity(block, readback), tier, wake,
                                  clock=self.wall, listen_time=listen_time, radio_time=readback.banner_time)
-        if measure:
-            self.follower = serial_fox.Follower(self.source, self.wall, self.random_channel(block, readback),
-                                               self.report.debug)
+        if self.cycle.measure:
+            # The port is opened again after every sleep: a native USB board
+            # drops it in deep sleep, and only its vanishing again can end a
+            # wake of a fox whose sleep is shorter than the silence rule
+            # needs; the later wakes' lines also give a random-channel fox's
+            # channel and the fox's own Last cycle figure.
+            self.follower = serial_fox.Follower(self.source, self.wall, reopen=True, debug=self.report.debug)
 
     def granularity(self, block: Block, readback: Readback) -> Optional[float]:
         return GRANULARITY[self.project]
 
     def random_channel(self, block: Block, readback: Readback) -> bool:
-        """True when the fox picks a channel at every wake, so wake 2 may be
-        on another channel than wake 1."""
+        """True when the fox picks a channel at every wake, so each wake may
+        be on another channel than the one before."""
         return False
 
     def measuring(self) -> bool:
         return self.cycle is not None and self.cycle.measure
+
+    def through(self) -> str:
+        """The tail of the listening line saying how far the capture goes."""
+        if self.cycle is None:
+            return ""
+        return {cycle.ONE_CYCLE: " through the first sleep", cycle.TWO_CYCLES: " through the first two sleeps"}.get(
+            self.cycle.tier, "")
+
+    def last_cycle(self) -> Optional[float]:
+        """The fox's own figure for the judged cycle, from the ``Last cycle``
+        line of the wake that ended it: wake 3 in the two-cycle tier, wake 2
+        in the one-cycle tier."""
+        if self.follower is None or self.cycle is None:
+            return None
+        return self.follower.last_cycle(self.cycle.wakes_wanted)
 
     def load_header(self) -> str:
         try:
@@ -307,10 +336,12 @@ class Run:
         self.report.check(name, block.display(name), serial, air, on_air=False, reason=reason)
 
     def timers(self, block: Block, readback: Readback) -> None:
-        """The TIME_TO_WAKE and TIME_TO_SLEEP rows: measured on the air when
-        the run listened through the first sleep, serial only otherwise."""
+        """The TIME_TO_WAKE, TIME_TO_SLEEP and CYCLE_TIME rows when the run
+        listened past the first sleep; the two timer rows serial only
+        otherwise."""
         if self.measuring():
-            cycle.rows(self.report, block, readback, self.cycle, self.random_channel(block, readback))
+            cycle.rows(self.report, block, readback, self.cycle, self.random_channel(block, readback),
+                       self.last_cycle())
             return
         self.serial_row(block, readback, "TIME_TO_WAKE", "time_to_wake", reason=self.timer_reason)
         self.serial_row(block, readback, "TIME_TO_SLEEP", "time_to_sleep", reason=self.timer_reason)
@@ -324,7 +355,7 @@ class Run:
 
     def poll_scan(self, scan, mac: str, goal: Callable[[], bool]) -> None:
         """Wait for a scan thread to reach ``goal``, taking the frames it heard
-        from the fox into the cycle, and on through the first sleep when the
+        from the fox into the cycle, and on through the fox's sleeps when the
         cycle is being measured. The thread is stopped afterwards and what it
         heard in the meantime taken too."""
         def read(timeout: float):
@@ -507,7 +538,7 @@ class WifiRun(Run):
                 wifi.ap_rows(self.report, block, readback, None, "the fox did not print its channel")
                 return
             self.report.say("listening for beacons from %s on channel %d with %s%s" % (
-                mac, channel, interface, " through the first sleep" if self.measuring() else ""))
+                mac, channel, interface, self.through()))
             with wifi.monitor_mode(interface):
                 beacon = wifi.observe_ap(interface, mac, channel, self.deadline, self.tshark,
                                          debug=self.report.debug, cycle=self.cycle, follower=self.follower,
@@ -518,7 +549,7 @@ class WifiRun(Run):
             channels = wifi.probe_channels(block)
             self.report.say("listening for probe requests from %s on channel%s %s with %s%s" % (
                 mac, "s" if len(channels) > 1 else "", ",".join(str(c) for c in channels), interface,
-                " through the first sleep" if self.measuring() else ""))
+                self.through()))
             with wifi.monitor_mode(interface):
                 probes = wifi.observe_client(interface, mac, block.string("FSSID"), channels,
                                              self.deadline, self.tshark, debug=self.report.debug,
@@ -571,7 +602,7 @@ class ZigbeeRun(Run):
         want = 1 if interval_reason else 2
         self.report.say("listening on channel %d with %s for %s%s" % (
             channel, sniffer, "one Link Status frame" if want == 1 else "two Link Status frames",
-            " and through the first sleep" if self.measuring() else ""))
+            (" and" + self.through()) if self.measuring() else ""))
         observation = zigbee.observe(sniffer, channel, self.deadline, self.tshark, pan_id, want,
                                      debug=self.report.debug, cycle=self.cycle, follower=self.follower,
                                      random_channel=self.random_channel(block, readback),

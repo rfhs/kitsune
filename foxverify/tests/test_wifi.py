@@ -5,7 +5,7 @@ import tempfile
 import unittest
 
 from foxverify import conf, report, serial_fox, tshark, wifi
-from foxverify.cycle import Cycle, Heard
+from foxverify.cycle import NONE, ONE_CYCLE, TWO_CYCLES, Cycle, Heard
 from foxverify.report import Deadline, RunError
 from foxverify.serial_fox import parse_transcript
 from foxverify.tests import frozen_text, read_fixture
@@ -123,7 +123,7 @@ class BeaconCycleTest(unittest.TestCase):
     def test_every_beacon_feeds_the_cycle_and_the_read_stops_at_the_first_without_measuring(self):
         dl, clock = deadline(60, start=0.0)
         reader = FakeReader(wifi.AP_FIELDS, [(1.0, beacon_line(1.0)), (0.1, beacon_line(1.1, -40))], clock)
-        one = Cycle(0.0, 1.0, measure=False, clock=clock)
+        one = Cycle(0.0, 1.0, NONE, clock=clock)
         b = wifi.wait_for_beacon(reader, "F2:F4:90:22:0D:0F", dl, cycle=one)
         self.assertEqual(b.rssi, -42)
         self.assertEqual(one.frames, [Heard(1.0, -42)])
@@ -136,11 +136,12 @@ class BeaconCycleTest(unittest.TestCase):
         reader = FakeReader(wifi.AP_FIELDS, wake1 + wake2, clock)
         source = serial_fox.TranscriptSource([(16.3, "Going to sleep\n")], clock)
         follower = serial_fox.Follower(source, clock)
-        one = Cycle(0.0, 1.0, measure=True, wake=15, clock=clock)
+        one = Cycle(0.0, 1.0, ONE_CYCLE, wake=15, clock=clock)
         b = wifi.wait_for_beacon(reader, "F2:F4:90:22:0D:0F", dl, cycle=one, follower=follower)
         self.assertEqual(b.time, 1.0)
         self.assertTrue(one.complete())
-        self.assertAlmostEqual(one.sleep_time, 16.3, delta=0.3)
+        self.assertEqual(len(one.sleep_times), 1)
+        self.assertAlmostEqual(one.sleep_times[0], 16.3, delta=0.3)
         self.assertEqual(len(one.wake1()), 31)
         self.assertAlmostEqual(one.span(), 15.0)
         self.assertAlmostEqual(one.gap(), 5.0)
@@ -156,13 +157,40 @@ class BeaconCycleTest(unittest.TestCase):
         source = serial_fox.TranscriptSource([(2.0, "Going to sleep\n"), (26.0, "Initializing...\n"),
                                               (1.0, "Operating channel: 9\n")], clock)
         follower = serial_fox.Follower(source, clock)
-        one = Cycle(0.0, 1.0, measure=True, wake=15, clock=clock)
+        one = Cycle(0.0, 1.0, ONE_CYCLE, wake=15, clock=clock)
         tuned = []
         wifi.wait_for_beacon(reader, "F2:F4:90:22:0D:0F", dl, cycle=one, follower=follower, retune=tuned.append)
         self.assertEqual(tuned, [9])
-        self.assertEqual(one.retuned[0], 9)
-        self.assertAlmostEqual(one.retuned[1], 29.0, delta=0.5)
+        self.assertEqual(one.retunes[2][0], 9)
+        self.assertAlmostEqual(one.retunes[2][1], 29.0, delta=0.5)
         self.assertTrue(one.complete())
+
+    def test_two_cycle_tier_retunes_the_card_for_wake_2_and_wake_3(self):
+        """A random-channel fox followed to wake 3: each wake's channel line
+        moves the card once, and the read stops at wake 3's first beacon."""
+        dl, clock = deadline(120, start=0.0)
+        wake1 = [(1.0, beacon_line(1.0)), (0.5, beacon_line(1.5))]
+        wake2 = [(29.0, beacon_line(30.5, -50)), (0.5, beacon_line(31.0, -50))]
+        wake3 = [(29.0, beacon_line(60.0, -52)), (0.5, beacon_line(60.5, -52))]
+        reader = FakeReader(wifi.AP_FIELDS, wake1 + wake2 + wake3, clock)
+        source = serial_fox.TranscriptSource([(2.0, "Going to sleep\n"), (26.0, "Initializing...\n"),
+                                              (1.0, "Operating channel: 9\n"), (3.0, "Going to sleep\n"),
+                                              (26.0, "Initializing...\n"), (0.5, "Last cycle: 29.5s, target 20s\n"),
+                                              (0.5, "Operating channel: 4\n")], clock)
+        follower = serial_fox.Follower(source, clock)
+        one = Cycle(0.0, 1.0, TWO_CYCLES, wake=15, clock=clock)
+        tuned = []
+        wifi.wait_for_beacon(reader, "F2:F4:90:22:0D:0F", dl, cycle=one, follower=follower, retune=tuned.append)
+        self.assertEqual(tuned, [9, 4])
+        self.assertEqual(sorted(one.retunes), [2, 3])
+        self.assertEqual(len(one.sleep_times), 2)
+        self.assertEqual(one.wakes(), 3)
+        self.assertTrue(one.complete())
+        self.assertEqual([f.time for f in one.frames], [1.0, 1.5, 30.5, 31.0, 60.0])
+        self.assertAlmostEqual(one.period(2), 29.5)
+        self.assertEqual(follower.last_cycle(3), 29.5)
+        self.assertIsNone(follower.last_cycle(2))
+        self.assertLess(clock.now, 61.0)
 
     def test_observe_ap_retunes_through_iw(self):
         """observe_ap with a fake popen that plays tshark through a real pipe
@@ -178,16 +206,16 @@ class BeaconCycleTest(unittest.TestCase):
             def poll(self):
                 pass
 
-            def boundary(self):
-                return 1730000010.0
+            def boundaries(self):
+                return [1730000010.0]
 
-            def channel(self):
-                return 9
+            def channel(self, wake=2):
+                return 9 if wake == 2 else None
 
         def popen(argv, **kwargs):
             return subprocess.Popen([sys.executable, "-c", script], **kwargs)
 
-        one = Cycle(1730000000.0, 1.0, measure=True, wake=15, clock=lambda: 1730000030.0)
+        one = Cycle(1730000000.0, 1.0, ONE_CYCLE, wake=15, clock=lambda: 1730000030.0)
         b = wifi.observe_ap("wlan1", "F2:F4:90:22:0D:0F", 1, dl, "tshark", run, popen, cycle=one,
                             follower=Follower(), random_channel=True)
         self.assertEqual(b.bssid, "F2:F4:90:22:0D:0F")
@@ -269,7 +297,7 @@ class ProbeTest(unittest.TestCase):
         reader = FakeReader(wifi.CLIENT_FIELDS, items, clock)
         source = serial_fox.TranscriptSource([(16.2, "Going to sleep\n")], clock)
         follower = serial_fox.Follower(source, clock)
-        one = Cycle(0.0, None, measure=True, wake=15, clock=clock)
+        one = Cycle(0.0, None, ONE_CYCLE, wake=15, clock=clock)
         tuned = []
         probes = wifi.collect_probes(reader, "F2:44:5E:10:97:F4", "Demo Ng WiFi Client Easy Fox", dl, [6],
                                      tuned.append, clock=clock, cycle=one, follower=follower)

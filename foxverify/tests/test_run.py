@@ -96,7 +96,11 @@ class Result:
         self.rows = table_rows(out)
         self.verdicts = [(row[0], row[4]) for row in self.rows]
         self.notes = [line[len("note: "):] for line in out.splitlines() if line.startswith("note: ")]
-        self.summary = out.splitlines()[-1] if out else ""
+        lines = out.splitlines()
+        index = next((i for i in range(len(lines) - 1, -1, -1) if lines[i].startswith(("pass: ", "FAIL: "))), None)
+        self.summary = lines[index] if index is not None else ""
+        # The suggestion is the one line a run may print after its summary.
+        self.suggestion = lines[index + 1] if index is not None and index + 1 < len(lines) else None
 
 
 def verify(project, transcript, header=None, args=(), env_transcript=False):
@@ -455,6 +459,11 @@ def sleep_line(one, at):
     one.source.items.append((0.0, "Going to sleep\n"))
 
 
+def elapsed(result):
+    """The seconds the summary says the run took on the replay clock."""
+    return float(result.summary.rsplit(", ", 1)[1].split(" s of ")[0])
+
+
 def heard(start, count, spacing, rssi=-50):
     from foxverify.cycle import Heard
     return [Heard(start + i * spacing, rssi) for i in range(count)]
@@ -482,32 +491,87 @@ class AirRunTest(unittest.TestCase):
         self.assertEqual(result.code, EXIT_OK, result.out)
         self.assertEqual(result.verdicts, [("MAC_ADDR", "pass"), ("NAME", "pass"),
                                            ("TIME_TO_WAKE", "serial only"), ("TIME_TO_SLEEP", "serial only")])
-        self.assertEqual(result.notes, ["TIME_TO_WAKE and TIME_TO_SLEEP: serial only, --timeout 60 is under the 65 s "
-                                        "the cycle needs (TIME_TO_WAKE + TIME_TO_SLEEP + 5)"])
+        self.assertEqual(result.notes, [])
+        self.assertIn("TIME_TO_WAKE and TIME_TO_SLEEP serial only (--timeout 60 is under the 65 s one cycle of "
+                      "60 s plus the 5 s boot allowance needs)\n", result.out)
         self.assertIn("first transmission: 2.0 s after reset\n", result.out)
+        self.assertNotIn("first wake:", result.out)
         self.assertTrue(result.summary.startswith("pass: 2 pass, 0 FAIL, 2 serial only, 0 unverified"))
+        self.assertEqual(result.suggestion, "run with --timeout 125 to measure the cycle time")
+        # The run ended as soon as the identity rows were in, not at the
+        # deadline: the replay clock shows under a second of the 60.
+        self.assertTrue(result.summary.endswith(" s of 60 s"), result.summary)
+        self.assertLess(elapsed(result), 1.0)
 
-    def test_classic_measured_at_65_with_inquiries_back_to_back(self):
+    def test_classic_first_boot_at_65_with_inquiries_back_to_back(self):
         from foxverify import btclassic
         parser = btclassic.BtmgmtParser()
         parser.feed_text("hci0 dev_found: F2:F6:6D:BC:2A:80 type BR/EDR rssi -61 flags 0x0000\n"
                          "name Demo Case BTC Hard Fox\n")
         runs = []
-        # Wake 1: responses from 2 s to 31 s after the reset at 1000; the fox
-        # says it sleeps at 32.5 s; wake 2 answers at 62.5 s.
+        # Wake 1: responses from 2 s to 30 s after the reset at 1000; the fox
+        # says it sleeps at 32.5 s; wake 2 answers at 62.5 s, which ends the
+        # run at once.
         scan = FakeScan(parser, [heard(1002.0, 15, 2.0, -61), heard(1062.5, 1, 1.0, -63)],
                         between=lambda n: sleep_line(runs[0], 1032.5) if n == 1 else None)
         result, _ = air_run(run.ClassicRun, "classic_discoverable", fixture("transcripts", "classic_hard.log"),
                             lambda candidates: scan, args=["--timeout", "65"], prepare=runs.append)
         self.assertTrue(scan.keep_going)
         self.assertEqual(result.code, EXIT_OK, result.out)
+        self.assertIn("judging the first boot with wider tolerances (--timeout 65 covers one cycle of 60 s plus the "
+                      "5 s boot allowance; two cycles need 125)\n", result.out)
         rows = {row[0]: row for row in result.rows}
-        self.assertEqual(rows["TIME_TO_WAKE"][1:], ("30", "30", "on the air 28.0 s", "pass"))
-        self.assertEqual(rows["TIME_TO_SLEEP"][1:], ("30", "30", "off the air 32.5 s", "pass"))
+        self.assertEqual(rows["TIME_TO_WAKE"][1:], ("30", "30", "first boot: on the air 28.0 s", "pass"))
+        self.assertEqual(rows["TIME_TO_SLEEP"][1:], ("30", "30", "first boot: off the air 32.5 s", "pass"))
+        self.assertEqual(rows["CYCLE_TIME"][1:], ("60", "-", "first boot: 62.5 s", "pass"))
+        self.assertEqual([v for v, _ in result.verdicts], ["MAC_ADDR", "NAME", "TIME_TO_WAKE", "TIME_TO_SLEEP", "CYCLE_TIME"])
         self.assertEqual(result.notes, [])
         self.assertIn("first transmission: 2.0 s after reset\n", result.out)
-        self.assertTrue(result.summary.startswith("pass: 4 pass, 0 FAIL, 0 serial only, 0 unverified"), result.summary)
+        self.assertNotIn("first wake:", result.out)
+        self.assertTrue(result.summary.startswith("pass: 5 pass, 0 FAIL, 0 serial only, 0 unverified"), result.summary)
         self.assertTrue(result.summary.endswith("s of 65 s"), result.summary)
+        self.assertEqual(result.suggestion, "run with --timeout 125 for the exact cycle time; this run judged the "
+                                            "first boot with wider tolerances")
+        # Both batches were taken and the loop ended at wake 2's first frame.
+        self.assertEqual(scan.takes, 2)
+
+    def test_classic_two_cycles_at_125(self):
+        """Wake 2 and wake 3 heard: the three rows judge wake 2's span and
+        the period to wake 3 exactly, wake 1 goes into the first wake line,
+        and nothing is suggested."""
+        from foxverify import btclassic
+        parser = btclassic.BtmgmtParser()
+        parser.feed_text("hci0 dev_found: F2:F6:6D:BC:2A:80 type BR/EDR rssi -61 flags 0x0000\n"
+                         "name Demo Case BTC Hard Fox\n")
+        runs = []
+
+        def between(n):
+            if n == 1:
+                sleep_line(runs[0], 1032.5)
+            elif n == 2:
+                # Wake 2's sleep line, then wake 3's boot lines, each taken by
+                # one poll of the follower before wake 3's first response.
+                sleep_line(runs[0], 1092.5)
+                runs[0].source.items.append((0.0, "Initializing...\n"))
+                runs[0].source.items.append((0.0, "Last cycle: 60.0s, target 60s\n"))
+
+        scan = FakeScan(parser, [heard(1002.0, 15, 2.0, -61), heard(1062.5, 15, 2.0, -63), [], [],
+                                 heard(1122.5, 1, 1.0, -62)], between=between)
+        result, _ = air_run(run.ClassicRun, "classic_discoverable", fixture("transcripts", "classic_hard.log"),
+                            lambda candidates: scan, args=["--timeout", "125"], prepare=runs.append)
+        self.assertEqual(result.code, EXIT_OK, result.out)
+        self.assertIn("measuring the cycle time from wake 2 and wake 3 (--timeout 125 covers two cycles of 60 s plus "
+                      "the 5 s boot allowance)\n", result.out)
+        rows = {row[0]: row for row in result.rows}
+        self.assertEqual(rows["TIME_TO_WAKE"][1:], ("30", "30", "on the air 28.0 s", "pass"))
+        self.assertEqual(rows["TIME_TO_SLEEP"][1:], ("30", "30", "off the air 32.0 s", "pass"))
+        self.assertEqual(rows["CYCLE_TIME"][1:], ("60", "60.0", "60.0 s", "pass"))
+        self.assertIn("first transmission: 2.0 s after reset\n", result.out)
+        self.assertIn("first wake: on the air 28.0 s, then off the air 32.5 s, cycle time 62.5 s\n", result.out)
+        self.assertTrue(result.summary.startswith("pass: 5 pass, 0 FAIL, 0 serial only, 0 unverified"), result.summary)
+        self.assertTrue(result.summary.endswith("s of 125 s"), result.summary)
+        self.assertIsNone(result.suggestion)
+        self.assertEqual(scan.takes, 5)
 
     def test_classic_no_answer_and_wrong_name(self):
         from foxverify import btclassic
@@ -559,22 +623,38 @@ class AirRunTest(unittest.TestCase):
         seen = {"F2:63:89:10:8D:1D": ble.Seen("F2:63:89:10:8D:1D", "Demo Cath BLE Medium Fox",
                                               ble.decode_ibeacon(payload), -50, 1.0)}
         runs = []
-        # 5/5: advertisements from 1.5 s to 6.5 s after the reset, the sleep
-        # line at 6.7 s, wake 2 at 11.5 s.
-        scan = FakeScan(seen, [heard(1001.5, 51, 0.1, -50), heard(1011.5, 2, 0.1, -52)],
-                        between=lambda n: sleep_line(runs[0], 1006.7) if n == 1 else None)
+
+        def between(n):
+            if n == 1:
+                sleep_line(runs[0], 1006.7)
+            elif n == 2:
+                sleep_line(runs[0], 1016.7)
+
+        # 5/5, two cycles in 60 s: advertisements from 1.5 s to 6.5 s after
+        # the reset, the sleep line at 6.7 s, wake 2 from 11.5 s to 16.5 s,
+        # the sleep line at 16.7 s, wake 3 at 21.5 s.
+        scan = FakeScan(seen, [heard(1001.5, 51, 0.1, -50), heard(1011.5, 51, 0.1, -50), heard(1021.5, 2, 0.1, -52)],
+                        between=between)
         result, _ = air_run(run.IBeaconRun, "iBeacon", fixture("transcripts", "ibeacon_medium.log"),
                             lambda candidates: scan, prepare=runs.append)
         self.assertEqual(scan.target, "F2:63:89:10:8D:1D")
         self.assertTrue(scan.keep_scanning)
         self.assertEqual(result.code, EXIT_OK, result.out)
+        self.assertIn("measuring the cycle time from wake 2 and wake 3 (--timeout 60 covers two cycles of 10 s plus "
+                      "the 5 s boot allowance)\n", result.out)
         rows = {row[0]: row for row in result.rows}
         self.assertEqual(rows["TIME_TO_WAKE"][1:], ("5", "5", "on the air 5.0 s", "pass"))
         self.assertEqual(rows["TIME_TO_SLEEP"][1:], ("5", "5", "off the air 5.0 s", "pass"))
-        self.assertEqual(rows["TXPOWER"][1:], ("ESP_PWR_LVL_N0", "ESP_PWR_LVL_N0", "median -50 dBm over 53 frames",
+        self.assertEqual(rows["CYCLE_TIME"][1:], ("10", "-", "10.0 s", "pass"))
+        self.assertEqual(rows["TXPOWER"][1:], ("ESP_PWR_LVL_N0", "ESP_PWR_LVL_N0", "median -50 dBm over 104 frames",
                                                "serial only"))
         self.assertIn("first transmission: 1.5 s after reset\n", result.out)
-        self.assertTrue(result.summary.startswith("pass: 8 pass, 0 FAIL, 1 serial only, 0 unverified"), result.summary)
+        self.assertIn("first wake: on the air 5.0 s, then off the air 5.0 s, cycle time 11.5 s\n", result.out)
+        self.assertEqual([v for v, _ in result.verdicts],
+                         ["MAC_ADDR", "DEVICE_NAME", "BEACON_UUID", "MAJOR", "MINOR", "SIGNAL_POWER",
+                          "TIME_TO_WAKE", "TIME_TO_SLEEP", "CYCLE_TIME", "TXPOWER"])
+        self.assertTrue(result.summary.startswith("pass: 9 pass, 0 FAIL, 1 serial only, 0 unverified"), result.summary)
+        self.assertIsNone(result.suggestion)
         wrong = seen["F2:63:89:10:8D:1D"]._replace(beacon=ble.decode_ibeacon(payload)._replace(major=6))
         result, _ = air_run(run.IBeaconRun, "iBeacon", fixture("transcripts", "ibeacon_medium.log"),
                             lambda candidates: FakeScan({"F2:63:89:10:8D:1D": wrong}))
@@ -676,12 +756,18 @@ class AirRunTest(unittest.TestCase):
 
     def test_wifi_easy_ap_measures_the_cycle_at_60(self):
         def feed(cycle, follower, random_channel, beacon):
-            # 15/5 with a 1.5 s boot: beacons for 15 s, the sleep line, wake
-            # 2's first beacon 20 s after wake 1's.
+            # 15/5 with a 1.5 s boot, two cycles in 60 s: beacons for 15 s,
+            # the sleep line, wake 2's first beacon 20 s after wake 1's and
+            # its own 15 s of beacons, wake 3's first beacon 20 s later.
+            self.assertEqual(cycle.tier, "two cycles")
+            self.assertTrue(follower.reopen)
             for frame in heard(1001.5, 147, 0.1024, -42):
                 cycle.feed(frame)
             cycle.mark_sleep(1016.7)
-            cycle.feed(heard(1021.5, 1, 1.0, -44)[0])
+            for frame in heard(1021.5, 147, 0.1024, -42):
+                cycle.feed(frame)
+            cycle.mark_sleep(1036.7)
+            cycle.feed(heard(1041.5, 1, 1.0, -44)[0])
             return beacon
 
         result, calls, one = self.wifi_ap(feed)
@@ -692,17 +778,49 @@ class AirRunTest(unittest.TestCase):
         self.assertEqual([rows[v][4] for v in ("MAC_ADDR", "CHANNEL", "FSSID", "SSID_HIDDEN", "SECURITY")], ["pass"] * 5)
         self.assertEqual(rows["TIME_TO_WAKE"][1:], ("15", "15", "on the air 15.0 s", "pass"))
         self.assertEqual(rows["TIME_TO_SLEEP"][1:], ("5", "5", "off the air 5.0 s", "pass"))
-        self.assertEqual(rows["TXPOWER"][1:], ("WIFI_POWER_17dBm", "WIFI_POWER_17dBm", "median -42 dBm over 148 frames",
+        self.assertEqual(rows["CYCLE_TIME"][1:], ("20", "-", "20.0 s", "pass"))
+        self.assertEqual(rows["TXPOWER"][1:], ("WIFI_POWER_17dBm", "WIFI_POWER_17dBm", "median -42 dBm over 295 frames",
                                                "serial only"))
         self.assertEqual(rows["PSK"][4], "serial only")
-        self.assertIn("listening for beacons from F2:F4:90:22:0D:0F on channel 1 with wlan1 through the first sleep",
+        self.assertIn("measuring the cycle time from wake 2 and wake 3 (--timeout 60 covers two cycles of 20 s plus "
+                      "the 5 s boot allowance)\n", result.out)
+        self.assertIn("listening for beacons from F2:F4:90:22:0D:0F on channel 1 with wlan1 through the first two sleeps",
                       result.out)
         self.assertIn("first transmission: 1.5 s after reset\n", result.out)
+        self.assertIn("first wake: on the air 15.0 s, then off the air 5.0 s, cycle time 21.5 s\n", result.out)
         self.assertEqual(result.notes, [])
-        self.assertTrue(result.summary.startswith("pass: 7 pass, 0 FAIL, 3 serial only, 0 unverified"), result.summary)
+        self.assertTrue(result.summary.startswith("pass: 8 pass, 0 FAIL, 3 serial only, 0 unverified"), result.summary)
+        self.assertIsNone(result.suggestion)
         self.assertEqual([v for v, _ in result.verdicts],
                          ["MAC_ADDR", "CHANNEL", "FSSID", "SSID_HIDDEN", "SECURITY", "PSK", "MAX_CLIENTS",
-                          "TIME_TO_WAKE", "TIME_TO_SLEEP", "TXPOWER"])
+                          "TIME_TO_WAKE", "TIME_TO_SLEEP", "CYCLE_TIME", "TXPOWER"])
+
+    def test_wifi_easy_ap_judges_the_first_boot_at_30(self):
+        """15/5 at --timeout 30: one cycle fits, two (45 s) do not, so the
+        three rows judge wake 1 with the first-boot rules and the run says
+        what --timeout gives the exact figures."""
+        def feed(cycle, follower, random_channel, beacon):
+            self.assertEqual(cycle.tier, "one cycle")
+            self.assertTrue(follower.reopen)
+            for frame in heard(1001.5, 147, 0.1024, -42):
+                cycle.feed(frame)
+            cycle.mark_sleep(1016.7)
+            cycle.feed(heard(1021.5, 1, 1.0, -44)[0])
+            return beacon
+
+        result, calls, one = self.wifi_ap(feed, args=["--timeout", "30"])
+        self.assertEqual(result.code, EXIT_OK, result.out)
+        rows = {row[0]: row for row in result.rows}
+        self.assertEqual(rows["TIME_TO_WAKE"][1:], ("15", "15", "first boot: on the air 15.0 s", "pass"))
+        self.assertEqual(rows["TIME_TO_SLEEP"][1:], ("5", "5", "first boot: off the air 5.0 s", "pass"))
+        self.assertEqual(rows["CYCLE_TIME"][1:], ("20", "-", "first boot: 21.5 s", "pass"))
+        self.assertIn("judging the first boot with wider tolerances (--timeout 30 covers one cycle of 20 s plus the "
+                      "5 s boot allowance; two cycles need 45)\n", result.out)
+        self.assertIn("with wlan1 through the first sleep\n", result.out)
+        self.assertNotIn("first wake:", result.out)
+        self.assertTrue(result.summary.startswith("pass: 8 pass, 0 FAIL, 3 serial only, 0 unverified"), result.summary)
+        self.assertEqual(result.suggestion, "run with --timeout 45 for the exact cycle time; this run judged the "
+                                            "first boot with wider tolerances")
 
     def test_wifi_easy_ap_timers_stay_serial_only_when_the_budget_is_short(self):
         def feed(cycle, follower, random_channel, beacon):
@@ -717,12 +835,15 @@ class AirRunTest(unittest.TestCase):
         rows = {row[0]: row for row in result.rows}
         self.assertEqual(rows["TIME_TO_WAKE"][1:], ("15", "15", "-", "serial only"))
         self.assertEqual(rows["TIME_TO_SLEEP"][1:], ("5", "5", "-", "serial only"))
+        self.assertNotIn("CYCLE_TIME", result.out)
         self.assertEqual(rows["TXPOWER"][3], "median -42 dBm over 1 frame")
-        self.assertEqual(result.notes, ["TIME_TO_WAKE and TIME_TO_SLEEP: serial only, --timeout 24 is under the 25 s "
-                                        "the cycle needs (TIME_TO_WAKE + TIME_TO_SLEEP + 5)"])
+        self.assertEqual(result.notes, [])
+        self.assertIn("TIME_TO_WAKE and TIME_TO_SLEEP serial only (--timeout 24 is under the 25 s one cycle of 20 s "
+                      "plus the 5 s boot allowance needs)\n", result.out)
         self.assertIn("first transmission: 1.5 s after reset\n", result.out)
-        self.assertNotIn("through the first sleep", result.out)
+        self.assertNotIn("through the first", result.out)
         self.assertTrue(result.summary.startswith("pass: 5 pass, 0 FAIL, 5 serial only, 0 unverified"), result.summary)
+        self.assertEqual(result.suggestion, "run with --timeout 45 to measure the cycle time")
 
     def test_wifi_first_transmission_over_the_allowance(self):
         def feed(cycle, follower, random_channel, beacon):
@@ -732,7 +853,7 @@ class AirRunTest(unittest.TestCase):
             cycle.feed(heard(1026.2, 1, 1.0, -44)[0])
             return beacon
 
-        result, calls, one = self.wifi_ap(feed)
+        result, calls, one = self.wifi_ap(feed, args=["--timeout", "30"])
         self.assertIn("first transmission: 6.2 s after reset, over the 5 s boot allowance\n", result.out)
         self.assertEqual(result.code, EXIT_OK, result.out)
 
@@ -743,12 +864,32 @@ class AirRunTest(unittest.TestCase):
             cycle.mark_sleep(1016.7)
             return beacon
 
-        result, calls, one = self.wifi_ap(feed)
+        result, calls, one = self.wifi_ap(feed, args=["--timeout", "30"])
         self.assertEqual(result.code, EXIT_FAIL, result.out)
         rows = {row[0]: row for row in result.rows}
         self.assertEqual(rows["TIME_TO_WAKE"][4], "pass")
         self.assertEqual(rows["TIME_TO_SLEEP"][1:], ("5", "5", "wake 2 not heard before the deadline", "FAIL"))
-        self.assertTrue(result.summary.startswith("FAIL: 6 pass, 1 FAIL, 3 serial only, 0 unverified"), result.summary)
+        self.assertEqual(rows["CYCLE_TIME"][1:], ("20", "-", "wake 2 not heard before the deadline", "FAIL"))
+        self.assertTrue(result.summary.startswith("FAIL: 6 pass, 2 FAIL, 3 serial only, 0 unverified"), result.summary)
+
+    def test_wifi_wake_3_not_heard_is_a_fail(self):
+        def feed(cycle, follower, random_channel, beacon):
+            for frame in heard(1001.5, 147, 0.1024, -42):
+                cycle.feed(frame)
+            cycle.mark_sleep(1016.7)
+            for frame in heard(1021.5, 147, 0.1024, -42):
+                cycle.feed(frame)
+            cycle.mark_sleep(1036.7)
+            return beacon
+
+        result, calls, one = self.wifi_ap(feed)
+        self.assertEqual(result.code, EXIT_FAIL, result.out)
+        rows = {row[0]: row for row in result.rows}
+        self.assertEqual(rows["TIME_TO_WAKE"][1:], ("15", "15", "on the air 15.0 s", "pass"))
+        self.assertEqual(rows["TIME_TO_SLEEP"][1:], ("5", "5", "wake 3 not heard before the deadline", "FAIL"))
+        self.assertEqual(rows["CYCLE_TIME"][1:], ("20", "-", "wake 3 not heard before the deadline", "FAIL"))
+        self.assertIn("first wake: on the air 15.0 s, then off the air 5.0 s, cycle time 21.5 s\n", result.out)
+        self.assertTrue(result.summary.startswith("FAIL: 6 pass, 2 FAIL, 3 serial only, 0 unverified"), result.summary)
 
     def test_wifi_random_channel_wake_2(self):
         """The HARD AP picks a channel every wake: observe_ap is told so and
@@ -757,10 +898,12 @@ class AirRunTest(unittest.TestCase):
         def retuned_but_silent(cycle, follower, random_channel, beacon):
             self.assertTrue(random_channel)
             self.assertTrue(follower.reopen)
+            # 30/45 at --timeout 90: one cycle (80 s) fits, two (155 s) do not.
+            self.assertEqual(cycle.tier, "one cycle")
             for frame in heard(1001.5, 293, 0.1024, -61):
                 cycle.feed(frame)
             cycle.mark_sleep(1031.7)
-            cycle.retuned = (9, 1079.0)
+            cycle.retunes[2] = (9, 1079.0)
             return beacon._replace(bssid="F2:72:C1:79:16:1B", ds_channel=7, ht_channel=7, frequency=2442,
                                    ssid="Demo YT WiFi AP Hard Fox")
 
@@ -769,9 +912,13 @@ class AirRunTest(unittest.TestCase):
         self.assertEqual(calls[1][1:3], ("F2:72:C1:79:16:1B", 7))
         rows = {row[0]: row for row in result.rows}
         self.assertEqual(rows["CHANNEL"][1:], ("random", "7", "7", "pass"))
-        self.assertEqual(rows["TIME_TO_WAKE"][1:], ("30", "30", "on the air 29.9 s", "pass"))
+        self.assertEqual(rows["TIME_TO_WAKE"][1:], ("30", "30", "first boot: on the air 29.9 s", "pass"))
         self.assertEqual(rows["TIME_TO_SLEEP"][1:],
                          ("45", "45", "wake 2 not heard on channel 9 after retuning at +79.0 s", "FAIL"))
+        self.assertEqual(rows["CYCLE_TIME"][1:],
+                         ("75", "-", "wake 2 not heard on channel 9 after retuning at +79.0 s", "FAIL"))
+        self.assertEqual(result.suggestion, "run with --timeout 155 for the exact cycle time; this run judged the "
+                                            "first boot with wider tolerances")
 
         def channel_never_seen(cycle, follower, random_channel, beacon):
             for frame in heard(1001.5, 293, 0.1024, -61):
@@ -788,9 +935,11 @@ class AirRunTest(unittest.TestCase):
 
     def test_wifi_random_channel_follower_reopens_and_retunes_through_the_real_loop(self):
         """The real wait_for_beacon loop against a fake tshark reader and the
-        replay's own serial source: the port vanishes at the sleep, comes
-        back for wake 2, its channel line retunes the card, and the cycle
-        passes."""
+        replay's own serial source at --timeout 160, two cycles of the 30/45
+        HARD AP: the port vanishes at each sleep and comes back for the next
+        wake, whose channel line retunes the card; wake 3's Last cycle line
+        fills CYCLE_TIME's serial column and the run ends at wake 3's first
+        beacon."""
         from foxverify import wifi
         from foxverify.tests import read_fixture
         from foxverify.tests.fakes import FakeReader
@@ -807,25 +956,49 @@ class AirRunTest(unittest.TestCase):
             cells[7] = "2442"
             return "\t".join(cells)
 
+        class VanishingTwice(Vanishing):
+            """Gone at ``gone_at`` and again at ``again_at``, each time for
+            ``away`` seconds."""
+
+            def __init__(self, items, clock, gone_at, away, again_at):
+                Vanishing.__init__(self, items, clock, gone_at, away)
+                self.away = away
+                self.again_at = again_at
+
+            def read(self, timeout):
+                if self.vanished and not self.gone and self.again_at is not None and self.clock() >= self.again_at:
+                    self.gone = True
+                    self.back_at = self.again_at + self.away
+                    self.again_at = None
+                    raise serial_fox.PortGone("gone again")
+                return Vanishing.read(self, timeout)
+
         def observe_ap(interface, bssid, channel, deadline, tshark_path, run=None, popen=None, debug=None,
                        cycle=None, follower=None, random_channel=False):
             one = runs[0]
             clock = one.clock
-            # Wake 1 beacons every 0.5 s for 30 s from 1.5 s after the reset,
-            # wake 2's first beacon 75 s after wake 1's.
+            # Beacons every 0.5 s for 30 s from 1.5 s after the reset; wake 2
+            # and wake 3 each begin 75 s after the wake before.
             items = [(1001.5 - clock.now, beacon_line(1001.5))] + [(0.5, beacon_line(1001.5 + 0.5 * i)) for i in range(1, 61)]
-            items += [(45.0, beacon_line(1076.5))]
+            items += [(45.0, beacon_line(1076.5))] + [(0.5, beacon_line(1076.5 + 0.5 * i)) for i in range(1, 61)]
+            items += [(45.0, beacon_line(1151.5)), (0.5, beacon_line(1152.0))]
             reader = FakeReader(wifi.AP_FIELDS, items, clock)
             tuned = []
-            beacon = wifi.wait_for_beacon(reader, bssid, deadline, cycle=cycle, follower=follower, retune=tuned.append)
-            self.assertEqual(tuned, [9])
+            beacon = wifi.wait_for_beacon(reader, bssid, deadline, debug, cycle=cycle, follower=follower,
+                                          retune=tuned.append)
+            self.assertEqual(tuned, [9, 4])
             return beacon
 
         def prepare(one):
             runs.append(one)
-            wake2 = [(1075.0 - 1000.0, "Initializing...\n"), (0.2, "Fox: wifi_ap_client HARD AP\n"),
-                     (0.1, "Operating channel: 9\n")]
-            one.source = Vanishing(wake2, one.clock, gone_at=1031.8, away=40.0)
+            # Wake 2's lines once the port is back, its sleep line after its
+            # last beacon at 1106.5, then wake 3's lines after the second
+            # reopen.
+            lines = [(1075.0 - 1000.0, "Initializing...\n"), (0.2, "Fox: wifi_ap_client HARD AP\n"),
+                     (0.1, "Operating channel: 9\n"), (1106.7 - 1075.3, "Going to sleep\n"),
+                     (1150.0 - 1106.7, "Initializing...\n"), (0.1, "Last cycle: 75.0s, target 75s\n"),
+                     (0.1, "Fox: wifi_ap_client HARD AP\n"), (0.1, "Operating channel: 4\n")]
+            one.source = VanishingTwice(lines, one.clock, gone_at=1031.8, away=40.0, again_at=1107.3)
             one.read_fox = lambda selection: serial_fox.read_fox(
                 serial_fox.TranscriptSource.from_file(fixture("transcripts", "wifi_hard_ap.log"), clock=one.clock),
                 one.deadline, wall=one.wall)
@@ -839,7 +1012,7 @@ class AirRunTest(unittest.TestCase):
         with mock.patch.object(wifi, "observe_ap", observe_ap), mock.patch.object(wifi, "monitor_mode", monitor_mode):
             out = io.StringIO()
             one = run.WifiRun("wifi_ap_client", run.parse_args(
-                "wifi_ap_client", ["--timeout", "90", "--transcript", fixture("transcripts", "wifi_hard_ap.log"),
+                "wifi_ap_client", ["--timeout", "160", "-v", "--transcript", fixture("transcripts", "wifi_hard_ap.log"),
                                    "--header", frozen_header("wifi_ap_client")]), out)
             one.serial_only = False
             one.tshark = "tshark"
@@ -851,8 +1024,14 @@ class AirRunTest(unittest.TestCase):
         rows = {row[0]: row for row in table_rows(text)}
         self.assertEqual(rows["TIME_TO_WAKE"][1:], ("30", "30", "on the air 30.0 s", "pass"))
         self.assertEqual(rows["TIME_TO_SLEEP"][1:], ("45", "45", "off the air 45.0 s", "pass"))
-        self.assertEqual(one.source.reopens, 1)
-        self.assertEqual(one.cycle.retuned[0], 9)
+        self.assertEqual(rows["CYCLE_TIME"][1:], ("75", "75.0", "75.0 s", "pass"))
+        self.assertEqual(one.source.reopens, 2)
+        self.assertEqual((one.cycle.retunes[2][0], one.cycle.retunes[3][0]), (9, 4))
+        self.assertEqual(len(one.cycle.sleep_times), 2)
+        self.assertIn("first wake: on the air 30.0 s, then off the air 45.0 s, cycle time 76.5 s\n", text)
+        self.assertIn("wake 2 is on channel 9, retuning", text)
+        self.assertIn("wake 3 is on channel 4, retuning", text)
+        self.assertLess(one.clock.now, 1153.0)
 
     def test_wifi_client_hops_the_header_channels(self):
         from foxverify import wifi
@@ -886,7 +1065,10 @@ class AirRunTest(unittest.TestCase):
         self.assertEqual(rows["MAC_ADDR"][4], "pass")
         self.assertEqual(rows["FSSID"][4], "pass")
         self.assertEqual(rows["TXPOWER"][3], "median -38 dBm over 1 frame")
-        self.assertIn("note: TIME_TO_WAKE and TIME_TO_SLEEP: serial only, --timeout 60 is under the 305 s", out.getvalue())
+        self.assertIn("TIME_TO_WAKE and TIME_TO_SLEEP serial only (--timeout 60 is under the 305 s one cycle of 300 s "
+                      "plus the 5 s boot allowance needs)\n", out.getvalue())
+        self.assertNotIn("note:", out.getvalue())
+        self.assertTrue(out.getvalue().endswith("run with --timeout 605 to measure the cycle time\n"), out.getvalue())
 
     def test_zigbee_pass_and_interval_budget(self):
         from foxverify import tshark, zigbee
@@ -913,11 +1095,16 @@ class AirRunTest(unittest.TestCase):
             self.assertIn("listening on channel 15 with /dev/ttyACM3 for two Link Status frames\n", result.out)
             rows = {row[0]: row for row in result.rows}
             self.assertEqual(rows["TXPOWER"][1:], ("20", "20", "median -46 dBm over 2 frames", "serial only"))
-            self.assertIn("EXT_PAN_ID", result.out)
-            self.assertIn("| serial only: only in beacons, which the fox sends in reply to a beacon request the "
-                          "receive-only nRF sniffer cannot send", result.out)
-            self.assertEqual(result.notes, ["TIME_TO_WAKE and TIME_TO_SLEEP: serial only, --timeout 60 is under the "
-                                            "305 s the cycle needs (TIME_TO_WAKE + TIME_TO_SLEEP + 5)"])
+            self.assertEqual(rows["EXT_PAN_ID"][1:], ("F2:5A:3C:91:0E:7B:44:D8", "F2:5A:3C:91:0E:7B:44:D8", "-", "serial only"))
+            self.assertIn("| serial only: unable to trigger\n", result.out)
+            self.assertNotIn("beacon", result.out)
+            self.assertEqual(result.notes, [])
+            self.assertIn("TIME_TO_WAKE and TIME_TO_SLEEP serial only (--timeout 60 is under the 305 s one cycle of "
+                          "300 s plus the 5 s boot allowance needs)\n", result.out)
+            self.assertEqual(result.suggestion, "run with --timeout 605 to measure the cycle time")
+            # The run ended with the identity rows, long before the deadline.
+            self.assertTrue(result.summary.endswith(" s of 60 s"), result.summary)
+            self.assertLess(elapsed(result), 5.0)
             del calls[:]
             result, _ = air_run(run.ZigbeeRun, "zigbee_coordinator", fixture("transcripts", "zigbee_easy.log"),
                                 lambda candidates: "/dev/ttyACM3", args=["--timeout", "3"])
@@ -937,15 +1124,17 @@ class AirRunTest(unittest.TestCase):
 
         def observe(sniffer, channel, deadline, tshark_path, pan_id=None, want_link_status=2, cycle=None,
                     follower=None, random_channel=False, mac=None, **kwargs):
-            self.assertTrue(cycle.measure)
+            self.assertEqual(cycle.tier, "one cycle")
             self.assertIsNotNone(follower)
-            self.assertFalse(follower.reopen)
-            # Link Status every second for 300 s from 2 s after the reset;
-            # the fox reboots at once and is back 2 s later.
-            for frame in heard(1002.0, 301, 1.0, -45):
+            self.assertTrue(follower.reopen)
+            # The owner's first boot: the capture starts 15 s after the reset
+            # at 1000 and hears the fox at once, every second to 300 s; the
+            # fox reboots at once and is back 1.8 s later.
+            cycle.listen_time = 1015.0
+            for frame in heard(1015.0, 286, 1.0, -45):
                 cycle.feed(frame)
-            cycle.mark_sleep(1302.3)
-            cycle.feed(heard(1304.1, 1, 1.0, -45)[0])
+            cycle.mark_sleep(1300.4)
+            cycle.feed(heard(1301.8, 1, 1.0, -45)[0])
             return zigbee.Observation(link, link)
 
         with mock.patch.object(zigbee, "observe", observe):
@@ -953,11 +1142,61 @@ class AirRunTest(unittest.TestCase):
                                 lambda candidates: "/dev/ttyACM3", args=["--timeout", "305"])
         self.assertEqual(result.code, EXIT_OK, result.out)
         rows = {row[0]: row for row in result.rows}
+        self.assertEqual(rows["TIME_TO_WAKE"][1:], ("300", "300", "first boot: on the air 285.0 s", "pass"))
+        self.assertEqual(rows["TIME_TO_SLEEP"][1:], ("0", "0", "first boot: off the air 1.8 s", "pass"))
+        self.assertEqual(rows["CYCLE_TIME"][1:], ("300", "-", "first boot: 301.8 s", "pass"))
+        self.assertEqual(rows["EXT_PAN_ID"][4], "serial only")
+        self.assertEqual([v for v, _ in result.verdicts],
+                         ["MAC_ADDR", "CHANNEL", "PAN_ID", "SHORT_ADDR", "PACKET_INTERVAL", "EXT_PAN_ID",
+                          "TIME_TO_WAKE", "TIME_TO_SLEEP", "CYCLE_TIME", "TXPOWER"])
+        self.assertIn("judging the first boot with wider tolerances (--timeout 305 covers one cycle of 300 s plus the "
+                      "5 s boot allowance; two cycles need 605)\n", result.out)
+        self.assertIn("for two Link Status frames and through the first sleep\n", result.out)
+        self.assertIn("first transmission: by 15.0 s after reset (the sniffer started listening at 15.0 s; "
+                      "the radio was up at", result.out)
+        self.assertNotIn("first wake:", result.out)
+        self.assertEqual(result.notes, [])
+        self.assertEqual(result.suggestion, "run with --timeout 605 for the exact cycle time; this run judged the "
+                                            "first boot with wider tolerances")
+
+    def test_zigbee_time_to_sleep_zero_two_cycles_at_605(self):
+        """The owner's board at --timeout 605: wake 1 goes into the first wake
+        line, wake 2 is on the air the full 300 s, wake 3 comes 302.1 s after
+        wake 2's first frame, within TIME_TO_WAKE + 5 + 3 for a TIME_TO_SLEEP
+        0 fox, and the run ends there."""
+        from foxverify import tshark, zigbee
+        from foxverify.tests import read_fixture
+        frames = read_fixture("tshark", "zigbee_frames.tsv").splitlines()
+        link = [zigbee.parse_frame(tshark.parse_line(frames[i], zigbee.FIELDS)) for i in (2, 3)]
+
+        def observe(sniffer, channel, deadline, tshark_path, pan_id=None, want_link_status=2, cycle=None,
+                    follower=None, random_channel=False, mac=None, **kwargs):
+            self.assertEqual(cycle.tier, "two cycles")
+            self.assertTrue(follower.reopen)
+            cycle.listen_time = 1015.0
+            for frame in heard(1015.0, 286, 1.0, -45):
+                cycle.feed(frame)
+            cycle.mark_sleep(1300.4)
+            for frame in heard(1301.8, 301, 1.0, -45):
+                cycle.feed(frame)
+            cycle.mark_sleep(1602.1)
+            cycle.feed(heard(1603.9, 1, 1.0, -45)[0])
+            return zigbee.Observation(link, link)
+
+        with mock.patch.object(zigbee, "observe", observe):
+            result, _ = air_run(run.ZigbeeRun, "zigbee_coordinator", fixture("transcripts", "zigbee_easy.log"),
+                                lambda candidates: "/dev/ttyACM3", args=["--timeout", "605"])
+        self.assertEqual(result.code, EXIT_OK, result.out)
+        rows = {row[0]: row for row in result.rows}
         self.assertEqual(rows["TIME_TO_WAKE"][1:], ("300", "300", "on the air 300.0 s", "pass"))
         self.assertEqual(rows["TIME_TO_SLEEP"][1:], ("0", "0", "off the air 2.1 s", "pass"))
-        self.assertEqual(rows["EXT_PAN_ID"][4], "serial only")
-        self.assertIn("and through the first sleep", result.out)
-        self.assertEqual(result.notes, [])
+        self.assertEqual(rows["CYCLE_TIME"][1:], ("300", "-", "302.1 s", "pass"))
+        self.assertIn("measuring the cycle time from wake 2 and wake 3 (--timeout 605 covers two cycles of 300 s plus "
+                      "the 5 s boot allowance)\n", result.out)
+        self.assertIn("for two Link Status frames and through the first two sleeps\n", result.out)
+        self.assertIn("first wake: on the air 285.0 s, then off the air 1.8 s, cycle time 301.8 s\n", result.out)
+        self.assertTrue(result.summary.startswith("pass: 8 pass, 0 FAIL, 2 serial only, 0 unverified"), result.summary)
+        self.assertIsNone(result.suggestion)
 
     def test_halted_fox_is_not_listened_for(self):
         from foxverify import zigbee

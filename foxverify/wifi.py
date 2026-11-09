@@ -21,9 +21,9 @@ takes about a second, so the card dwells on each channel at least that long:
 the header's ``CHANNEL`` when it has one, otherwise channels 1-11 in turn.
 
 Both captures feed every frame from the fox, with its ``radiotap.dbm_antsignal``
-RSSI, into the run's ``cycle.Cycle`` and go on through the fox's first sleep
-when the cycle is being measured, retuning a random-channel AP fox's card to
-the channel its wake 2 prints on serial.
+RSSI, into the run's ``cycle.Cycle`` and go on through the fox's sleeps when
+the cycle is being measured, retuning a random-channel AP fox's card to the
+channel each later wake prints on serial.
 
 tshark prints ``wlan.ssid`` as text on most builds and as hex bytes on some, so
 an SSID cell is compared both ways. MACs are compared upper case.
@@ -342,8 +342,9 @@ def wait_for_beacon(reader: tshark.FieldReader, bssid: str, deadline: Deadline,
                     follower=None, retune: Optional[Callable[[int], None]] = None) -> Optional[Beacon]:
     """The first beacon from ``bssid`` before the deadline, or None. Every
     beacon from it is fed to ``cycle``, and with a cycle being measured the
-    read goes on through the fox's sleep until wake 2 is heard; ``retune``
-    moves the card when ``follower`` reads wake 2's channel."""
+    read goes on through the fox's sleeps until the wake the cycle's tier
+    wants is heard; ``retune`` moves the card when ``follower`` reads a later
+    wake's channel."""
     first: List[Beacon] = []
 
     def read(timeout: float) -> List[Heard]:
@@ -371,9 +372,9 @@ def observe_ap(interface: str, bssid: str, channel: int, deadline: Deadline, tsh
                follower=None, random_channel: bool = False) -> Optional[Beacon]:
     """Tune the monitor interface to ``channel`` and return the first beacon
     from ``bssid`` before the deadline, or None, feeding ``cycle`` as
-    ``wait_for_beacon`` says. With ``random_channel`` the card follows wake
-    2's channel from the serial port. The interface is already in monitor
-    mode (``monitor_mode``)."""
+    ``wait_for_beacon`` says. With ``random_channel`` the card follows each
+    later wake's channel from the serial port. The interface is already in
+    monitor mode (``monitor_mode``)."""
     set_channel(interface, channel, run)
     argv = tshark.live_command(tshark_path, interface, AP_FIELDS, beacon_filter(bssid))
     debug("running: " + " ".join(argv))

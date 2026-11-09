@@ -14,7 +14,9 @@ and verdict, then one summary line. The verdicts are:
   verdict column carries the reason.
 
 A line added with ``line`` is printed between the table and the notes, which
-is where the first transmission figure goes.
+is where the first transmission figure goes. A line given to ``suggest`` is
+printed after the summary, which is where a run whose budget was too short
+for the exact cycle time names the ``--timeout`` that measures it.
 
 The exit code is 0 when nothing FAILed, 1 when any row FAILed and 2 when the
 run could not happen at all (no fox, not a fox, a missing tool or privilege);
@@ -110,6 +112,7 @@ class Report:
         self.rows: List[Row] = []
         self.lines: List[str] = []
         self.notes: List[str] = []
+        self.suggestion: Optional[str] = None
 
     def add(self, value: str, header: Optional[object], serial: Optional[object],
             air: Optional[object], verdict: str, reason: str = "") -> Row:
@@ -156,6 +159,10 @@ class Report:
         """A line printed between the table and the summary, marked ``note:``."""
         self.notes.append(text)
 
+    def suggest(self, text: Optional[str]) -> None:
+        """The one line printed after the summary; None prints nothing."""
+        self.suggestion = text
+
     def say(self, text: str) -> None:
         """Progress the user always sees."""
         self.out.write(text + "\n")
@@ -199,10 +206,13 @@ class Report:
         parts.extend(self.lines)
         parts.extend("note: " + note for note in self.notes)
         parts.append(self.summary())
+        if self.suggestion is not None:
+            parts.append(self.suggestion)
         return "\n".join(parts) + "\n"
 
     def emit(self) -> int:
-        """Print the table, the notes and the summary; return the exit code."""
+        """Print the table, the notes, the summary and the suggestion; return
+        the exit code."""
         self.out.write(self.render())
         self.out.flush()
         return self.exit_code()
