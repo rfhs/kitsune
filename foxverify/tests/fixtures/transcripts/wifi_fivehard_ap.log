@@ -3,6 +3,7 @@ ESP32 boot count: 0
 Sleep stats: 0s since cold boot, 0s since last wakeup
 Setting up WiFi AP...
 MAC address set successfully
+Starting on channel 149
 Set power status: ok
 Fox: wifi_ap_client FIVEHARD AP
 Time to wake: 30s

@@ -17,6 +17,12 @@ below takes what is left of it. The steps are the same for every project:
    in the header as a candidate; the fox is only on the air for a short
    window per wake and the first one must not be missed.
 4. Reset the fox and read its banner and readback lines (``serial_fox``).
+   A Wi-Fi AP or Zigbee fox prints ``Starting on channel N`` before its
+   radio starts; the moment that line arrives the Wi-Fi and Zigbee runs
+   tune the sniffer and start capturing, so the fox's first frame is heard.
+   When the line was missed, which a native USB board's host can do while
+   the port re-enumerates, the capture starts after the readback on the
+   ``Operating channel`` line instead; ``-v`` says which line it was.
 5. Pick the header block the banner names. A serial MAC that differs from
    the block's MAC means the fox was built from another header: that row
    FAILs and nothing else is checked.
@@ -47,11 +53,12 @@ end-to-end tests use it; so can anyone with a saved transcript and no fox.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import os
 import shutil
 import sys
 import time
-from typing import Callable, List, Optional, TextIO
+from typing import Callable, List, NamedTuple, Optional, TextIO
 
 from . import conf, cycle, devices, privileges, serial_fox
 from .conf import Block, ConfError
@@ -134,6 +141,16 @@ def parse_args(project: str, argv: Optional[List[str]] = None) -> argparse.Names
     return args
 
 
+class Tuned(NamedTuple):
+    """How the sniffer came to be on the fox's channel: the channel, the wall
+    clock moment the capture started, and the label of the serial line that
+    named the channel."""
+
+    channel: int
+    when: float
+    label: str
+
+
 def header_macs(text: str) -> List[str]:
     """Every MAC_ADDR in the header, one per block, for the scans that start
     before the banner has chosen the block."""
@@ -156,6 +173,10 @@ class Run:
 
     want_sniffer = False
     want_hci = False
+    # The text of the ``Setting up <radio>...`` line of a fox whose
+    # ``Starting on channel`` line this run tunes its sniffer on; None for a
+    # radio that has no channel of its own.
+    radio: Optional[str] = None
 
     def __init__(self, project: str, args: argparse.Namespace, out: TextIO = sys.stdout):
         self.project = project
@@ -180,15 +201,26 @@ class Run:
         self.cycle: Optional[cycle.Cycle] = None
         self.follower: Optional[serial_fox.Follower] = None
         self.timer_reason = ""
+        # The sniffer start_air returned, every MAC_ADDR of the header, and
+        # the capture a Wi-Fi AP or Zigbee run starts the moment the fox names
+        # its channel, with how it was tuned; the stack closes the capture
+        # and puts the sniffer back when the run ends.
+        self.air = None
+        self.candidates: List[str] = []
+        self.captures = contextlib.ExitStack()
+        self.capture = None
+        self.tuned: Optional[Tuned] = None
 
     # The steps shared by every project.
 
     def run(self) -> int:
         header_text = self.load_header()
         selection = self.select_devices()
+        self.candidates = header_macs(header_text)
         air = None
         if not self.serial_only:
-            air = self.start_air(selection, header_macs(header_text))
+            air = self.start_air(selection, self.candidates)
+        self.air = air
         try:
             readback = self.read_fox(selection)
             block = serial_fox.block_for(readback, self.project, header_text)
@@ -237,8 +269,13 @@ class Run:
             self.report.say(cycle.tier_line(tier, wake, sleep, self.args.timeout))
             self.report.suggest(cycle.suggestion(tier, wake, sleep))
         # A Bluetooth scan runs from before the reset; a Wi-Fi or Zigbee
-        # capture starts after the readback has named the channel.
-        listen_time = readback.reset_time if self.want_hci else None
+        # capture starts when the serial port names the channel, on the
+        # fox's Starting on channel line when it was caught, else after the
+        # readback, at which point listen() stamps the start itself.
+        if self.want_hci:
+            listen_time = readback.reset_time
+        else:
+            listen_time = self.tuned.when if self.tuned is not None else None
         self.cycle = cycle.Cycle(readback.reset_time, self.granularity(block, readback), tier, wake,
                                  clock=self.wall, listen_time=listen_time, radio_time=readback.banner_time)
         if self.cycle.measure:
@@ -310,7 +347,30 @@ class Run:
             except (OSError, ValueError) as error:
                 raise RunError("cannot open %s: %s" % (fox.path, error))
         return serial_fox.read_fox(self.source, self.deadline, reset=not self.args.no_reset,
-                                   say=self.report.say, debug=self.report.debug, wall=self.wall)
+                                   say=self.report.say, debug=self.report.debug, wall=self.wall,
+                                   on_field=self.on_field)
+
+    def on_field(self, field: str, readback: Readback) -> None:
+        """Every readback line as it arrives. The ``Starting on channel`` line
+        of a fox setting up this run's radio starts the capture at once, when
+        a sniffer is present and none has been started yet."""
+        if field != "starting_channel" or self.air is None or self.capture is not None:
+            return
+        if self.radio is None or readback.get("setting_up") != self.radio:
+            return
+        self.tune(readback.integer("starting_channel"), serial_fox.STARTING_CHANNEL)
+
+    def tune(self, channel: int, label: str) -> None:
+        """Put the sniffer on ``channel`` and start capturing, recording the
+        moment and the serial line, ``label``, that named the channel."""
+        self.report.debug("tuning %s to channel %d on the fox's %s line" % (self.air, channel, label))
+        self.start_capture(channel)
+        self.tuned = Tuned(channel, self.wall(), label)
+
+    def start_capture(self, channel: int) -> None:
+        """Start this project's capture on ``channel`` into ``self.capture``,
+        registered with ``self.captures`` so it is closed when the run ends."""
+        raise NotImplementedError
 
     def header_matches(self, block: Block, readback: Readback) -> bool:
         """True when the fox's address is the block's MAC_ADDR. Otherwise the
@@ -397,7 +457,8 @@ class Run:
         raise NotImplementedError
 
     def stop_air(self, air) -> None:
-        pass
+        """Close the capture and put the sniffer back, whatever ended the run."""
+        self.captures.close()
 
     def rows(self, block: Block, readback: Readback, air) -> None:
         raise NotImplementedError
@@ -500,6 +561,8 @@ class IBeaconRun(Run):
 
 
 class WifiRun(Run):
+    radio = "WiFi AP"
+
     def check_tools(self, selection, which=shutil.which):
         if selection.wifi is None:
             return None
@@ -522,6 +585,12 @@ class WifiRun(Run):
         # its card hops anyway.
         return "CHANNEL" in block and block.integer("CHANNEL") == 0 and readback.banner.mode == "AP"
 
+    def start_capture(self, channel):
+        from . import wifi
+        self.captures.enter_context(wifi.monitor_mode(self.air))
+        self.capture = wifi.ApCapture(self.air, self.candidates, channel, self.tshark, debug=self.report.debug)
+        self.captures.callback(self.capture.close)
+
     def rows(self, block, readback, interface):
         from . import wifi
         mode = readback.banner.mode
@@ -533,16 +602,17 @@ class WifiRun(Run):
             return
         mac = block.mac("MAC_ADDR")
         if mode == "AP":
-            channel = wifi.ap_channel(block, readback)
-            if channel is None:
-                wifi.ap_rows(self.report, block, readback, None, "the fox did not print its channel")
-                return
+            if self.capture is None:
+                channel = wifi.ap_channel(block, readback)
+                if channel is None:
+                    wifi.ap_rows(self.report, block, readback, None, "the fox did not print its channel")
+                    return
+                self.tune(channel, serial_fox.OPERATING_CHANNEL)
+            channel = self.tuned.channel
             self.report.say("listening for beacons from %s on channel %d with %s%s" % (
                 mac, channel, interface, self.through()))
-            with wifi.monitor_mode(interface):
-                beacon = wifi.observe_ap(interface, mac, channel, self.deadline, self.tshark,
-                                         debug=self.report.debug, cycle=self.cycle, follower=self.follower,
-                                         random_channel=self.random_channel(block, readback))
+            beacon = self.capture.wait(mac, self.deadline, self.cycle, self.follower,
+                                       self.random_channel(block, readback))
             wifi.ap_rows(self.report, block, readback, beacon,
                          "no beacon from %s on channel %d before the deadline" % (mac, channel))
         else:
@@ -566,6 +636,7 @@ class WifiRun(Run):
 
 class ZigbeeRun(Run):
     want_sniffer = True
+    radio = "Zigbee Coordinator"
 
     def check_tools(self, selection, which=shutil.which):
         if selection.sniffer is None:
@@ -587,15 +658,23 @@ class ZigbeeRun(Run):
     def random_channel(self, block, readback):
         return block.integer("CHANNEL") == 0
 
+    def start_capture(self, channel):
+        from . import zigbee
+        self.capture = zigbee.Capture(self.air, channel, self.deadline, self.tshark, debug=self.report.debug)
+        self.captures.callback(self.capture.close)
+
     def rows(self, block, readback, sniffer):
         from . import zigbee
         if sniffer is None:
             zigbee.rows(self.report, block, readback, None, reason=self.air_reason)
             return
-        channel = readback.integer("channel")
-        if channel is None:
-            zigbee.rows(self.report, block, readback, None, reason="the fox did not print its channel")
-            return
+        if self.capture is None:
+            channel = readback.integer("channel")
+            if channel is None:
+                zigbee.rows(self.report, block, readback, None, reason="the fox did not print its channel")
+                return
+            self.tune(channel, serial_fox.OPERATING_CHANNEL)
+        channel = self.tuned.channel
         pan_id = readback.integer("pan_id")
         interval = block.integer("PACKET_INTERVAL")
         interval_reason = zigbee.interval_fits(interval, self.deadline.remaining())
@@ -603,10 +682,8 @@ class ZigbeeRun(Run):
         self.report.say("listening on channel %d with %s for %s%s" % (
             channel, sniffer, "one Link Status frame" if want == 1 else "two Link Status frames",
             (" and" + self.through()) if self.measuring() else ""))
-        observation = zigbee.observe(sniffer, channel, self.deadline, self.tshark, pan_id, want,
-                                     debug=self.report.debug, cycle=self.cycle, follower=self.follower,
-                                     random_channel=self.random_channel(block, readback),
-                                     mac=block.mac("MAC_ADDR"))
+        observation = self.capture.collect(self.deadline, pan_id, want, self.cycle, self.follower,
+                                           self.random_channel(block, readback), block.mac("MAC_ADDR"))
         zigbee.rows(self.report, block, readback, observation, interval_reason,
                     reason="no frame from a coordinator on channel %d before the deadline" % channel)
 

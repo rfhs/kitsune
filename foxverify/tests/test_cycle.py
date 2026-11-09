@@ -694,6 +694,9 @@ class ListenTest(unittest.TestCase):
         def channel(self, wake=2):
             return self._channels.get(wake)
 
+        def channel_label(self, wake=2):
+            return "Operating channel" if wake in self._channels else None
+
     def test_stops_at_the_goal_without_a_cycle_to_measure(self):
         dl, clock = deadline(60)
         reads = []

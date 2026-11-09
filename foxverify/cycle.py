@@ -48,9 +48,11 @@ latest moment the wake can end, its first frame plus ``TIME_TO_WAKE`` plus
 for the sleep; without a serial port it counts anywhere.
 
 The Bluetooth scans start before the fox is reset, so they hear wake 1's
-true first frame. The Wi-Fi and Zigbee captures start after the serial
-readback, which names the channel, and so begin ``late`` seconds after the
-reset; the fox may have been on the air that long before it was heard. The
+true first frame. The Wi-Fi and Zigbee captures start when the serial port
+names the channel: on the fox's ``Starting on channel`` line, printed before
+its radio starts, when the host caught it, else after the readback. Either
+way they begin ``late`` seconds after the reset, and a capture that began
+only after the readback may have missed frames the fox sent before it. The
 first transmission line says the figure is an upper bound when the fox was
 heard as soon as the capture began, and the first-boot rows allow for it.
 
@@ -381,7 +383,9 @@ def listen(cycle: Optional[Cycle], deadline, read: Callable[[float], Sequence[He
     and the cycle is done, or at the deadline. ``follower`` reads the fox's
     serial port between reads for the end of each wake and, when ``retune``
     is given, for the channel of each later wake, which the sniffer is moved
-    to once per wake."""
+    to once per wake, on the first line that names it: the fox's ``Starting
+    on channel`` line before its radio starts when the host caught it, else
+    its ``Operating channel`` readback."""
     if cycle is not None and cycle.listen_time is None:
         cycle.listen_time = cycle.clock()
     while True:
@@ -398,7 +402,8 @@ def listen(cycle: Optional[Cycle], deadline, read: Callable[[float], Sequence[He
                 for wake in range(2, cycle.wakes_wanted + 1):
                     channel = follower.channel(wake)
                     if channel is not None and wake not in cycle.retunes:
-                        debug("wake %d is on channel %d, retuning" % (wake, channel))
+                        debug("wake %d is on channel %d by its %s line, retuning"
+                              % (wake, channel, follower.channel_label(wake)))
                         retune(channel)
                         cycle.retunes[wake] = (channel, cycle.clock())
         for frame in read(min(remaining, POLL)):

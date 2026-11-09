@@ -30,6 +30,13 @@ full interval, the second one interval later. ``interval_fits`` decides before
 the capture whether that fits in the time left and gives the reason for the
 ``unverified`` row when it does not.
 
+The capture (``Capture``) is started the moment the serial port names the
+channel: on the fox's ``Starting on channel`` line, printed before its radio
+starts, when the host caught it, so the dongle is on the channel for the
+network formation; otherwise after the readback, from its ``Operating
+channel`` line. The frames tshark decodes in the meantime wait in its output
+with their own timestamps until ``collect`` reads them.
+
 Every frame from the fox, with the RSSI the TAP header carries
 (``wpan-tap.rss``), feeds the run's ``cycle.Cycle``; when the cycle is being
 measured the capture goes on through the fox's sleeps, and the channel each
@@ -380,6 +387,84 @@ def collect(reader: tshark.FieldReader, deadline: Deadline, pan_id: Optional[int
     return Observation(frames, link_status)
 
 
+class Capture:
+    """A running capture on one channel with the sniffer at ``sniffer_path``,
+    started the moment the fox names its channel and read later.
+
+    Opening it starts tshark on a pcap FIFO in a temporary directory, puts
+    the dongle on ``channel`` and starts the pump that writes every frame
+    the dongle reports to the FIFO; tshark keeps what it decodes until
+    ``collect`` reads it, with the frames' own timestamps. ``retune`` moves
+    the dongle for a later wake of a random-channel fox. ``close`` puts the
+    dongle to sleep, stops tshark and removes the directory, on every exit
+    path.
+    """
+
+    def __init__(self, sniffer_path: str, channel: int, deadline: Deadline, tshark_path: str,
+                 open_port: Callable = open_sniffer, popen: Callable = subprocess.Popen,
+                 debug: Callable[[str], None] = lambda text: None):
+        self.sniffer_path = sniffer_path
+        self.channel = channel
+        self.debug = debug
+        self.workdir = tempfile.mkdtemp(prefix="foxverify-")
+        self.fifo = os.path.join(self.workdir, "sniffer.pcap")
+        os.mkfifo(self.fifo, stat.S_IRUSR | stat.S_IWUSR)
+        argv = tshark.file_command(tshark_path, self.fifo, FIELDS)
+        debug("running: " + " ".join(argv))
+        self.reader = tshark.FieldReader(argv, FIELDS, popen).start()
+        self.sink = None
+        self.pump: Optional[Pump] = None
+        try:
+            self.sink = open_fifo_for_tshark(self.fifo, self.reader, deadline)
+            self.sink.write(pcap_global_header())
+            self.sink.flush()
+            try:
+                port = open_port(sniffer_path)
+                self.pump = Pump(port, self.sink, channel, debug=debug)
+                self.pump.start()
+            except OSError as error:
+                raise RunError("sniffer %s: %s" % (sniffer_path, error))
+        except BaseException:
+            self.close()
+            raise
+
+    def retune(self, channel: int) -> None:
+        self.pump.retune(channel)
+
+    def collect(self, deadline: Deadline, pan_id: Optional[int], want_link_status: int,
+                cycle: Optional[Cycle] = None, follower=None, random_channel: bool = False,
+                mac: Optional[str] = None) -> Observation:
+        """Read until the wanted Link Status frames arrived or the deadline
+        passed, feeding ``cycle`` as ``collect`` says; with ``random_channel``
+        the dongle follows each later wake's channel from the serial port. A
+        failure on the dongle's port is a ``RunError``."""
+        observation = collect(self.reader, deadline, pan_id, want_link_status, self.debug, cycle, follower,
+                              self.retune if random_channel else None, mac)
+        if self.pump.error is not None:
+            raise RunError("sniffer %s: %s" % (self.sniffer_path, self.pump.error))
+        self.debug("sniffer reported %d frames" % self.pump.frames)
+        return observation
+
+    def close(self) -> None:
+        if self.pump is not None:
+            self.pump.stop()
+            try:
+                self.pump.port.close()
+            except Exception:
+                pass
+        if self.sink is not None:
+            try:
+                self.sink.close()
+            except OSError:
+                pass
+        self.reader.stop()
+        try:
+            os.unlink(self.fifo)
+            os.rmdir(self.workdir)
+        except OSError:
+            pass
+
+
 def observe(sniffer_path: str, channel: int, deadline: Deadline, tshark_path: str,
             pan_id: Optional[int] = None, want_link_status: int = 2,
             open_port: Callable = open_sniffer, popen: Callable = subprocess.Popen,
@@ -388,51 +473,13 @@ def observe(sniffer_path: str, channel: int, deadline: Deadline, tshark_path: st
     """Capture on ``channel`` with the sniffer at ``sniffer_path`` until the
     wanted Link Status frames arrived or the deadline passed, feeding
     ``cycle`` as ``collect`` says; with ``random_channel`` the dongle follows
-    each later wake's channel from the serial port. tshark reads the pcap stream from
-    a FIFO in a temporary directory; the dongle is put to sleep and the
-    directory removed on every exit path."""
-    workdir = tempfile.mkdtemp(prefix="foxverify-")
-    fifo = os.path.join(workdir, "sniffer.pcap")
-    os.mkfifo(fifo, stat.S_IRUSR | stat.S_IWUSR)
-    argv = tshark.file_command(tshark_path, fifo, FIELDS)
-    debug("running: " + " ".join(argv))
-    reader = tshark.FieldReader(argv, FIELDS, popen).start()
-    sink = None
-    pump = None
+    each later wake's channel from the serial port. The dongle is put to
+    sleep and the capture's directory removed on every exit path."""
+    capture = Capture(sniffer_path, channel, deadline, tshark_path, open_port, popen, debug)
     try:
-        sink = open_fifo_for_tshark(fifo, reader, deadline)
-        sink.write(pcap_global_header())
-        sink.flush()
-        try:
-            port = open_port(sniffer_path)
-            pump = Pump(port, sink, channel, debug=debug)
-            pump.start()
-        except OSError as error:
-            raise RunError("sniffer %s: %s" % (sniffer_path, error))
-        observation = collect(reader, deadline, pan_id, want_link_status, debug, cycle, follower,
-                              pump.retune if random_channel else None, mac)
-        if pump.error is not None:
-            raise RunError("sniffer %s: %s" % (sniffer_path, pump.error))
-        debug("sniffer reported %d frames" % pump.frames)
-        return observation
+        return capture.collect(deadline, pan_id, want_link_status, cycle, follower, random_channel, mac)
     finally:
-        if pump is not None:
-            pump.stop()
-            try:
-                pump.port.close()
-            except Exception:
-                pass
-        if sink is not None:
-            try:
-                sink.close()
-            except OSError:
-                pass
-        reader.stop()
-        try:
-            os.unlink(fifo)
-            os.rmdir(workdir)
-        except OSError:
-            pass
+        capture.close()
 
 
 def _u16(value: Optional[int]) -> Optional[str]:
@@ -456,8 +503,15 @@ def rows(report: Report, block: Block, readback: Readback, observation: Optional
     channel = block.integer("CHANNEL")
     channel_header = "random" if channel == 0 else channel
     serial_channel = readback.integer("channel")
-    report.check("CHANNEL", channel_header, serial_channel, frame.channel if frame else None,
-                 agree=(serial_channel is not None and channel == 0) or None, reason=reason)
+    air_channel = frame.channel if frame else None
+    mismatch = readback.channel_mismatch()
+    if mismatch is not None:
+        # The fox named one channel before its radio started and read back
+        # another; both are shown.
+        report.add("CHANNEL", channel_header, mismatch, air_channel, FAIL)
+    else:
+        report.check("CHANNEL", channel_header, serial_channel, air_channel,
+                     agree=(serial_channel is not None and channel == 0) or None, reason=reason)
 
     pan_random = block.is_bare_zero("PAN_ID")
     pan_header = "random" if pan_random else format_u16(block.integer("PAN_ID"))

@@ -345,9 +345,18 @@ def transcript_for(project, difficulty, mode, block):
     rfhsboot(), the MAC set, the banner, the timers, the device address first
     of the readbacks, then the radio's values and "Awake and screaming". A
     random CHANNEL or PAN_ID is printed as a fixed stand-in for what the fox
-    would have picked."""
+    would have picked. A Wi-Fi AP or Zigbee fox names its channel on the
+    Starting on channel line before its radio starts and reads it back after
+    the banner."""
     lines = ["Initializing...", "ESP32 boot count: 0", "Sleep stats: 0s since cold boot, 0s since last wakeup",
              "Setting up %s..." % SETTING_UP[mode or project], "MAC address set successfully"]
+    channel = None
+    if project == "wifi_ap_client" and mode == "AP":
+        channel = block.integer("CHANNEL") or 6
+    elif project == "zigbee_coordinator":
+        channel = block.integer("CHANNEL") or 11
+    if channel is not None:
+        lines.append("Starting on channel %d" % channel)
     if project == "wifi_ap_client":
         lines.append("Set power status: ok")
     lines += ["Fox: %s %s%s" % (project, difficulty, " " + mode if mode else ""),
@@ -367,7 +376,7 @@ def transcript_for(project, difficulty, mode, block):
                   "Signal power: %d" % (power - 256 if power > 127 else power),
                   "Tx power: %s (%d dBm)" % (tx_power, dbm)]
     elif project == "wifi_ap_client" and mode == "AP":
-        lines += ["Operating channel: %d" % (block.integer("CHANNEL") or 6),
+        lines += ["Operating channel: %d" % channel,
                   "Operating SSID: " + block.string("FSSID"), "Operating PSK: " + block.string("PSK"),
                   "Hidden SSID: " + block.display("SSID_HIDDEN"), "Max clients: " + block.display("MAX_CLIENTS"),
                   "Tx power: " + block.identifier("TXPOWER")]
@@ -375,7 +384,7 @@ def transcript_for(project, difficulty, mode, block):
         lines += ["Operating SSID: " + block.string("FSSID"), "Operating PSK: " + block.string("PSK"),
                   "Tx power: " + block.identifier("TXPOWER")]
     else:
-        lines += ["Operating channel: %d" % (block.integer("CHANNEL") or 11),
+        lines += ["Operating channel: %d" % channel,
                   "Operating PAN ID: 0x%04X" % (0x1234 if block.is_bare_zero("PAN_ID") else block.integer("PAN_ID")),
                   "Extended PAN ID: " + block.mac("EXT_PAN_ID"), "Short address: 0x0000",
                   "Packet interval: %ss" % block.display("PACKET_INTERVAL"),
@@ -493,6 +502,51 @@ def air_run(cls, project, transcript, start_air, header=None, args=(), prepare=N
         prepare(one)
     code = one.run()
     return Result(code, out.getvalue(), ""), handles[0]
+
+
+WIFI_HEADER_MACS = ["F2:F4:90:22:0D:0F", "F2:72:C1:79:16:1B", "F2:77:20:34:0A:C7", "F2:13:D4:3C:51:4B",
+                    "F2:44:5E:10:97:F4", "F2:83:27:31:80:C7"]
+
+
+def fake_ap_capture(calls, feed, beacon):
+    """A stand-in for wifi.ApCapture: its start, wait and close go into
+    ``calls`` and ``feed(cycle, follower, random_channel, beacon)`` answers
+    the wait."""
+    class FakeApCapture:
+        def __init__(self, interface, bssids, channel, tshark_path, run=None, popen=None, debug=None):
+            calls.append(("capture", interface, list(bssids), channel, tshark_path))
+            self.channel = channel
+
+        def retune(self, channel):
+            calls.append(("retune", channel))
+
+        def wait(self, bssid, deadline, cycle=None, follower=None, random_channel=False):
+            calls.append(("wait", bssid, cycle is not None, follower is not None, random_channel))
+            return feed(cycle, follower, random_channel, beacon)
+
+        def close(self):
+            calls.append(("closed",))
+
+    return FakeApCapture
+
+
+def fake_zigbee_capture(calls, collect):
+    """A stand-in for zigbee.Capture: its start and close go into ``calls``
+    and ``collect(channel, pan_id, want, cycle, follower, random_channel,
+    mac)`` answers the read with an Observation."""
+    class FakeCapture:
+        def __init__(self, sniffer_path, channel, deadline, tshark_path, open_port=None, popen=None, debug=None):
+            calls.append(("capture", sniffer_path, channel, tshark_path))
+            self.channel = channel
+
+        def collect(self, deadline, pan_id, want_link_status, cycle=None, follower=None, random_channel=False,
+                    mac=None):
+            return collect(self.channel, pan_id, want_link_status, cycle, follower, random_channel, mac)
+
+        def close(self):
+            calls.append(("closed",))
+
+    return FakeCapture
 
 
 def sleep_line(one, at):
@@ -763,20 +817,18 @@ class AirRunTest(unittest.TestCase):
         self.assertEqual(result.notes, [])
         self.assertEqual(rows["TXPOWER"][3], "median -50 dBm over 3 frames")
 
-    def wifi_ap(self, feed, args=(), transcript="wifi_easy_ap.log", header=None):
-        """A Wi-Fi AP run whose observe_ap is replaced by ``feed(cycle,
-        follower, random_channel)`` returning the beacon."""
+    def wifi_ap(self, feed, args=(), transcript="wifi_easy_ap.log", header=None, prepare=None):
+        """A Wi-Fi AP run whose ApCapture is replaced: ``calls`` records the
+        monitor mode, the capture's start (interface, BSSIDs, channel, tshark)
+        and its wait, which ``feed(cycle, follower, random_channel, beacon)``
+        answers with the beacon. ``transcript`` is a fixture name or a path."""
         from foxverify import tshark, wifi
         from foxverify.tests import read_fixture
         beacon = wifi.parse_beacon(tshark.parse_line(read_fixture("tshark", "ap_beacons.tsv").splitlines()[0],
                                                      wifi.AP_FIELDS))
         calls = []
-
-        def observe_ap(interface, bssid, channel, deadline, tshark_path, run=None, popen=None, debug=None,
-                       cycle=None, follower=None, random_channel=False):
-            calls.append((interface, bssid, channel, tshark_path, cycle is not None, follower is not None,
-                          random_channel))
-            return feed(cycle, follower, random_channel, beacon)
+        capture = fake_ap_capture(calls, feed, beacon)
+        path = transcript if os.path.isabs(transcript) else fixture("transcripts", transcript)
 
         from contextlib import contextmanager
 
@@ -786,14 +838,16 @@ class AirRunTest(unittest.TestCase):
             yield wifi.InterfaceState(name, "managed", True)
             calls.append(("restored", name))
 
-        with mock.patch.object(wifi, "observe_ap", observe_ap), mock.patch.object(wifi, "monitor_mode", monitor_mode):
+        with mock.patch.object(wifi, "ApCapture", capture), mock.patch.object(wifi, "monitor_mode", monitor_mode):
             out = io.StringIO()
             one = run.WifiRun("wifi_ap_client", run.parse_args(
-                "wifi_ap_client", list(args) + ["--transcript", fixture("transcripts", transcript),
+                "wifi_ap_client", list(args) + ["--transcript", path,
                                                 "--header", header or frozen_header("wifi_ap_client")]), out)
             one.serial_only = False
             one.tshark = "/usr/bin/tshark"
             one.start_air = lambda selection, candidates: "wlan1"
+            if prepare is not None:
+                prepare(one)
             code = one.run()
         return Result(code, out.getvalue(), ""), calls, one
 
@@ -813,10 +867,15 @@ class AirRunTest(unittest.TestCase):
             cycle.feed(heard(1041.5, 1, 1.0, -44)[0])
             return beacon
 
-        result, calls, one = self.wifi_ap(feed)
+        result, calls, one = self.wifi_ap(feed, args=["-v"])
         self.assertEqual(result.code, EXIT_OK, result.out)
-        self.assertEqual(calls, [("monitor", "wlan1"), ("wlan1", "F2:F4:90:22:0D:0F", 1, "/usr/bin/tshark", True, True, False),
-                                 ("restored", "wlan1")])
+        # The capture started on the Starting on channel line, before the
+        # banner chose the block, so it is filtered to every header MAC.
+        self.assertEqual(calls, [("monitor", "wlan1"), ("capture", "wlan1", WIFI_HEADER_MACS, 1, "/usr/bin/tshark"),
+                                 ("wait", "F2:F4:90:22:0D:0F", True, True, False), ("closed",), ("restored", "wlan1")])
+        self.assertEqual(one.tuned.label, "Starting on channel")
+        self.assertIn("tuning wlan1 to channel 1 on the fox's Starting on channel line\n", result.out)
+        self.assertEqual(one.cycle.listen_time, one.tuned.when)
         rows = {row[0]: row for row in result.rows}
         self.assertEqual([rows[v][4] for v in ("MAC_ADDR", "CHANNEL", "FSSID", "SSID_HIDDEN", "SECURITY")], ["pass"] * 5)
         self.assertEqual(rows["TIME_TO_WAKE"][1:], ("15", "15", "on the air 15.0 s", "pass"))
@@ -874,7 +933,7 @@ class AirRunTest(unittest.TestCase):
 
         result, calls, one = self.wifi_ap(feed, args=["--timeout", "24"])
         self.assertEqual(result.code, EXIT_OK, result.out)
-        self.assertEqual(calls[1][4:], (True, False, False))
+        self.assertEqual(calls[2], ("wait", "F2:F4:90:22:0D:0F", True, False, False))
         rows = {row[0]: row for row in result.rows}
         self.assertEqual(rows["TIME_TO_WAKE"][1:], ("15", "15", "-", "serial only"))
         self.assertEqual(rows["TIME_TO_SLEEP"][1:], ("5", "5", "-", "serial only"))
@@ -887,6 +946,126 @@ class AirRunTest(unittest.TestCase):
         self.assertNotIn("through the first", result.out)
         self.assertTrue(result.summary.startswith("pass: 5 pass, 0 FAIL, 5 serial only, 0 unverified"), result.summary)
         self.assertEqual(result.suggestion, "run with --timeout 45 to measure the cycle time")
+
+    def wifi_transcript(self, text):
+        """A temporary transcript file with ``text``."""
+        with tempfile.NamedTemporaryFile("w", suffix=".log", delete=False) as handle:
+            handle.write(text)
+        self.addCleanup(os.unlink, handle.name)
+        return handle.name
+
+    def test_wifi_early_line_starts_the_capture_before_the_readback_is_complete(self):
+        """The lines arrive 0.1 s apart on the replay clock: the capture starts
+        the moment Starting on channel is read, before the banner and the
+        Operating channel readback, and the first transmission counts from
+        there."""
+        from foxverify.tests.test_serial_fox import timed
+        text = read_fixture("transcripts", "wifi_easy_ap.log")
+        moments = {}
+
+        def prepare(one):
+            one.source = serial_fox.TranscriptSource([], clock=one.clock)
+            one.read_fox = lambda selection: serial_fox.read_fox(
+                serial_fox.TranscriptSource(timed(text, first=1.0, step=0.1), clock=one.clock), one.deadline,
+                wall=one.wall, on_field=one.on_field)
+            original = one.start_capture
+
+            def start_capture(channel):
+                moments["tuned"] = one.clock.now
+                original(channel)
+
+            one.start_capture = start_capture
+
+        def feed(cycle, follower, random_channel, beacon):
+            self.assertIsNone(follower)
+            moments["wait"] = cycle.clock()
+            cycle.feed(heard(1004.5, 1, 1.0, -42)[0])
+            return beacon
+
+        result, calls, one = self.wifi_ap(feed, args=["--timeout", "24", "-v"], prepare=prepare)
+        self.assertEqual(result.code, EXIT_OK, result.out)
+        # The first line is due 1.0 s after the reset at 1000 and the rest
+        # 0.1 s apart, so the early line is due at its index in the fixture.
+        lines = text.splitlines()
+        self.assertAlmostEqual(moments["tuned"], 1001.0 + 0.1 * lines.index("Starting on channel 1"), delta=0.01)
+        self.assertAlmostEqual(one.tuned.when, moments["tuned"])
+        self.assertLess(one.tuned.when, one.cycle.radio_time)
+        self.assertGreater(moments["wait"], one.cycle.radio_time)
+        self.assertEqual(one.tuned.label, "Starting on channel")
+        self.assertEqual(one.cycle.listen_time, one.tuned.when)
+        self.assertEqual(calls[:2], [("monitor", "wlan1"), ("capture", "wlan1", WIFI_HEADER_MACS, 1, "/usr/bin/tshark")])
+        self.assertIn("tuning wlan1 to channel 1 on the fox's Starting on channel line\n", result.out)
+        self.assertIn("first transmission: 4.5 s after reset\n", result.out)
+        rows = {row[0]: row for row in result.rows}
+        self.assertEqual(rows["CHANNEL"][1:], ("1", "1", "1", "pass"))
+
+    def test_wifi_without_the_early_line_tunes_on_the_readback(self):
+        """A host that missed the Starting on channel line: the capture starts
+        after the readback, on the Operating channel line, as before."""
+        text = read_fixture("transcripts", "wifi_easy_ap.log").replace("Starting on channel 1\n", "")
+        self.assertNotIn("Starting on channel", text)
+
+        def feed(cycle, follower, random_channel, beacon):
+            cycle.feed(heard(1001.5, 1, 1.0, -42)[0])
+            return beacon
+
+        result, calls, one = self.wifi_ap(feed, args=["--timeout", "24", "-v"], transcript=self.wifi_transcript(text))
+        self.assertEqual(result.code, EXIT_OK, result.out)
+        self.assertEqual(calls, [("monitor", "wlan1"), ("capture", "wlan1", WIFI_HEADER_MACS, 1, "/usr/bin/tshark"),
+                                 ("wait", "F2:F4:90:22:0D:0F", True, False, False), ("closed",), ("restored", "wlan1")])
+        self.assertEqual(one.tuned.label, "Operating channel")
+        self.assertIn("tuning wlan1 to channel 1 on the fox's Operating channel line\n", result.out)
+        self.assertNotIn("Starting on channel", result.out)
+        rows = {row[0]: row for row in result.rows}
+        self.assertEqual(rows["CHANNEL"][1:], ("1", "1", "1", "pass"))
+
+    def test_wifi_early_line_and_readback_disagreeing_fails_the_channel_row(self):
+        """The capture follows the early line; a readback that then names
+        another channel FAILs the CHANNEL row with both values shown."""
+        text = read_fixture("transcripts", "wifi_easy_ap.log").replace("Starting on channel 1\n", "Starting on channel 6\n")
+
+        def feed(cycle, follower, random_channel, beacon):
+            cycle.feed(heard(1001.5, 1, 1.0, -42)[0])
+            return beacon
+
+        result, calls, one = self.wifi_ap(feed, args=["--timeout", "24"], transcript=self.wifi_transcript(text))
+        self.assertEqual(result.code, EXIT_FAIL, result.out)
+        self.assertEqual(calls[1][3], 6)
+        self.assertIn("listening for beacons from F2:F4:90:22:0D:0F on channel 6 with wlan1", result.out)
+        rows = {row[0]: row for row in result.rows}
+        self.assertEqual(rows["CHANNEL"][1:], ("1", "1 (Starting on channel 6)", "1", "FAIL"))
+        self.assertEqual(rows["MAC_ADDR"][4], "pass")
+        self.assertTrue(result.summary.startswith("FAIL: 4 pass, 1 FAIL"), result.summary)
+
+    def test_wifi_client_never_tunes_early(self):
+        """A client fox prints no Starting on channel line and its Setting up
+        line names the client, so nothing starts before the readback."""
+        from foxverify import wifi
+        from contextlib import contextmanager
+
+        @contextmanager
+        def monitor_mode(name, *args, **kwargs):
+            yield wifi.InterfaceState(name, "managed", True)
+
+        def observe_client(interface, mac, ssid, channels, deadline, tshark_path, run=None, popen=None,
+                           dwell=None, debug=None, cycle=None, follower=None):
+            cycle.feed(heard(1001.0, 1, 1.0, -38)[0])
+            return wifi.Probes(mac, 2, [None, ssid], [6], 1.0)
+
+        with mock.patch.object(wifi, "observe_client", observe_client), \
+                mock.patch.object(wifi, "monitor_mode", monitor_mode), \
+                mock.patch.object(wifi, "ApCapture", side_effect=AssertionError("a client has no capture to start")):
+            out = io.StringIO()
+            one = run.WifiRun("wifi_ap_client", run.parse_args(
+                "wifi_ap_client", ["--transcript", fixture("transcripts", "wifi_easy_client.log"),
+                                   "--header", frozen_header("wifi_ap_client")]), out)
+            one.serial_only = False
+            one.tshark = "tshark"
+            one.start_air = lambda selection, candidates: "wlan1"
+            code = one.run()
+        self.assertEqual(code, EXIT_OK, out.getvalue())
+        self.assertIsNone(one.tuned)
+        self.assertIsNone(one.capture)
 
     def test_wifi_first_transmission_over_the_allowance(self):
         def feed(cycle, follower, random_channel, beacon):
@@ -952,7 +1131,8 @@ class AirRunTest(unittest.TestCase):
 
         result, calls, one = self.wifi_ap(retuned_but_silent, args=["--timeout", "90"], transcript="wifi_hard_ap.log")
         self.assertEqual(result.code, EXIT_FAIL, result.out)
-        self.assertEqual(calls[1][1:3], ("F2:72:C1:79:16:1B", 7))
+        self.assertEqual(calls[1][2:4], (WIFI_HEADER_MACS, 7))
+        self.assertEqual(calls[2][1], "F2:72:C1:79:16:1B")
         rows = {row[0]: row for row in result.rows}
         self.assertEqual(rows["CHANNEL"][1:], ("random", "7", "7", "pass"))
         self.assertEqual(rows["TIME_TO_WAKE"][1:], ("30", "30", "first boot: on the air 29.9 s", "pass"))
@@ -1016,32 +1196,44 @@ class AirRunTest(unittest.TestCase):
                     raise serial_fox.PortGone("gone again")
                 return Vanishing.read(self, timeout)
 
-        def observe_ap(interface, bssid, channel, deadline, tshark_path, run=None, popen=None, debug=None,
-                       cycle=None, follower=None, random_channel=False):
-            one = runs[0]
-            clock = one.clock
-            # Beacons every 0.5 s for 30 s from 1.5 s after the reset; wake 2
-            # and wake 3 each begin 75 s after the wake before.
-            items = [(1001.5 - clock.now, beacon_line(1001.5))] + [(0.5, beacon_line(1001.5 + 0.5 * i)) for i in range(1, 61)]
-            items += [(45.0, beacon_line(1076.5))] + [(0.5, beacon_line(1076.5 + 0.5 * i)) for i in range(1, 61)]
-            items += [(45.0, beacon_line(1151.5)), (0.5, beacon_line(1152.0))]
-            reader = FakeReader(wifi.AP_FIELDS, items, clock)
-            tuned = []
-            beacon = wifi.wait_for_beacon(reader, bssid, deadline, debug, cycle=cycle, follower=follower,
-                                          retune=tuned.append)
-            self.assertEqual(tuned, [9, 4])
-            return beacon
+        tuned = []
+
+        class RealLoopCapture:
+            """wifi.ApCapture over a fake tshark reader, its wait the real loop."""
+
+            def __init__(self, interface, bssids, channel, tshark_path, run=None, popen=None, debug=None):
+                one = runs[0]
+                clock = one.clock
+                self.debug = debug
+                # Beacons every 0.5 s for 30 s from 1.5 s after the reset; wake
+                # 2 and wake 3 each begin 75 s after the wake before.
+                items = [(1001.5 - clock.now, beacon_line(1001.5))] + [(0.5, beacon_line(1001.5 + 0.5 * i)) for i in range(1, 61)]
+                items += [(45.0, beacon_line(1076.5))] + [(0.5, beacon_line(1076.5 + 0.5 * i)) for i in range(1, 61)]
+                items += [(45.0, beacon_line(1151.5)), (0.5, beacon_line(1152.0))]
+                self.reader = FakeReader(wifi.AP_FIELDS, items, clock)
+                tuned.append(channel)
+
+            def wait(self, bssid, deadline, cycle=None, follower=None, random_channel=False):
+                return wifi.wait_for_beacon(self.reader, bssid, deadline, self.debug, cycle=cycle, follower=follower,
+                                            retune=tuned.append if random_channel else None)
+
+            def close(self):
+                pass
 
         def prepare(one):
             runs.append(one)
-            # Wake 2's lines once the port is back, its sleep line after its
-            # last beacon at 1106.5, then wake 3's lines after the second
-            # reopen.
-            lines = [(1075.0 - 1000.0, "Initializing...\n"), (0.2, "Fox: wifi_ap_client HARD AP\n"),
-                     (0.1, "Operating channel: 9\n"), (1106.7 - 1075.3, "Going to sleep\n"),
+            # Wake 2's lines once the port is back, its early channel line
+            # caught before its banner, its sleep line after its last beacon
+            # at 1106.5, then wake 3's lines after the second reopen, with
+            # the early line missed and only the readback naming its channel.
+            lines = [(1075.0 - 1000.0, "Initializing...\n"), (0.1, "Starting on channel 9\n"),
+                     (0.2, "Fox: wifi_ap_client HARD AP\n"), (1.0, "Operating channel: 9\n"),
+                     (1106.7 - 1076.3, "Going to sleep\n"),
                      (1150.0 - 1106.7, "Initializing...\n"), (0.1, "Last cycle: 75.0s, target 75s\n"),
                      (0.1, "Fox: wifi_ap_client HARD AP\n"), (0.1, "Operating channel: 4\n")]
             one.source = VanishingTwice(lines, one.clock, gone_at=1031.8, away=40.0, again_at=1107.3)
+            # The readback is replayed without the hook, so wake 1's capture
+            # starts after it, on the Operating channel line.
             one.read_fox = lambda selection: serial_fox.read_fox(
                 serial_fox.TranscriptSource.from_file(fixture("transcripts", "wifi_hard_ap.log"), clock=one.clock),
                 one.deadline, wall=one.wall)
@@ -1052,7 +1244,7 @@ class AirRunTest(unittest.TestCase):
         def monitor_mode(name, *a, **kw):
             yield wifi.InterfaceState(name, "managed", True)
 
-        with mock.patch.object(wifi, "observe_ap", observe_ap), mock.patch.object(wifi, "monitor_mode", monitor_mode):
+        with mock.patch.object(wifi, "ApCapture", RealLoopCapture), mock.patch.object(wifi, "monitor_mode", monitor_mode):
             out = io.StringIO()
             one = run.WifiRun("wifi_ap_client", run.parse_args(
                 "wifi_ap_client", ["--timeout", "160", "-v", "--transcript", fixture("transcripts", "wifi_hard_ap.log"),
@@ -1064,16 +1256,21 @@ class AirRunTest(unittest.TestCase):
             code = one.run()
         text = out.getvalue()
         self.assertEqual(code, EXIT_OK, text)
+        self.assertEqual(tuned, [7, 9, 4])
+        self.assertEqual(one.tuned.label, "Operating channel")
+        self.assertIn("tuning wlan1 to channel 7 on the fox's Operating channel line\n", text)
         rows = {row[0]: row for row in table_rows(text)}
         self.assertEqual(rows["TIME_TO_WAKE"][1:], ("30", "30", "on the air 30.0 s", "pass"))
         self.assertEqual(rows["TIME_TO_SLEEP"][1:], ("45", "45", "off the air 45.0 s", "pass"))
         self.assertEqual(rows["CYCLE_TIME"][1:], ("75", "75.0", "75.0 s", "pass"))
         self.assertEqual(one.source.reopens, 2)
         self.assertEqual((one.cycle.retunes[2][0], one.cycle.retunes[3][0]), (9, 4))
+        # Wake 2 was retuned on its early line, before its readback arrived.
+        self.assertLess(one.cycle.retunes[2][1], 1076.3)
         self.assertEqual(len(one.cycle.sleep_times), 2)
         self.assertIn("first wake: on the air 30.0 s, then off the air 45.0 s, cycle time 76.5 s\n", text)
-        self.assertIn("wake 2 is on channel 9, retuning", text)
-        self.assertIn("wake 3 is on channel 4, retuning", text)
+        self.assertIn("wake 2 is on channel 9 by its Starting on channel line, retuning", text)
+        self.assertIn("wake 3 is on channel 4 by its Operating channel line, retuning", text)
         self.assertLess(one.clock.now, 1153.0)
 
     def test_wifi_client_hops_the_header_channels(self):
@@ -1120,19 +1317,24 @@ class AirRunTest(unittest.TestCase):
         link = [zigbee.parse_frame(tshark.parse_line(frames[i], zigbee.FIELDS)) for i in (2, 3)]
         calls = []
 
-        def observe(sniffer, channel, deadline, tshark_path, pan_id=None, want_link_status=2, cycle=None,
-                    follower=None, random_channel=False, mac=None, **kwargs):
-            calls.append((sniffer, channel, tshark_path, pan_id, want_link_status, cycle.measure, follower is None,
+        def collect(channel, pan_id, want_link_status, cycle, follower, random_channel, mac):
+            calls.append(("collect", channel, pan_id, want_link_status, cycle.measure, follower is None,
                           random_channel, mac))
             for frame in link[:want_link_status]:
                 cycle.feed(frame.heard())
             return zigbee.Observation(link[:want_link_status], link[:want_link_status])
 
-        with mock.patch.object(zigbee, "observe", observe):
+        with mock.patch.object(zigbee, "Capture", fake_zigbee_capture(calls, collect)):
             result, _ = air_run(run.ZigbeeRun, "zigbee_coordinator", fixture("transcripts", "zigbee_easy.log"),
-                                lambda candidates: "/dev/ttyACM3")
+                                lambda candidates: "/dev/ttyACM3", args=["-v"],
+                                prepare=lambda one: setattr(one, "tshark", "/usr/bin/tshark"))
             self.assertEqual(result.code, EXIT_OK, result.out)
-            self.assertEqual(calls, [("/dev/ttyACM3", 15, None, 0x1337, 2, False, True, False, "F2:5A:3C:91:0E:7B:44:D8")])
+            # The capture started on the Starting on channel line and was read
+            # once the readback named the PAN ID and the block the MAC.
+            self.assertEqual(calls, [("capture", "/dev/ttyACM3", 15, "/usr/bin/tshark"),
+                                     ("collect", 15, 0x1337, 2, False, True, False, "F2:5A:3C:91:0E:7B:44:D8"),
+                                     ("closed",)])
+            self.assertIn("tuning /dev/ttyACM3 to channel 15 on the fox's Starting on channel line\n", result.out)
             self.assertEqual([v for _, v in result.verdicts],
                              ["pass"] * 5 + ["serial only"] * 4)
             self.assertIn("listening on channel 15 with /dev/ttyACM3 for two Link Status frames\n", result.out)
@@ -1151,7 +1353,7 @@ class AirRunTest(unittest.TestCase):
             del calls[:]
             result, _ = air_run(run.ZigbeeRun, "zigbee_coordinator", fixture("transcripts", "zigbee_easy.log"),
                                 lambda candidates: "/dev/ttyACM3", args=["--timeout", "3"])
-            self.assertEqual(calls[0][4], 1)
+            self.assertEqual(calls[1][3], 1)
             self.assertIn("for one Link Status frame", result.out)
             rows = {row[0]: row for row in result.rows}
             self.assertEqual(rows["PACKET_INTERVAL"][4], "unverified")
@@ -1165,8 +1367,7 @@ class AirRunTest(unittest.TestCase):
         frames = read_fixture("tshark", "zigbee_frames.tsv").splitlines()
         link = [zigbee.parse_frame(tshark.parse_line(frames[i], zigbee.FIELDS)) for i in (2, 3)]
 
-        def observe(sniffer, channel, deadline, tshark_path, pan_id=None, want_link_status=2, cycle=None,
-                    follower=None, random_channel=False, mac=None, **kwargs):
+        def collect(channel, pan_id, want_link_status, cycle, follower, random_channel, mac):
             self.assertEqual(cycle.tier, "one cycle")
             self.assertIsNotNone(follower)
             self.assertTrue(follower.reopen)
@@ -1180,7 +1381,7 @@ class AirRunTest(unittest.TestCase):
             cycle.feed(heard(1301.8, 1, 1.0, -45)[0])
             return zigbee.Observation(link, link)
 
-        with mock.patch.object(zigbee, "observe", observe):
+        with mock.patch.object(zigbee, "Capture", fake_zigbee_capture([], collect)):
             result, _ = air_run(run.ZigbeeRun, "zigbee_coordinator", fixture("transcripts", "zigbee_easy.log"),
                                 lambda candidates: "/dev/ttyACM3", args=["--timeout", "305"])
         self.assertEqual(result.code, EXIT_OK, result.out)
@@ -1212,8 +1413,7 @@ class AirRunTest(unittest.TestCase):
         frames = read_fixture("tshark", "zigbee_frames.tsv").splitlines()
         link = [zigbee.parse_frame(tshark.parse_line(frames[i], zigbee.FIELDS)) for i in (2, 3)]
 
-        def observe(sniffer, channel, deadline, tshark_path, pan_id=None, want_link_status=2, cycle=None,
-                    follower=None, random_channel=False, mac=None, **kwargs):
+        def collect(channel, pan_id, want_link_status, cycle, follower, random_channel, mac):
             self.assertEqual(cycle.tier, "two cycles")
             self.assertTrue(follower.reopen)
             cycle.listen_time = 1015.0
@@ -1226,7 +1426,7 @@ class AirRunTest(unittest.TestCase):
             cycle.feed(heard(1603.9, 1, 1.0, -45)[0])
             return zigbee.Observation(link, link)
 
-        with mock.patch.object(zigbee, "observe", observe):
+        with mock.patch.object(zigbee, "Capture", fake_zigbee_capture([], collect)):
             result, _ = air_run(run.ZigbeeRun, "zigbee_coordinator", fixture("transcripts", "zigbee_easy.log"),
                                 lambda candidates: "/dev/ttyACM3", args=["--timeout", "605"])
         self.assertEqual(result.code, EXIT_OK, result.out)
@@ -1242,11 +1442,19 @@ class AirRunTest(unittest.TestCase):
         self.assertIsNone(result.suggestion)
 
     def test_halted_fox_is_not_listened_for(self):
+        """The fox named its channel, so the capture started, and then halted
+        on its readback: nothing is read from the capture and it is closed."""
         from foxverify import zigbee
-        with mock.patch.object(zigbee, "observe", side_effect=AssertionError("observe must not run")):
+        calls = []
+
+        def collect(*args):
+            raise AssertionError("collect must not run")
+
+        with mock.patch.object(zigbee, "Capture", fake_zigbee_capture(calls, collect)):
             result, _ = air_run(run.ZigbeeRun, "zigbee_coordinator", fixture("transcripts", "zigbee_easy_mismatch.log"),
                                 lambda candidates: "/dev/ttyACM3")
         self.assertEqual(result.code, EXIT_FAIL)
+        self.assertEqual([call[0] for call in calls], ["capture", "closed"])
         rows = {row[0]: row for row in result.rows}
         self.assertEqual(rows["PAN_ID"][4], "FAIL")
         self.assertEqual(rows["MAC_ADDR"][4:], ("unverified",))
@@ -1259,11 +1467,73 @@ class AirRunTest(unittest.TestCase):
         with tempfile.NamedTemporaryFile("w", suffix=".log", delete=False) as handle:
             handle.write("Fox: zigbee_coordinator EASY\nDevice address: F2:5A:3C:91:0E:7B:44:D8\n")
         self.addCleanup(os.unlink, handle.name)
-        with mock.patch.object(zigbee, "observe", side_effect=AssertionError("observe must not run")):
+        with mock.patch.object(zigbee, "Capture", side_effect=AssertionError("no capture without a channel")):
             result, _ = air_run(run.ZigbeeRun, "zigbee_coordinator", handle.name, lambda candidates: "/dev/ttyACM3")
         self.assertEqual(result.code, EXIT_FAIL)
         self.assertIn("unverified: the fox did not print its channel", result.out)
         self.assertIn("FAIL: not printed on serial", result.out)
+
+    def zigbee_transcript(self, text):
+        """A temporary transcript file with ``text``."""
+        with tempfile.NamedTemporaryFile("w", suffix=".log", delete=False) as handle:
+            handle.write(text)
+        self.addCleanup(os.unlink, handle.name)
+        return handle.name
+
+    def test_zigbee_without_the_early_line_tunes_on_the_readback(self):
+        """A native USB host that missed the Starting on channel line: the
+        capture starts after the readback, on the Operating channel line, as
+        it did before the early line existed."""
+        from foxverify import tshark, zigbee
+        from foxverify.tests import read_fixture
+        frames = read_fixture("tshark", "zigbee_frames.tsv").splitlines()
+        link = [zigbee.parse_frame(tshark.parse_line(frames[i], zigbee.FIELDS)) for i in (2, 3)]
+        text = read_fixture("transcripts", "zigbee_easy.log").replace("Starting on channel 15\n", "")
+        self.assertNotIn("Starting on channel", text)
+        calls = []
+
+        def collect(channel, pan_id, want_link_status, cycle, follower, random_channel, mac):
+            calls.append(("collect", channel, pan_id, mac))
+            for frame in link:
+                cycle.feed(frame.heard())
+            return zigbee.Observation(link, link)
+
+        with mock.patch.object(zigbee, "Capture", fake_zigbee_capture(calls, collect)):
+            result, _ = air_run(run.ZigbeeRun, "zigbee_coordinator", self.zigbee_transcript(text),
+                                lambda candidates: "/dev/ttyACM3", args=["-v"],
+                                prepare=lambda one: setattr(one, "tshark", "/usr/bin/tshark"))
+        self.assertEqual(result.code, EXIT_OK, result.out)
+        self.assertEqual(calls, [("capture", "/dev/ttyACM3", 15, "/usr/bin/tshark"),
+                                 ("collect", 15, 0x1337, "F2:5A:3C:91:0E:7B:44:D8"), ("closed",)])
+        self.assertIn("tuning /dev/ttyACM3 to channel 15 on the fox's Operating channel line\n", result.out)
+        self.assertNotIn("Starting on channel", result.out)
+        rows = {row[0]: row for row in result.rows}
+        self.assertEqual(rows["CHANNEL"][1:], ("15", "15", "15", "pass"))
+
+    def test_zigbee_early_line_and_readback_disagreeing_fails_the_channel_row(self):
+        """A fox that named one channel and read back another: the capture is
+        on the early channel and the CHANNEL row FAILs showing both."""
+        from foxverify import tshark, zigbee
+        from foxverify.tests import read_fixture
+        frames = read_fixture("tshark", "zigbee_frames.tsv").splitlines()
+        link = [zigbee.parse_frame(tshark.parse_line(frames[i], zigbee.FIELDS)) for i in (2, 3)]
+        text = read_fixture("transcripts", "zigbee_easy.log").replace("Starting on channel 15\n", "Starting on channel 20\n")
+        calls = []
+
+        def collect(channel, pan_id, want_link_status, cycle, follower, random_channel, mac):
+            calls.append(("collect", channel))
+            return zigbee.Observation(link, link)
+
+        with mock.patch.object(zigbee, "Capture", fake_zigbee_capture(calls, collect)):
+            result, _ = air_run(run.ZigbeeRun, "zigbee_coordinator", self.zigbee_transcript(text),
+                                lambda candidates: "/dev/ttyACM3")
+        self.assertEqual(result.code, EXIT_FAIL, result.out)
+        self.assertEqual(calls[0][2], 20)
+        self.assertEqual(calls[1], ("collect", 20))
+        rows = {row[0]: row for row in result.rows}
+        self.assertEqual(rows["CHANNEL"][1:], ("15", "15 (Starting on channel 20)", "15", "FAIL"))
+        self.assertIn("listening on channel 20 with /dev/ttyACM3", result.out)
+        self.assertTrue(result.summary.startswith("FAIL: 4 pass, 1 FAIL"), result.summary)
 
 
 class CommandLineTest(unittest.TestCase):

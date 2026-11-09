@@ -14,6 +14,7 @@ Sleep stats: 61s since cold boot, 20s since last wakeup
 Last cycle: 20.0s, target 20s
 Setting up WiFi AP...
 MAC address set successfully
+Starting on channel 1
 Set power status: ok
 Fox: wifi_ap_client EASY AP
 Time to wake: 15s

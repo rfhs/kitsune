@@ -70,13 +70,19 @@ class Run:
         self.source = serial_fox.TranscriptSource(items, self.clock)
         self.said = []
         self.debugged = []
+        # (field, the lines fed so far, the clock) for every field as it arrived.
+        self.fields = []
         self.readback = None
         self.error = None
         try:
             self.readback = serial_fox.read_fox(self.source, self.deadline, reset,
-                                                self.said.append, self.debugged.append)
+                                                self.said.append, self.debugged.append,
+                                                on_field=self.on_field)
         except RunError as error:
             self.error = error
+
+    def on_field(self, field, readback):
+        self.fields.append((field, len(readback.lines), self.clock.now))
 
     def elapsed(self):
         return self.clock.now - self.deadline.started
@@ -161,11 +167,13 @@ class TranscriptTest(unittest.TestCase):
         self.assertEqual(readback.integer("time_to_wake"), 15)
         self.assertEqual(readback.integer("time_to_sleep"), 5)
         self.assertEqual(readback.get("last_cycle"), "20.0s, target 20s")
+        self.assertEqual(readback.integer("starting_channel"), 1)
         client = serial_fox.parse_transcript(transcript("wifi_hard_client"))
         self.assertEqual(client.get("setting_up"), "WiFi Client")
         self.assertEqual(client.get("tx_power_status"), "ok")
         self.assertEqual(client.get("address"), "F2:83:27:31:80:C7")
         self.assertIsNone(client.get("channel"))
+        self.assertIsNone(client.get("starting_channel"))
         self.assertEqual(client.get("ssid"), "Demo Mr Lee WiFi Client Hard Fox")
         self.assertEqual(client.get("psk"), "0123456789")
         self.assertIsNone(client.get("ssid_hidden"))
@@ -195,9 +203,51 @@ class TranscriptTest(unittest.TestCase):
             self.assertRegex(readback.get("last_cycle"), r"^\d+\.\ds, target \d+s$", name)
             self.assertIsNone(readback.get("cycle_behind"), name)
 
+    def test_starting_channel_line(self):
+        """The line a Wi-Fi AP or Zigbee fox prints before its radio starts:
+        caught as starting_channel, after the MAC set and before the banner in
+        every such transcript, absent from the client, iBeacon and Classic
+        ones; channel_line() prefers it to the readback and channel_mismatch()
+        shows both when they differ."""
+        for name, (project, difficulty, mode, fields) in TRANSCRIPTS.items():
+            readback = serial_fox.parse_transcript(transcript(name))
+            early = project == "zigbee_coordinator" or mode == "AP"
+            if not early:
+                self.assertIsNone(readback.get("starting_channel"), name)
+                self.assertIsNone(readback.channel_line(), name)
+                continue
+            self.assertEqual(readback.integer("starting_channel"), readback.integer("channel"), name)
+            self.assertEqual(readback.channel_line(), (readback.integer("channel"), "Starting on channel"), name)
+            self.assertIsNone(readback.channel_mismatch(), name)
+            lines = readback.lines
+            self.assertEqual(lines.index("Starting on channel %d" % readback.integer("channel")),
+                             lines.index("MAC address set successfully") + 1, name)
+            self.assertLess(lines.index("Starting on channel %d" % readback.integer("channel")),
+                            lines.index(readback.banner.text()), name)
+        for name in ("zigbee_easy_mismatch", "zigbee_start_failed"):
+            readback = serial_fox.parse_transcript(transcript(name))
+            self.assertEqual(readback.integer("starting_channel"), 15, name)
+            self.assertNotIn("Starting on channel 15", readback.unmatched, name)
+        readback = serial_fox.parse_transcript("Starting on channel 149\n")
+        self.assertEqual(readback.channel_line(), (149, "Starting on channel"))
+        self.assertIsNone(readback.channel_mismatch())
+        readback = serial_fox.parse_transcript("Operating channel: 7\n")
+        self.assertEqual(readback.channel_line(), (7, "Operating channel"))
+        self.assertIsNone(readback.channel_mismatch())
+        readback = serial_fox.parse_transcript("Starting on channel 9\nOperating channel: 7\n")
+        self.assertEqual(readback.channel_line(), (9, "Starting on channel"))
+        self.assertEqual(readback.channel_mismatch(), "7 (Starting on channel 9)")
+        for text in ("Starting on channel\n", "Starting on channel: 7\n", "starting on channel 7\n"):
+            readback = serial_fox.parse_transcript(text)
+            self.assertIsNone(readback.get("starting_channel"), text)
+            self.assertEqual(readback.unmatched, [text.strip()], text)
+        self.assertEqual(serial_fox.STARTING_CHANNEL, "Starting on channel")
+        self.assertEqual(serial_fox.OPERATING_CHANNEL, "Operating channel")
+
     def test_zigbee_and_classic_power_and_timers(self):
         zigbee = serial_fox.parse_transcript(transcript("zigbee_hard"))
         self.assertEqual(zigbee.get("setting_up"), "Zigbee Coordinator")
+        self.assertEqual(zigbee.integer("starting_channel"), 11)
         self.assertEqual(zigbee.get("address"), "F2:A7:19:62:C3:08:BE:35")
         self.assertEqual(zigbee.get("tx_power"), "20")
         self.assertEqual(zigbee.integer("tx_power"), 20)
@@ -394,6 +444,41 @@ class ReadFoxTest(unittest.TestCase):
             self.assertIsNone(run.error, name)
             self.assertTrue(run.readback.complete(), name)
             self.assertLess(run.elapsed(), 4.0, name)
+
+    def test_on_field_sees_every_matched_line_as_it_arrives(self):
+        """The hook gets each field the moment its line is read, with the
+        readback as it stands then: the Starting on channel line comes before
+        the banner and the Operating channel readback, so a caller can tune on
+        it while the rest is still arriving. The banner, the ROM text and
+        problem lines are not fields."""
+        run = Run(timed(transcript("wifi_hard_ap"), first=1.0, step=0.1))
+        self.assertIsNone(run.error)
+        names = [field for field, _, _ in run.fields]
+        self.assertEqual(names[:7], ["initializing", "boot_count", "sleep_stats", "setting_up", "mac_set",
+                                     "starting_channel", "tx_power_status"])
+        self.assertNotIn("banner", names)
+        self.assertIn("channel", names)
+        self.assertEqual(names[-1], "awake")
+        starting = [(seen, when) for field, seen, when in run.fields if field == "starting_channel"][0]
+        channel = [(seen, when) for field, seen, when in run.fields if field == "channel"][0]
+        # Six lines had been fed when the early line came; the banner is the
+        # eighth, so a caller acting on the hook is ahead of it.
+        self.assertEqual(starting[0], 6)
+        self.assertLess(starting[1], channel[1])
+        self.assertLess(starting[0], run.readback.lines.index("Fox: wifi_ap_client HARD AP") + 1)
+        self.assertAlmostEqual(starting[1], 1000.0 + 1.0 + 0.5, delta=0.01)
+        # A halted fox: the hook runs for its fields up to the problem line
+        # and not for the problem lines themselves.
+        run = Run(timed(transcript("zigbee_easy_mismatch")))
+        names = [field for field, _, _ in run.fields]
+        self.assertIn("starting_channel", names)
+        self.assertEqual(names[-1], "pan_id")
+        self.assertTrue(run.readback.halted())
+        # Without a hook nothing changes.
+        run = Run(timed(transcript("zigbee_easy")))
+        run.readback = serial_fox.read_fox(serial_fox.TranscriptSource(timed(transcript("zigbee_easy")), run.clock),
+                                           Deadline(60.0, run.clock))
+        self.assertTrue(run.readback.complete())
 
     def test_empty_transcript_is_no_output(self):
         run = Run(timed(transcript("empty")))
@@ -745,6 +830,49 @@ class FollowerTest(unittest.TestCase):
             follower.poll()
         self.assertEqual((follower.channel(), follower.pan_id()), (22, 0xBEEF))
         self.assertEqual(follower.pan_ids(), [0xBEEF])
+        self.assertEqual(follower.channel_label(), "Operating channel")
+
+    def test_wake_2_channel_comes_from_the_early_line_when_the_host_caught_it(self):
+        """Wake 2 names its channel on Starting on channel before its banner
+        and again on Operating channel after it: the follower answers from
+        the early line as soon as it is in, and keeps answering the same once
+        the readback follows; a wake whose early line was missed answers from
+        the readback."""
+        clock = serial_fox.FakeClock(0.0)
+        source = serial_fox.TranscriptSource([(10.0, "Going to sleep\n"), (5.0, "Initializing...\n"),
+                                              (0.5, "Starting on channel 9\n"), (0.3, "Fox: wifi_ap_client HARD AP\n"),
+                                              (0.2, "Operating channel: 9\n"), (10.0, "Going to sleep\n"),
+                                              (5.0, "Initializing...\n"), (0.5, "Fox: wifi_ap_client HARD AP\n"),
+                                              (0.2, "Operating channel: 4\n")], clock)
+        follower = serial_fox.Follower(source, clock)
+        clock.advance(10.0)
+        follower.poll()
+        self.assertEqual(follower.boundaries(), [10.0])
+        clock.advance(5.2)
+        for _ in range(2):
+            follower.poll()
+        self.assertIsNone(follower.channel(2))
+        self.assertIsNone(follower.channel_label(2))
+        clock.advance(0.3)
+        follower.poll()
+        self.assertEqual((follower.channel(2), follower.channel_label(2)), (9, "Starting on channel"))
+        self.assertIsNone(follower.readback(2).integer("channel"))
+        clock.advance(0.5)
+        for _ in range(2):
+            follower.poll()
+        self.assertEqual(follower.readback(2).integer("channel"), 9)
+        self.assertEqual((follower.channel(2), follower.channel_label(2)), (9, "Starting on channel"))
+        self.assertIsNone(follower.readback(2).channel_mismatch())
+        clock.advance(10.0)
+        follower.poll()
+        clock.advance(5.7)
+        for _ in range(3):
+            follower.poll()
+        self.assertEqual(follower.boundaries(), [10.0, 26.0])
+        self.assertEqual((follower.channel(3), follower.channel_label(3)), (4, "Operating channel"))
+        self.assertEqual((follower.channel(2), follower.channel_label(2)), (9, "Starting on channel"))
+        self.assertIsNone(follower.channel(4))
+        self.assertIsNone(follower.channel_label(4))
 
     def test_two_sleeps_give_two_boundaries_and_wake_3_lines(self):
         """A UART bridge port through two sleeps: each Going to sleep line is

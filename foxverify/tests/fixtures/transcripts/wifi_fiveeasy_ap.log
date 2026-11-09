@@ -13,6 +13,7 @@ Sleep stats: 21s since cold boot, 21s since last wakeup
 Last cycle: 21.3s, target 20s
 Setting up WiFi AP...
 MAC address set successfully
+Starting on channel 36
 Set power status: ok
 Fox: wifi_ap_client FIVEEASY AP
 Time to wake: 15s

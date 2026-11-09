@@ -5,7 +5,14 @@ Every fox prints at 115200 baud. After its radio is up it prints the banner
 value per line, in the formats of the firmware's ``printf`` calls, the
 device address first and "Awake and screaming" last. ``LINES`` holds one
 regex per line the four projects print; ``Readback.feed`` matches them and
-keeps the captured values under the field names in ``LINES``.
+keeps the captured values under the field names in ``LINES``. A Wi-Fi access
+point or Zigbee fox also prints ``Starting on channel N`` the moment its
+channel is final and before its radio starts, so a sniffer can be on that
+channel for the first frame; the line is best effort, since a native USB
+board's host may not have the port open that early, and the ``Operating
+channel`` readback after the start remains the record. ``read_fox`` hands
+every field to ``on_field`` as it arrives, which is how a run tunes its
+sniffer on the early line while the rest of the readback is still coming.
 
 Reset. ``SerialSource`` opens and resets the port with the line sequences of
 ``usbstack``, chosen by the port's USB id: esptool's hard reset for a UART
@@ -33,7 +40,8 @@ through the fox's sleeps. It watches for ``Going to sleep``, the exact end of
 a wake, and takes the port vanishing, as a native USB board's does in deep
 sleep, as the same signal. The lines after a sleep belong to the next wake
 and are parsed into that wake's own ``Readback``, so a random-channel fox's
-``Operating channel`` line can retune the sniffer for each wake and its
+channel line, ``Starting on channel`` when the host caught it and
+``Operating channel`` otherwise, can retune the sniffer for each wake and its
 ``Last cycle`` line gives the fox's own cycle figure; a vanished port is
 opened again on every poll when the run follows the fox past its first
 sleep.
@@ -103,6 +111,11 @@ PROJECT_DIRS = {
 # The field whose line ends every fox's readback on the success path: the
 # radio header's checks are printed and then "Awake and screaming".
 LAST_FIELD = "awake"
+# The labels of the two lines that name a Wi-Fi AP or Zigbee fox's channel,
+# in the order the fox prints them: the early line before the radio starts
+# and the readback once it is up.
+STARTING_CHANNEL = "Starting on channel"
+OPERATING_CHANNEL = "Operating channel"
 
 
 def wrong_project(project: str) -> str:
@@ -163,7 +176,11 @@ LINES: List[Tuple[str, "re.Pattern[str]"]] = [
     ("max_clients", re.compile(r"^Max clients: (\d+)$")),
     ("tx_power", re.compile(r"^Tx power: (\S+?)(?: dBm)?$")),
     ("tx_power", re.compile(r"^Tx power: (ESP_PWR_LVL_\w+) \(-?\d+ dBm\)$")),
-    # include/rfhswifi.h and include/rfhszigbee.h
+    # include/rfhswifi.h (AP) and include/rfhszigbee.h: the channel the fox
+    # is about to start its radio on, printed before the start so a sniffer
+    # can be on it for the first frame, then the channel read back from the
+    # stack once the radio is up.
+    ("starting_channel", re.compile(r"^Starting on channel (\d+)$")),
     ("channel", re.compile(r"^Operating channel: (\d+)$")),
     ("pan_id", re.compile(r"^Operating PAN ID: " + _U16 + "$")),
     ("ext_pan_id", re.compile(r"^Extended PAN ID: " + _MAC8 + "$")),
@@ -263,6 +280,26 @@ class Readback:
 
     def halted(self) -> bool:
         return bool(self.problems)
+
+    def channel_line(self) -> Optional[Tuple[int, str]]:
+        """The channel the fox named and the label of the line that named it:
+        the early ``Starting on channel`` line when the host caught it, else
+        the ``Operating channel`` readback; None before either."""
+        starting = self.integer("starting_channel")
+        if starting is not None:
+            return starting, STARTING_CHANNEL
+        channel = self.integer("channel")
+        return None if channel is None else (channel, OPERATING_CHANNEL)
+
+    def channel_mismatch(self) -> Optional[str]:
+        """The serial column of the CHANNEL row when the fox's two channel
+        lines disagree, both values shown; None when they agree or only one
+        was seen. The firmware halts when its readback differs from the
+        channel it started on, so a healthy fox never prints two values."""
+        starting, channel = self.integer("starting_channel"), self.integer("channel")
+        if starting is None or channel is None or starting == channel:
+            return None
+        return "%d (%s %d)" % (channel, STARTING_CHANNEL, starting)
 
     def complete(self) -> bool:
         """True once the awake line or a problem was seen after the banner."""
@@ -491,7 +528,8 @@ class FakeClock:
 def read_fox(source, deadline: Deadline, reset: bool = True,
              say: Callable[[str], None] = lambda text: None,
              debug: Callable[[str], None] = lambda text: None,
-             wall: Callable[[], float] = time.time) -> Readback:
+             wall: Callable[[], float] = time.time,
+             on_field: Optional[Callable[[str, Readback], None]] = None) -> Readback:
     """Reset the fox, wait for its banner, read its readback lines.
 
     Returns the ``Readback`` once a problem line, the awake line plus
@@ -500,6 +538,10 @@ def read_fox(source, deadline: Deadline, reset: bool = True,
     banner; the read goes on to the banner and stops there. Raises
     ``RunError`` with the not-a-fox texts when no banner arrives. ``wall`` is
     the clock the sniffers stamp frames with; the reset is stamped on it.
+    ``on_field`` is called with the field name and the readback so far for
+    every line a regex in ``LINES`` matched, the moment it arrives, so a
+    caller can act on the fox's ``Starting on channel`` line before the
+    readback is complete.
 
     A source whose USB stack cannot reset the fox (``reset`` returns None)
     is read as with ``reset=False`` after saying so. A reset that leaves the
@@ -592,9 +634,12 @@ def read_fox(source, deadline: Deadline, reset: bool = True,
                 first_output = None
                 buffer = ""
                 break
-            if readback.feed(line) == "banner":
+            field = readback.feed(line)
+            if field == "banner":
                 readback.banner_time = wall()
                 say(readback.banner.text())
+            elif field in LINES_BY_FIELD and on_field is not None:
+                on_field(field, readback)
     if buffer.strip():
         readback.feed(buffer)
     return readback
@@ -710,9 +755,20 @@ class Follower:
         return self.readback(2) or Readback()
 
     def channel(self, wake: int = 2) -> Optional[int]:
-        """Wake ``wake``'s operating channel once the fox printed it."""
+        """Wake ``wake``'s channel once the fox named it, on its ``Starting
+        on channel`` line when the host caught it, else on its ``Operating
+        channel`` readback."""
+        line = self._channel_line(wake)
+        return None if line is None else line[0]
+
+    def channel_label(self, wake: int = 2) -> Optional[str]:
+        """The label of the line that named wake ``wake``'s channel."""
+        line = self._channel_line(wake)
+        return None if line is None else line[1]
+
+    def _channel_line(self, wake: int) -> Optional[Tuple[int, str]]:
         readback = self.readback(wake)
-        return readback.integer("channel") if readback is not None else None
+        return readback.channel_line() if readback is not None else None
 
     def pan_id(self, wake: int = 2) -> Optional[int]:
         readback = self.readback(wake)

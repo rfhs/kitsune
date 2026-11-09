@@ -319,6 +319,19 @@ class RowsTest(unittest.TestCase):
         self.assertEqual(self.rows()["PAN_ID"].verdict, "FAIL")
         self.assertEqual(self.rows()["PAN_ID"].air, "0xBEEF")
 
+    def test_early_line_and_readback_disagreeing_fails_the_channel_row(self):
+        """The fox said Starting on channel 20 and read back 15: the CHANNEL
+        row shows both and FAILs, for a fixed and for a random header channel."""
+        readback = parse_transcript(read_fixture("transcripts", "zigbee_easy.log").replace(
+            "Starting on channel 15\n", "Starting on channel 20\n"))
+        zigbee.rows(self.report, self.block, readback, zigbee.Observation([frame(2), frame(3)], [frame(2), frame(3)]))
+        self.assertEqual(self.rows()["CHANNEL"].cells(), ["CHANNEL", "15", "15 (Starting on channel 20)", "15", "FAIL"])
+        self.assertEqual(self.rows()["MAC_ADDR"].verdict, "pass")
+        self.report.rows = []
+        block = conf.select(HEADER.replace("#define CHANNEL 15", "#define CHANNEL 0"), ["COORDINATOR", "EASY"])
+        zigbee.rows(self.report, block, readback, zigbee.Observation([frame(2), frame(3)], [frame(2), frame(3)]))
+        self.assertEqual(self.rows()["CHANNEL"].cells()[1:], ["random", "15 (Starting on channel 20)", "15", "FAIL"])
+
 
 @unittest.skipIf(shutil.which("tshark") is None, "tshark is not installed; the pcap decode test needs it")
 class TsharkDecodeTest(unittest.TestCase):
