@@ -1,9 +1,12 @@
 #include "BluetoothSerial.h"
 #include <rfhsbt.h>
 
-// This check seems wrong because it passes on hardware which doesn't support BT Classic
-#if !defined(CONFIG_BT_ENABLED) || !defined(CONFIG_BLUEDROID_ENABLED)
-#error Bluetooth is not enabled! Please run `make menuconfig` to and enable it
+// Only the original ESP32 has a BR/EDR controller, and only its core
+// defines CONFIG_BT_CLASSIC_ENABLED. CONFIG_BT_ENABLED and
+// CONFIG_BLUEDROID_ENABLED are set for the ESP32-S3 as well, so they do
+// not tell the chips apart.
+#ifndef CONFIG_BT_CLASSIC_ENABLED
+#error "Bluetooth Classic needs the original ESP32; this chip's core has no BR/EDR controller"
 #endif
 
 // Exactly one difficulty, so exactly one block of the conference header

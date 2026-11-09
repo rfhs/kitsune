@@ -55,7 +55,6 @@ static_assert(sizeof(BEACON_UUID) == 37 && rfhs_uuid_ok(BEACON_UUID),
 // Byte swapped to 0x4C00, the form the library wants.
 #define MANUFACTURER_ID 0x4C00
 
-// Edit the conference specific variables in a new file and symlink to current_conf.h
 #if defined(EASY)
 
 #define ADV_MIN_INTERVAL    32
@@ -102,7 +101,6 @@ static_assert(sizeof(BEACON_UUID) == 37 && rfhs_uuid_ok(BEACON_UUID),
 #error "ADVERTISING_DURATION must be at least 5 seconds when DEEP_SLEEP is defined, so an active scan can hear the beacon and read its name"
 #endif
 #endif
-//#MAX 40959ms
 // ADV_TX_POWER   Power level for advertisements
 // ---------------------------------------------
 // ESP_PWR_LVL_N12 = 0 | Corresponding to -12dbm
@@ -113,7 +111,6 @@ static_assert(sizeof(BEACON_UUID) == 37 && rfhs_uuid_ok(BEACON_UUID),
 // ESP_PWR_LVL_P3 = 5  | Corresponding to +3dbm
 // ESP_PWR_LVL_P6 = 6  | Corresponding to +6dbm
 // ESP_PWR_LVL_P9 = 7  | Corresponding to +9dbm
-//#define ADV_TX_POWER        ESP_PWR_LVL_P9
 
 // ADV_TYPE
 // For non-connectable advertisements without device name, set to: ADV_TYPE_NONCONN_IND 
@@ -126,10 +123,6 @@ static_assert(sizeof(BEACON_UUID) == 37 && rfhs_uuid_ok(BEACON_UUID),
 // MIN: 5000 MAX: 6000 results in 4-7s interval
 
 BLEAdvertising *pAdvertising;
-BLEServer *pServer;
-BLECharacteristic *pCharacteristic;
-bool deviceConnected = false;
-uint8_t value = 0;
 // The manufacturer data block of the advertisement; rfhscheckibeacon()
 // reads it back after it has been handed to the stack.
 BLEBeacon myBeacon;
@@ -166,7 +159,6 @@ void rfhsstartibeacon() {
   pAdvertising->setMinInterval(ADV_MIN_INTERVAL);
   pAdvertising->setMaxInterval(ADV_MAX_INTERVAL);
 
-  //init_service();
   init_beacon();
 
   pAdvertising->start();

@@ -2,7 +2,8 @@
 #include "esp_mac.h"
 #include <rfhsconfcheck.h>
 
-// coordinator. we are just screaming and want to be heard
+// The coordinator's one endpoint. The fox only transmits to be heard, so
+// nothing ever talks to it.
 #define ZIGBEE_ENDPOINT 1
 
 // Exactly one difficulty, so exactly one block of the conference header
@@ -47,9 +48,6 @@
 #endif
 // A bare 0 means "random PAN ID", 0x0000 means PAN ID zero. #if sees the
 // same number either way, so compare the macro's text.
-constexpr bool rfhs_str_eq(const char *a, const char *b) {
-  return *a == *b && (*a == '\0' || rfhs_str_eq(a + 1, b + 1));
-}
 constexpr bool pan_id_random = rfhs_str_eq(RFHS_STR(PAN_ID), "0");
 
 // FUTURE USE: short address rules, for a router or end device challenge.
@@ -100,7 +98,8 @@ static_assert(!rfhs_all_bytes(ext_pan_id, 8, 0xFF), "EXT_PAN_ID must not be all 
 int set_channel;
 
 bool rfhssetzigbeemac() {
-  // must run before the stack starts, it reads the address once at init
+  // This has to run before the stack starts: the stack reads the address
+  // once, when it initializes.
   if (esp_iface_mac_addr_set(mac_addr, ESP_MAC_IEEE802154) == ESP_OK) {
     return true;
   } else {
@@ -112,12 +111,13 @@ bool rfhsstartzigbee() {
 #if CHANNEL > 0
   set_channel = CHANNEL;
 #else
-  // 802.15.4 only has channels 11-26 in 2.4GHz
+  // 802.15.4 has only channels 11-26 at 2.4 GHz.
   set_channel = 11 + (esp_random() % 16);
 #endif
   Zigbee.addEndpoint(&zbCoordinator);
   Zigbee.setPrimaryChannelMask(1 << set_channel);
-  // forget the network saved before sleep and start a new one on our channel
+  // The true erases the network saved before sleep, so the stack forms a
+  // new one on our channel instead of rejoining the old one.
   if (!Zigbee.begin(ZIGBEE_COORDINATOR, true)) {
     Serial.println("Error starting Zigbee");
     return false;
@@ -125,19 +125,19 @@ bool rfhsstartzigbee() {
   esp_zb_lock_acquire(portMAX_DELAY);
   esp_zb_set_tx_power(TXPOWER);
   if (!pan_id_random) {
-    // the stack formed the network on a random pan id. nothing has
-    // joined, so swap in ours.
+    // The stack formed the network on a random PAN ID. Nothing has joined
+    // yet, so it can be swapped for ours.
     esp_zb_set_pan_id(PAN_ID);
   }
-  // the stack formed the network with our MAC as the extended pan id.
-  // set EXT_PAN_ID, least significant byte first like the MAC.
+  // The stack formed the network with our MAC as the extended PAN ID.
+  // EXT_PAN_ID replaces it, least significant byte first like the MAC.
   esp_zb_ext_pan_id_t ext_pan_id_le;
   for (int i = 0; i < sizeof(ext_pan_id); i++) {
     ext_pan_id_le[i] = ext_pan_id[sizeof(ext_pan_id) - 1 - i];
   }
   esp_zb_nwk_set_extended_pan_id(ext_pan_id_le);
-  // the periodic packet hunters hear is the link status broadcast.
-  // the zigbee default is one every 15 seconds.
+  // The periodic packet hunters hear is the Link Status broadcast. The
+  // Zigbee default is one every 15 seconds.
   esp_err_t err = esp_zb_nwk_set_link_status_period(PACKET_INTERVAL);
   esp_zb_lock_release();
   if (err != ESP_OK) {
@@ -147,14 +147,13 @@ bool rfhsstartzigbee() {
   return true;
 }
 
-// quick sanity check.
-// read back what the stack is actually using.
-// refuse to run if it isn't what we asked for.
+// Reads back what the stack is using, prints it and refuses to run when it
+// is not what the conference header asked for.
 bool rfhscheckzigbee() {
   esp_zb_ieee_addr_t long_addr;
   esp_zb_get_long_address(long_addr);
-  // the stack stores the mac addr backwards.
-  // so it prints and compares starting from the last byte
+  // The stack stores the address least significant byte first, so it is
+  // printed and compared from the last byte.
   Serial.printf("Started Coordinator with MAC Address: %02X:%02X:%02X:%02X:%02X:%02X:%02X:%02X\r\n",
       long_addr[7], long_addr[6], long_addr[5], long_addr[4],
       long_addr[3], long_addr[2], long_addr[1], long_addr[0]);
@@ -176,7 +175,7 @@ bool rfhscheckzigbee() {
     Serial.println("Operating PAN ID != Requested PAN ID");
     return false;
   }
-  // stored least significant byte first, same as the MAC
+  // The stack stores it least significant byte first, like the MAC.
   esp_zb_ext_pan_id_t read_ext_pan_id;
   esp_zb_nwk_get_extended_pan_id(read_ext_pan_id);
   Serial.printf("Extended PAN ID: %02X:%02X:%02X:%02X:%02X:%02X:%02X:%02X\r\n",

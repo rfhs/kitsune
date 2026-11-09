@@ -10,6 +10,12 @@
 #define RFHS_STR_(x) #x
 #define RFHS_STR(x) RFHS_STR_(x)
 
+// The two strings are equal, so a header can compare the text RFHS_STR
+// gives it, for example a bare 0 against 0x0000.
+constexpr bool rfhs_str_eq(const char *a, const char *b) {
+  return *a == *b && (*a == '\0' || rfhs_str_eq(a + 1, b + 1));
+}
+
 // Every byte of the array equals value. Catches an all zero or all 0xFF
 // address, which no radio accepts as a device address.
 constexpr bool rfhs_all_bytes(const uint8_t *a, size_t n, uint8_t value) {
