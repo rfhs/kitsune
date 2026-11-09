@@ -609,6 +609,37 @@ class AirRunTest(unittest.TestCase):
         self.assertEqual(result.notes, [])
         self.assertEqual(rows["TXPOWER"][3], "median -50 dBm over 3 frames")
 
+    def test_fox_whose_stack_has_no_reset_keeps_the_timers_serial_only(self):
+        """The Nano's TinyUSB cannot reset the fox: the run says so, waits for
+        the fox's own wake, and the timers stay serial only with that reason
+        rather than --no-reset."""
+        from foxverify import ble
+        payload = bytes.fromhex("0215" "162EEB7B743C47E99414BBD6149B4E40" "0005" "0058" "C5")
+        seen = {"F2:63:89:10:8D:1D": ble.Seen("F2:63:89:10:8D:1D", "Demo Cath BLE Medium Fox",
+                                              ble.decode_ibeacon(payload), -50, 1.0)}
+        scan = FakeScan(seen, [heard(1001.5, 3, 0.1, -50)])
+
+        def prepare(one):
+            read_fox = one.read_fox
+
+            def without_reset(selection):
+                with mock.patch.object(serial_fox.TranscriptSource, "reset", lambda self, wall=None: None):
+                    return read_fox(selection)
+
+            one.read_fox = without_reset
+
+        result, _ = air_run(run.IBeaconRun, "iBeacon", fixture("transcripts", "ibeacon_medium.log"),
+                            lambda candidates: scan, prepare=prepare)
+        self.assertFalse(scan.keep_scanning)
+        self.assertEqual(result.code, EXIT_OK, result.out)
+        self.assertIn(serial_fox.NO_SERIAL_RESET + "\n", result.out)
+        rows = {row[0]: row for row in result.rows}
+        self.assertEqual(rows["TIME_TO_WAKE"][3:], ("-", "serial only"))
+        self.assertIn("| serial only: the fox was not reset", result.out)
+        self.assertIn("first transmission: not measured (the fox was not reset)\n", result.out)
+        self.assertEqual(result.notes, [])
+        self.assertEqual(rows["TXPOWER"][3], "median -50 dBm over 3 frames")
+
     def wifi_ap(self, feed, args=(), transcript="wifi_easy_ap.log", header=None):
         """A Wi-Fi AP run whose observe_ap is replaced by ``feed(cycle,
         follower, random_channel)`` returning the beacon."""

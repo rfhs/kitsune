@@ -66,6 +66,9 @@ TRANSCRIPT_ENV = "FOXVERIFY_TRANSCRIPT"
 DEFAULT_TIMEOUT = 60.0
 DEFAULT_WAIT_FOR_FOX = 30.0
 SERIAL_ONLY = "serial-only run"
+# The timer rows' reason when the fox's USB stack has no reset, so there is
+# no instant to measure the cycle from.
+NOT_RESET = "the fox was not reset"
 INTERRUPTED = 130
 # Seconds a run waits for a stopped inquiry or scan thread to end, so btmgmt
 # is terminated and the BLE scanner stopped before the script exits.
@@ -206,7 +209,8 @@ class Run:
 
     def plan(self, block: Block, readback: Readback) -> None:
         """Decide whether the sniffer listens through the first sleep to
-        measure the timers: only when the fox was reset by this run and
+        measure the timers: only when the fox was reset by this run, which
+        ``--no-reset`` and a USB stack without a reset both rule out, and
         ``--timeout`` covers TIME_TO_WAKE + TIME_TO_SLEEP + BOOT_ALLOWANCE.
         Either way the frames heard feed the first transmission line and the
         median RSSI."""
@@ -215,6 +219,8 @@ class Run:
         sleep = block.integer("TIME_TO_SLEEP") if "TIME_TO_SLEEP" in block else None
         if self.args.no_reset:
             self.timer_reason = "--no-reset"
+        elif readback.reset_time is None:
+            self.timer_reason = NOT_RESET
         elif wake is not None and sleep is not None:
             if cycle.fits(wake, sleep, self.args.timeout):
                 measure = True
@@ -271,7 +277,7 @@ class Run:
             fox = selection.fox
             self.report.say("fox: %s" % fox.path)
             try:
-                self.source = serial_fox.SerialSource(fox.path)
+                self.source = serial_fox.SerialSource(fox.path, port=fox.port)
             except (OSError, ValueError) as error:
                 raise RunError("cannot open %s: %s" % (fox.path, error))
         return serial_fox.read_fox(self.source, self.deadline, reset=not self.args.no_reset,

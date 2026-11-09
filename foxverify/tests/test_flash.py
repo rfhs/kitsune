@@ -13,10 +13,11 @@ from unittest import mock
 
 import serial
 
-from foxverify import ble, bootloader, devices, flash
+from foxverify import ble, bootloader, devices, flash, usbstack
 from foxverify.report import EXIT_NO_RUN, RunError
-from foxverify.serial_fox import PROJECT_DIRS, RESET_PULSE_SECONDS
+from foxverify.serial_fox import PROJECT_DIRS
 from foxverify.tests import REPO
+from foxverify.usbstack import RESET_PULSE_SECONDS, USB_HOLD_SECONDS, USB_SETTLE_SECONDS
 from foxverify.tests.test_devices import CP210X, ESP, NANO, NRF, OTHER, Info
 
 NET_BITS = (1 << 12) | (1 << 13)
@@ -35,16 +36,21 @@ ROM_ESP32S3 = (b"ESP-ROM:esp32s3-20210327\r\nBuild:Mar 27 2021\r\nrst:0x1 (POWER
 ROM_APP = b"ESP-ROM:esp32s3-20210327\r\nBuild:Mar 27 2021\r\nrst:0x1 (POWERON),boot:0x8 (SPI_FAST_FLASH_BOOT)\r\n"
 # esptool's sequences as a port sees them, from esptool/reset.py: every DTR and
 # RTS write in order, with the DTR rewrite after each RTS write, and the sleeps
-# between them. The port is open with both lines asserted when they start.
+# between them. A UART bridge's port is open with both lines asserted when they
+# start; a USB-Serial-JTAG port's open releases DTR after the kernel asserted
+# both, so its sessions begin with that write and the lines released.
+JTAG_OPEN = [("dtr", False)]
 CLASSIC_RESET = [("dtr", False), ("rts", True), ("dtr", False), ("sleep", 0.1),
                  ("dtr", True), ("rts", False), ("dtr", True), ("sleep", 0.05),
                  ("dtr", False)]
-USB_JTAG_RESET = [("rts", False), ("dtr", True), ("dtr", False), ("sleep", 0.1),
+USB_JTAG_RESET = [("rts", False), ("dtr", False), ("dtr", False), ("sleep", 0.1),
                   ("dtr", True), ("rts", False), ("dtr", True), ("sleep", 0.1),
                   ("rts", True), ("dtr", True), ("dtr", False), ("rts", True), ("dtr", False), ("sleep", 0.1),
                   ("dtr", False), ("rts", False), ("dtr", False)]
 HARD_RESET = [("dtr", False), ("rts", True), ("sleep", RESET_PULSE_SECONDS), ("rts", False),
               ("sleep", RESET_PULSE_SECONDS), ("dtr", True), ("rts", True)]
+USB_HARD_RESET = [("rts", True), ("dtr", False), ("sleep", USB_HOLD_SECONDS),
+                  ("rts", False), ("dtr", False), ("sleep", USB_SETTLE_SECONDS)]
 
 
 class FakeSerial:
@@ -545,7 +551,7 @@ class BootloaderTest(FlashTestCase):
         fox = machine.ports[0].device
         code, out, err = self.run_flash("iBeacon", ["m5atoms3-easy", "--serial-only"], machine)
         self.assertEqual(code, 0, err)
-        self.assertEqual(machine.sessions(), [USB_JTAG_RESET])
+        self.assertEqual(machine.sessions(), [JTAG_OPEN + USB_JTAG_RESET])
         self.assertIn(bootloader.IN_BOOTLOADER % fox + "\n", out)
         self.assertEqual(machine.commands("popen")[0][-1], fox)
 
@@ -556,7 +562,7 @@ class BootloaderTest(FlashTestCase):
         self.assertIn(bootloader.NOT_CONFIRMED + "\n", out)
         self.assertNotIn("in the bootloader", out)
         self.assertEqual(len(machine.commands("popen")), 1)
-        self.assertEqual(machine.sessions()[0], USB_JTAG_RESET)
+        self.assertEqual(machine.sessions()[0], JTAG_OPEN + USB_JTAG_RESET)
         self.assertGreaterEqual(machine.now, 1000.0 + bootloader.CONFIRM_SECONDS)
 
     def test_fox_that_drops_off_the_bus_is_opened_again_and_read_on(self):
@@ -568,7 +574,7 @@ class BootloaderTest(FlashTestCase):
         self.assertEqual(code, 0, err)
         self.assertIn(bootloader.IN_BOOTLOADER % fox + "\n", out)
         self.assertEqual(machine.opens, 2)
-        self.assertEqual(machine.sessions(), [USB_JTAG_RESET, []])
+        self.assertEqual(machine.sessions(), [JTAG_OPEN + USB_JTAG_RESET, JTAG_OPEN])
 
     def test_port_that_cannot_be_opened_falls_back_and_is_not_held(self):
         machine = self.machine(ports=[("ttyUSB0",) + CP210X], pio_status=1)
@@ -625,7 +631,7 @@ class BootloaderTest(FlashTestCase):
         code, out, err = self.run_flash("iBeacon", ["m5atoms3-easy", "--serial-only"], machine)
         self.assertEqual(code, 130)
         self.assertEqual(err.strip(), "interrupted")
-        self.assertEqual(machine.sessions(), [USB_JTAG_RESET, HARD_RESET])
+        self.assertEqual(machine.sessions(), [JTAG_OPEN + USB_JTAG_RESET, JTAG_OPEN + USB_HARD_RESET])
         self.assertIn(bootloader.RELEASED % fox + "\n", out)
 
     def test_fox_gone_at_the_reset_is_said(self):
@@ -666,17 +672,17 @@ class BootloaderTest(FlashTestCase):
         self.assertEqual(machine.commands("popen")[0][-1], fox)
 
     def test_usb_stack_by_id(self):
-        self.assertEqual(bootloader.usb_stack(devices.Port("/dev/a", *CP210X)), bootloader.UART_BRIDGE)
-        self.assertEqual(bootloader.usb_stack(devices.Port("/dev/a", 0x1A86, 0x55D4, None, None)),
-                         bootloader.UART_BRIDGE)
-        self.assertEqual(bootloader.usb_stack(devices.Port("/dev/a", 0x0403, 0x6001, None, None)),
-                         bootloader.UART_BRIDGE)
-        self.assertEqual(bootloader.usb_stack(devices.Port("/dev/a", *ESP)), bootloader.USB_SERIAL_JTAG)
-        self.assertEqual(bootloader.usb_stack(devices.Port("/dev/a", *NANO)), bootloader.TINYUSB)
-        self.assertIsNone(bootloader.usb_stack(devices.Port("/dev/a", 0x303A, 0x0002, None, None)))
-        self.assertIsNone(bootloader.usb_stack(devices.Port("/dev/a", *OTHER)))
-        self.assertIsNone(bootloader.usb_stack(devices.Port("/dev/a", None, None, None, None)))
-        self.assertIsNone(bootloader.usb_stack(None))
+        self.assertEqual(usbstack.usb_stack(devices.Port("/dev/a", *CP210X)), usbstack.UART_BRIDGE)
+        self.assertEqual(usbstack.usb_stack(devices.Port("/dev/a", 0x1A86, 0x55D4, None, None)),
+                         usbstack.UART_BRIDGE)
+        self.assertEqual(usbstack.usb_stack(devices.Port("/dev/a", 0x0403, 0x6001, None, None)),
+                         usbstack.UART_BRIDGE)
+        self.assertEqual(usbstack.usb_stack(devices.Port("/dev/a", *ESP)), usbstack.USB_SERIAL_JTAG)
+        self.assertEqual(usbstack.usb_stack(devices.Port("/dev/a", *NANO)), usbstack.TINYUSB)
+        self.assertIsNone(usbstack.usb_stack(devices.Port("/dev/a", 0x303A, 0x0002, None, None)))
+        self.assertIsNone(usbstack.usb_stack(devices.Port("/dev/a", *OTHER)))
+        self.assertIsNone(usbstack.usb_stack(devices.Port("/dev/a", None, None, None, None)))
+        self.assertIsNone(usbstack.usb_stack(None))
 
 
 class PioTest(FlashTestCase):

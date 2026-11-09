@@ -113,7 +113,8 @@ def budget_note(wake: int, sleep: int, timeout: float) -> str:
 class Cycle:
     """The frames heard from the fox and what they say about its cycle.
 
-    ``reset_time`` is when verify reset the fox, None with --no-reset.
+    ``reset_time`` is when the fox left reset, None when it was not reset
+    (``--no-reset``, or a USB stack that has no reset).
     ``granularity`` is the radio's longest normal spacing between frames in
     seconds, or None to take the largest spacing seen in wake 1 (at least
     ``MIN_GRANULARITY``). ``measure`` says whether the capture goes on through
@@ -293,6 +294,8 @@ def first_transmission_line(cycle: Cycle, no_reset: bool) -> str:
     """The line under the table: seconds from the reset to the first frame."""
     if no_reset:
         return "first transmission: not measured (--no-reset)"
+    if cycle.reset_time is None:
+        return "first transmission: not measured (the fox was not reset)"
     seconds = cycle.first_transmission()
     if seconds is None:
         return "first transmission: none heard before the deadline"

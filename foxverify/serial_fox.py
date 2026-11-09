@@ -7,23 +7,22 @@ device address first and "Awake and screaming" last. ``LINES`` holds one
 regex per line the four projects print; ``Readback.feed`` matches them and
 keeps the captured values under the field names in ``LINES``.
 
-Reset. The pulse is esptool's HardReset: DTR low with RTS high for 0.1 s, then
-RTS low. On a USB-UART board (CP210x, CH910x) RTS drives EN and DTR drives IO0
-through the usual two transistors, so the chip reboots into the application.
-On a board with ``ARDUINO_USB_MODE=1`` (M5 AtomS3 and StampS3, Seeed XIAO
-ESP32-C5) the USB-Serial-JTAG peripheral emulates that circuit in hardware and
-the Arduino core's ``HWCDC.cpp`` never looks at the line state, so the same
-pulse reboots it. On the Arduino Nano ESP32 the TinyUSB stack is in charge and
-``USBCDC.cpp`` only knows a four step line-state sequence that enters the
-bootloader, which this pulse never completes; the Nano ignores it and the
-reset button is the fallback. After another 0.1 s the pulse ends with DTR and
-RTS asserted again, DTR first, because TinyUSB's ``write()`` drops output
-while DTR is low and raising RTS before DTR would pulse EN a second time.
+Reset. ``SerialSource`` opens and resets the port with the line sequences of
+``usbstack``, chosen by the port's USB id: esptool's hard reset for a UART
+bridge (the M5 Atom) and for the USB-Serial-JTAG peripheral (M5 AtomS3 and
+StampS3, Seeed XIAO ESP32-C5), nothing for the Arduino Nano ESP32, whose
+TinyUSB stack has no way to restart the application; ``read_fox`` then says
+so and waits for the fox's own wake as with ``reset=False``. Opening a port
+never resets a running fox on any stack. After the reset a native USB device
+may re-enumerate; ``SerialSource.read`` raises ``PortGone`` and ``read_fox``
+reopens the same by-id path. The wall clock moment the reset was released is
+kept in ``Readback.reset_time`` for the first transmission figure.
 
-After the reset the device may re-enumerate; ``SerialSource.read`` raises
-``PortGone`` and ``read_fox`` reopens the same by-id path. The wall clock
-time of the reset is kept in ``Readback.reset_time`` for the first
-transmission figure.
+A reset that lands the chip in the ROM's download mode, which the ROM
+announces with a ``boot:`` line naming ``DOWNLOAD`` and then ``waiting for
+download``, is answered once by another reset; a second download banner ends
+the run with the reset-button hint, since the ROM never leaves download mode
+on its own.
 
 ``Follower`` reads the port after the readback while the sniffer listens
 through the fox's first sleep. It watches for ``Going to sleep``, the exact
@@ -36,9 +35,9 @@ after it vanished only when those lines are wanted.
 Not-a-fox outcomes after the reset, each a ``RunError`` (exit 2) with the text
 in the constants below: nothing at all within 10 s, or output without a banner
 within 15 s of the first byte. The 10 s mark prints the reset-button hint and
-keeps waiting until the deadline, so a fox whose USB stack ignores the pulse
-still gets its turn. With ``reset=False`` the script waits for the fox's own
-wake cycle until the deadline instead.
+keeps waiting until the deadline, so a fox whose bridge does not wire the
+pulse still gets its turn. With ``reset=False`` the script waits for the
+fox's own wake cycle until the deadline instead.
 """
 from __future__ import annotations
 
@@ -48,13 +47,13 @@ import re
 import time
 from typing import Callable, Dict, List, NamedTuple, Optional, Tuple
 
+from . import devices, usbstack
 from .conf import Block, ConfError, defined_for, select
 from .report import Deadline, RunError
 
 BAUD = 115200
 NO_OUTPUT_SECONDS = 10.0
 NO_BANNER_SECONDS = 15.0
-RESET_PULSE_SECONDS = 0.1
 # Seconds without a new line after the banner before the readback counts as
 # complete when the awake line was not seen.
 QUIET_SECONDS = 2.0
@@ -75,6 +74,17 @@ NO_BANNER_NO_RESET = ("device prints but did not identify as a fox before the de
                       "cycle longer than the deadline")
 DIFFERENT_HEADER = "fox was built from a different conference header than src/current_conf.h"
 PORT_GONE = "the fox's serial device went away and did not come back before the deadline"
+NO_SERIAL_RESET = ("the Arduino Nano ESP32 cannot be reset over its serial port; "
+                   "waiting for the fox's next wake")
+IN_BOOTLOADER = "the reset left the fox in the bootloader; resetting it again"
+STILL_IN_BOOTLOADER = "the reset left the fox in the bootloader again; press the board's reset button"
+
+# What the ROM prints after a reset into download mode: its boot-mode line,
+# ``rst:0x1 (POWERON),boot:0x0 (DOWNLOAD(USB/UART0))`` on an ESP32-S3 or
+# ESP32-C5 and ``boot:0x3 (DOWNLOAD_BOOT(UART0/UART1/SDIO_REI_REO_V2))`` on an
+# ESP32, then ``waiting for download``, the line esptool keys on.
+DOWNLOAD_BOOT = re.compile(r"^rst:0x[0-9A-Fa-f]+ \([^)]*\),boot:0x[0-9A-Fa-f]+ \(DOWNLOAD")
+WAITING_FOR_DOWNLOAD = "waiting for download"
 
 # Project name in the banner -> directory of its verify script.
 PROJECT_DIRS = {
@@ -191,7 +201,7 @@ class Readback:
         self.fields: Dict[str, str] = {}
         self.problems: List[str] = []
         self.unmatched: List[str] = []
-        # Wall clock times of the reset pulse, None when the fox was not
+        # Wall clock times of the reset's release, None when the fox was not
         # reset, and of the banner's arrival, which the fox prints once its
         # radio is up.
         self.reset_time: Optional[float] = None
@@ -268,12 +278,24 @@ class PortGone(Exception):
 
 
 class SerialSource:
-    """A pyserial port read in chunks, with the reset pulse and reopening."""
+    """A pyserial port read in chunks, with the hard reset of the port's USB
+    stack and reopening.
 
-    def __init__(self, path: str, baud: int = BAUD, sleep: Callable[[float], None] = time.sleep):
+    ``port`` is the ``devices.Port`` of ``path``, whose USB id picks the line
+    sequences; when it is not given the port is looked up among the serial
+    ports pyserial lists. A path without a USB id gets the UART bridge
+    sequences.
+    """
+
+    def __init__(self, path: str, baud: int = BAUD, sleep: Callable[[float], None] = time.sleep,
+                 port: Optional[devices.Port] = None):
         self.path = path
         self.baud = baud
         self.sleep = sleep
+        if port is None:
+            port = devices.find_port(path, devices.list_ports())
+        self.port = port
+        self.stack = usbstack.usb_stack(port)
         self.serial = None
         self._decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
         self.open()
@@ -284,11 +306,7 @@ class SerialSource:
         port.port = self.path
         port.baudrate = self.baud
         port.timeout = 0
-        # pyserial asserts DTR before RTS when it opens, which leaves EN high
-        # throughout on the auto-reset circuit.
-        port.dtr = True
-        port.rts = True
-        port.open()
+        usbstack.open_port(port, self.stack)
         self.serial = port
         self._decoder.reset()
 
@@ -300,28 +318,22 @@ class SerialSource:
                 pass
             self.serial = None
 
-    def reset(self) -> None:
-        """esptool's HardReset, ending with both lines asserted again.
+    def reset(self, wall: Callable[[], float] = time.time) -> Optional[float]:
+        """The hard reset of the port's USB stack: the moment the chip left
+        reset on ``wall``, or None when the stack has no reset.
 
-        The chip samples IO0 when EN rises, so the pause after RTS drops keeps
-        the brief IO0 dip of raising DTR alone away from that moment. A native
-        USB board may already have dropped off the bus by then; ``reopen``
-        asserts the lines again in the same order.
+        A USB-Serial-JTAG chip that dropped off the bus during the reset
+        leaves a port that cannot be used; it is closed so that the next
+        ``read`` raises ``PortGone`` and the caller opens the path again.
         """
-        port = self.serial
-        # RTS is asserted from open(), so on the USB-Serial-JTAG circuit this
-        # first change already pulls EN low and the device can be gone before
-        # the next line-state call.
-        port.dtr = False
         try:
-            port.rts = True
-            self.sleep(RESET_PULSE_SECONDS)
-            port.rts = False
-            self.sleep(RESET_PULSE_SECONDS)
-            port.dtr = True
-            port.rts = True
+            done = usbstack.hard_reset(self.serial, self.stack, self.sleep, wall)
         except OSError:
-            pass
+            self.close()
+            return wall()
+        if done.dropped:
+            self.close()
+        return done.released
 
     def read(self, timeout: float) -> Optional[str]:
         """Text that arrived within ``timeout`` seconds, or None when nothing did."""
@@ -406,8 +418,9 @@ class TranscriptSource:
         elif seconds > 0:
             self.sleep(seconds)
 
-    def reset(self) -> None:
+    def reset(self, wall: Callable[[], float] = time.time) -> Optional[float]:
         self.resets += 1
+        return wall()
 
     def reopen(self, deadline: Deadline) -> None:
         self.reopens += 1
@@ -480,19 +493,28 @@ def read_fox(source, deadline: Deadline, reset: bool = True,
     banner; the read goes on to the banner and stops there. Raises
     ``RunError`` with the not-a-fox texts when no banner arrives. ``wall`` is
     the clock the sniffers stamp frames with; the reset is stamped on it.
+
+    A source whose USB stack cannot reset the fox (``reset`` returns None)
+    is read as with ``reset=False`` after saying so. A reset that leaves the
+    chip in the ROM's download mode is seen in the ROM's lines and answered
+    with one more reset; the second time the run ends with the hint to press
+    the board's reset button.
     """
     readback = Readback()
     buffer = ""
     clock = deadline.now
     if reset:
         debug("resetting the fox on %s" % source.path)
-        source.reset()
-        readback.reset_time = wall()
+        readback.reset_time = source.reset(wall)
+        if readback.reset_time is None:
+            say(NO_SERIAL_RESET)
+            reset = False
     started = clock()
     first_output: Optional[float] = None
     last_line: Optional[float] = None
     drain_until: Optional[float] = None
     hinted = False
+    reset_again = reset
     while True:
         now = clock()
         if readback.banner is not None:
@@ -545,12 +567,45 @@ def read_fox(source, deadline: Deadline, reset: bool = True,
                 continue
             last_line = now
             debug("serial: " + line.rstrip("\r"))
+            rom = download_mode_line(line) if reset and readback.banner is None else None
+            # The ROM's boot line opens every boot's output, so it is a fresh
+            # verdict whenever it comes. Its waiting line alone is taken only
+            # before the second reset: after it, that line can still be the
+            # first boot's, in flight while the chip was reset again.
+            if rom == BOOT_LINE or (rom == WAITING_LINE and reset_again):
+                if not reset_again:
+                    raise RunError(STILL_IN_BOOTLOADER)
+                # The ROM never leaves download mode on its own; the reset
+                # is repeated once and the wait starts over.
+                say(IN_BOOTLOADER)
+                readback.feed(line)
+                reset_again = False
+                readback.reset_time = source.reset(wall)
+                started = clock()
+                first_output = None
+                buffer = ""
+                break
             if readback.feed(line) == "banner":
                 readback.banner_time = wall()
                 say(readback.banner.text())
     if buffer.strip():
         readback.feed(buffer)
     return readback
+
+
+BOOT_LINE = "boot"
+WAITING_LINE = "waiting"
+
+
+def download_mode_line(line: str) -> Optional[str]:
+    """``BOOT_LINE`` for the ROM's boot-mode line naming download mode,
+    ``WAITING_LINE`` for its ``waiting for download``, None for anything else."""
+    line = line.rstrip("\r")
+    if DOWNLOAD_BOOT.match(line):
+        return BOOT_LINE
+    if WAITING_FOR_DOWNLOAD in line:
+        return WAITING_LINE
+    return None
 
 
 class Follower:

@@ -12,23 +12,15 @@ restarts a chip that is already in download mode into download mode again.
 not happen, so a failed build or a Ctrl-C leaves the fox running its old
 firmware.
 
-The sequences are esptool's (``esptool/reset.py`` in esptool 4.5.1, which the
-espressif32 6.7.0 platform ships, and ``esp_pylib/serial_reset.py`` for the
-esptool 5.4.0 of the pioarduino platform; the two agree), chosen by the port's
-USB id:
+The DTR/RTS sequences live in ``usbstack`` with the USB stacks they belong
+to; the bootloader entries are esptool's, chosen by the port's USB id:
 
-- A UART bridge (Silicon Labs CP210x, WCH CH910x, FTDI) drives EN from RTS and
-  IO0 from DTR through two transistors, so a line pulls its pin low only while
-  the other line is released. ``ClassicReset``: DTR off with RTS on (EN low,
-  IO0 high: the chip is held in reset), 0.1 s, DTR on with RTS off (EN high,
-  IO0 low: the chip starts and samples IO0), 0.05 s, DTR off (IO0 released).
+- A UART bridge (Silicon Labs CP210x, WCH CH910x, FTDI) gets ``ClassicReset``.
   EN low wakes the chip from deep sleep too.
 - The USB-Serial-JTAG peripheral (``303A:1001``: M5 AtomS3 and StampS3, Seeed
-  XIAO ESP32-C5) implements that circuit in hardware
-  (``USB_SERIAL_JTAG_CHIP_RST_REG``) and the Arduino core's ``HWCDC.cpp``
-  never looks at the line state, so ``USBJTAGSerialReset`` walks the lines
-  through the states the peripheral recognises, 0.1 s apart. The device stays
-  enumerated under the same path and the ROM prints its boot log through it.
+  XIAO ESP32-C5) gets ``USBJTAGSerialReset``. The device stays enumerated
+  under the same path and the ROM prints its boot log through it, or drops
+  off the bus for a moment and is opened again under the same by-id path.
 - The Arduino Nano ESP32 (``2341:0070``) runs TinyUSB, and ``pio run -t
   upload`` flashes it with dfu-util through a DFU interface that its
   application provides, writing the new image into the next OTA partition
@@ -37,37 +29,22 @@ USB id:
   it running.
 - Any other port is left alone with a line saying why.
 
-pyserial asserts DTR and RTS when it opens a port. On both circuits that is
-the state in which neither EN nor IO0 is pulled low, so opening does not
-reset the chip. Both sequences end with DTR and RTS released, the state
-esptool leaves with ``--after no_reset``, and the kernel's hang-up on close
-releases lines that are already released, so closing does not reset it
-either. ``release`` is the hard reset ``verify`` uses,
-``serial_fox.SerialSource.reset``.
+Opening the port does not reset the chip on any stack (``usbstack.open_port``).
+Both entry sequences end with DTR and RTS released, the state esptool leaves
+with ``--after no_reset``, and the kernel's hang-up on close releases lines
+that are already released, so closing does not reset it either. ``release``
+is the hard reset ``verify`` uses, ``serial_fox.SerialSource.reset``, which
+is ``usbstack.hard_reset`` for the stack ``enter`` recorded in the ``Hold``.
 """
 from __future__ import annotations
 
 import time
 from typing import Callable, NamedTuple, Optional
 
-from . import devices
+from . import devices, usbstack
 from .report import Deadline, RunError
 from .serial_fox import PortGone, SerialSource
 
-UART_BRIDGE = "uart bridge"
-USB_SERIAL_JTAG = "usb-serial-jtag"
-TINYUSB = "tinyusb"
-
-USB_SERIAL_JTAG_ID = (0x303A, 0x1001)
-NANO_ID = (0x2341, 0x0070)
-UART_BRIDGE_VENDORS = {0x10C4, 0x1A86, 0x0403}
-
-# esptool's delays. ClassicReset holds EN low for ENTER_BOOT_SECONDS and IO0
-# low for RESET_DELAY_SECONDS after EN rises; USBJTAGSerialReset pauses
-# JTAG_STEP_SECONDS between its phases.
-ENTER_BOOT_SECONDS = 0.1
-RESET_DELAY_SECONDS = 0.05
-JTAG_STEP_SECONDS = 0.1
 # How long the ROM's boot log is waited for after the sequence, and how long
 # one read of it blocks.
 CONFIRM_SECONDS = 3.0
@@ -92,83 +69,26 @@ class Hold(NamedTuple):
     """What ``enter`` did. ``held`` is true once a reset sequence has started
     reaching the fox, whether or not the bootloader was confirmed, so
     ``release`` puts the fox back into its application when the upload does
-    not happen."""
+    not happen. ``port`` is the fox's serial port record, which picks the
+    sequences."""
 
     held: bool
     path: str
+    port: Optional[devices.Port]
 
 
-def usb_stack(port: Optional[devices.Port]) -> Optional[str]:
-    """Which reset sequence a port's USB id calls for, or None for a port the
-    script does not know."""
-    if port is None or port.vid is None:
-        return None
-    if (port.vid, port.pid) == USB_SERIAL_JTAG_ID:
-        return USB_SERIAL_JTAG
-    if (port.vid, port.pid) == NANO_ID:
-        return TINYUSB
-    if port.vid in UART_BRIDGE_VENDORS:
-        return UART_BRIDGE
-    return None
-
-
-def set_dtr(port, state: bool) -> None:
-    port.dtr = state
-
-
-def set_rts(port, state: bool) -> None:
-    """RTS, then DTR written again with its current value, as esptool does, so
-    the control requests a board sees are the ones it answers to esptool."""
-    port.rts = state
-    port.dtr = port.dtr
-
-
-def classic_reset(port, sleep: Callable[[float], None]) -> None:
-    """esptool's ClassicReset into the bootloader, for a UART bridge."""
-    set_dtr(port, False)  # IO0 high
-    set_rts(port, True)  # EN low, chip in reset
-    sleep(ENTER_BOOT_SECONDS)
-    set_dtr(port, True)  # IO0 low
-    set_rts(port, False)  # EN high, chip starts and samples IO0
-    sleep(RESET_DELAY_SECONDS)
-    set_dtr(port, False)  # IO0 released
-
-
-def usb_jtag_reset(port, sleep: Callable[[float], None]) -> None:
-    """esptool's USBJTAGSerialReset into the bootloader, for the USB-Serial-JTAG
-    peripheral. RTS changes before DTR in the third phase so the lines pass
-    through both asserted rather than both released."""
-    set_rts(port, False)
-    set_dtr(port, False)  # idle
-    sleep(JTAG_STEP_SECONDS)
-    set_dtr(port, True)  # IO0 low
-    set_rts(port, False)
-    sleep(JTAG_STEP_SECONDS)
-    set_rts(port, True)  # EN low
-    set_dtr(port, False)
-    set_rts(port, True)
-    sleep(JTAG_STEP_SECONDS)
-    set_dtr(port, False)
-    set_rts(port, False)  # EN high, chip starts in download mode
-
-
-def _open(path: str, deadline: Deadline, sleep: Callable[[float], None]) -> Optional[SerialSource]:
-    """The port opened at 115200 with DTR and RTS asserted, tried again until
-    the deadline while a device that just enumerated is still settling."""
+def _open(path: str, port: Optional[devices.Port], deadline: Deadline,
+          sleep: Callable[[float], None]) -> Optional[SerialSource]:
+    """The port opened at 115200 with the lines of its stack, tried again
+    until the deadline while a device that just enumerated is still
+    settling."""
     while True:
         try:
-            return SerialSource(path, sleep=sleep)
+            return SerialSource(path, sleep=sleep, port=port)
         except OSError:
             if deadline.expired():
                 return None
             sleep(min(RETRY_SECONDS, deadline.remaining()))
-
-
-def _send(stack: str, source: SerialSource, sleep: Callable[[float], None]) -> None:
-    if stack == UART_BRIDGE:
-        classic_reset(source.serial, sleep)
-    else:
-        usb_jtag_reset(source.serial, sleep)
 
 
 def _confirm(source: SerialSource, deadline: Deadline) -> bool:
@@ -198,25 +118,25 @@ def enter(fox: devices.Device, say: Callable[[str], None],
     """Put the fox into the ROM bootloader, confirm it and say what happened.
     A fox the sequences do not fit, or one whose bootloader could not be
     confirmed, is flashed the old way; nothing here exits."""
-    stack = usb_stack(fox.port)
+    stack = usbstack.usb_stack(fox.port)
     if stack is None:
         usb_id = fox.port.usb_id() if fox.port is not None else "no USB id"
         say(UNKNOWN_SKIPPED % (fox.path, usb_id if usb_id == "no USB id" else "USB id " + usb_id))
-        return Hold(False, fox.path)
-    if stack == TINYUSB:
+        return Hold(False, fox.path, fox.port)
+    if stack == usbstack.TINYUSB:
         say(NANO_SKIPPED % fox.path)
-        return Hold(False, fox.path)
+        return Hold(False, fox.path, fox.port)
     deadline = Deadline(CONFIRM_SECONDS, clock)
     held = False
     confirmed = False
     for attempt in range(ATTEMPTS):
-        source = _open(fox.path, deadline, sleep)
+        source = _open(fox.path, fox.port, deadline, sleep)
         if source is None:
             break
         held = True
         try:
             try:
-                _send(stack, source, sleep)
+                usbstack.enter_bootloader(source.serial, stack, sleep)
             except OSError:
                 # The device dropped off the bus halfway; esptool opens it
                 # again and sends the whole sequence again.
@@ -229,7 +149,7 @@ def enter(fox: devices.Device, say: Callable[[str], None],
         finally:
             source.close()
     say(IN_BOOTLOADER % fox.path if confirmed else NOT_CONFIRMED)
-    return Hold(held, fox.path)
+    return Hold(held, fox.path, fox.port)
 
 
 def release(hold: Hold, say: Callable[[str], None],
@@ -237,15 +157,12 @@ def release(hold: Hold, say: Callable[[str], None],
     """Reset a held fox back into its application with the hard reset
     ``verify`` uses, and say so; a fox that cannot be reached is said too."""
     try:
-        source = SerialSource(hold.path, sleep=sleep)
+        source = SerialSource(hold.path, sleep=sleep, port=hold.port)
     except OSError:
         say(NOT_RELEASED % hold.path)
         return
     try:
         source.reset()
-    except OSError:
-        say(NOT_RELEASED % hold.path)
-        return
     finally:
         source.close()
     say(RELEASED % hold.path)

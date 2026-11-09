@@ -3,9 +3,10 @@ import tempfile
 import unittest
 from unittest import mock
 
-from foxverify import serial_fox
+from foxverify import devices, serial_fox, usbstack
 from foxverify.report import Deadline, RunError
 from foxverify.tests import fixture, frozen_text, read_fixture
+from foxverify.tests.test_devices import CP210X, ESP, NANO, OTHER
 
 PROJECT_DIRS = {
     "classic_discoverable": "bluetooth/classic_discoverable",
@@ -45,6 +46,12 @@ TRANSCRIPTS = {
 
 def transcript(name):
     return read_fixture("transcripts", name + ".log")
+
+
+# The ROM's boot-mode line after a reset into download mode, from an ESP32-S3
+# through its USB-Serial-JTAG port and from an ESP32 behind a UART bridge.
+ROM_DOWNLOAD_S3 = "rst:0x1 (POWERON),boot:0x0 (DOWNLOAD(USB/UART0))\r\n"
+ROM_DOWNLOAD_ESP32 = "rst:0x1 (POWERON_RESET),boot:0x3 (DOWNLOAD_BOOT(UART0/UART1/SDIO_REI_REO_V2))\r\n"
 
 
 def timed(text, first=1.0, step=0.05):
@@ -508,6 +515,80 @@ class ReadFoxTest(unittest.TestCase):
         self.assertTrue(readback.complete())
 
 
+    def test_bootloader_banner_is_answered_with_one_more_reset(self):
+        """The ROM's download-mode lines after the reset mean the chip is in
+        the bootloader; it is reset once more and the fox read as usual, the
+        reset stamp being the second reset's."""
+        items = [(0.5, ROM_DOWNLOAD_S3), (0.0, "waiting for download\n")] + timed(transcript("zigbee_easy"))
+        run = Run(items)
+        self.assertIsNone(run.error)
+        self.assertEqual(run.source.resets, 2)
+        self.assertEqual(run.said, [serial_fox.IN_BOOTLOADER, "Fox: zigbee_coordinator EASY"])
+        self.assertTrue(run.readback.complete())
+        self.assertEqual(run.readback.get("pan_id"), "0x1337")
+        self.assertIn(ROM_DOWNLOAD_S3.strip(), run.readback.unmatched)
+        self.assertIn("waiting for download", run.readback.unmatched)
+        self.assertEqual(run.debugged.count("resetting the fox on transcript"), 1)
+        self.assertLess(run.elapsed(), 4.0)
+
+    def test_second_bootloader_banner_ends_the_run_with_the_hint(self):
+        items = [(0.5, ROM_DOWNLOAD_S3), (0.0, "waiting for download\n"), (0.4, ROM_DOWNLOAD_S3),
+                 (0.0, "waiting for download\n")] + timed(transcript("zigbee_easy"))
+        run = Run(items)
+        self.assertEqual(str(run.error), serial_fox.STILL_IN_BOOTLOADER)
+        self.assertEqual(run.error.exit_code, 2)
+        self.assertIn("press the board's reset button", str(run.error))
+        self.assertEqual(run.source.resets, 2)
+        self.assertEqual(run.said, [serial_fox.IN_BOOTLOADER])
+        self.assertLess(run.elapsed(), 2.0)
+        # The ESP32's bridge form of the lines is recognised too.
+        run = Run([(0.5, ROM_DOWNLOAD_ESP32), (0.3, ROM_DOWNLOAD_ESP32)])
+        self.assertEqual(str(run.error), serial_fox.STILL_IN_BOOTLOADER)
+
+    def test_waiting_line_alone_triggers_the_reset_and_a_late_one_is_ignored(self):
+        """Without the boot line only ``waiting for download`` is seen; one
+        arriving after the second reset is the first boot's, still in flight,
+        and does not count as a second failure."""
+        items = [(0.5, "waiting for download\n"), (0.3, "waiting for download\n")] + timed(transcript("ibeacon_easy"))
+        run = Run(items)
+        self.assertIsNone(run.error)
+        self.assertEqual(run.source.resets, 2)
+        self.assertEqual(run.said, [serial_fox.IN_BOOTLOADER, "Fox: iBeacon EASY"])
+        self.assertTrue(run.readback.complete())
+
+    def test_bootloader_lines_without_a_reset_are_just_not_a_fox(self):
+        run = Run([(0.5, ROM_DOWNLOAD_S3), (0.0, "waiting for download\n")], reset=False, timeout=20.0)
+        self.assertEqual(run.source.resets, 0)
+        self.assertEqual(run.said, [])
+        self.assertEqual(str(run.error), serial_fox.NO_BANNER_NO_RESET)
+        self.assertEqual(run.elapsed(), 20.0)
+
+    def test_bootloader_lines_after_the_banner_are_ordinary_lines(self):
+        items = timed(transcript("classic_easy")) + [(0.1, "waiting for download\n")]
+        run = Run(items)
+        self.assertIsNone(run.error)
+        self.assertEqual(run.source.resets, 1)
+
+    def test_source_without_a_reset_is_read_as_no_reset(self):
+        """A USB stack that cannot reset the fox (the Nano's TinyUSB) is said
+        and the read waits for the fox's own wake with no reset-button hint."""
+        class NoReset(serial_fox.TranscriptSource):
+            def reset(self, wall=None):
+                return None
+
+        clock = serial_fox.FakeClock()
+        source = NoReset(timed(transcript("ibeacon_medium"), first=25.0), clock)
+        said = []
+        readback = serial_fox.read_fox(source, Deadline(60, clock), say=said.append)
+        self.assertEqual(said, [serial_fox.NO_SERIAL_RESET, "Fox: iBeacon MEDIUM"])
+        self.assertIsNone(readback.reset_time)
+        self.assertIsNotNone(readback.banner_time)
+        self.assertTrue(readback.complete())
+        source = NoReset([], clock)
+        with self.assertRaises(RunError) as caught:
+            serial_fox.read_fox(source, Deadline(5, clock), say=said.append)
+        self.assertEqual(str(caught.exception), serial_fox.NO_OUTPUT_NO_RESET)
+
     def test_reset_is_stamped_on_the_wall_clock(self):
         wall = serial_fox.FakeClock(1730000000.0)
         clock = serial_fox.FakeClock()
@@ -515,6 +596,16 @@ class ReadFoxTest(unittest.TestCase):
         readback = serial_fox.read_fox(source, Deadline(60, clock), wall=wall)
         self.assertEqual(readback.reset_time, 1730000000.0)
         self.assertEqual(readback.banner_time, 1730000000.0)
+        # The stamp is what the source's reset returns: the moment reset
+        # was released, which a stamped source reports itself.
+        class Released(serial_fox.TranscriptSource):
+            def reset(self, wall=None):
+                self.resets += 1
+                return 42.5
+
+        source = Released(timed(transcript("classic_hard")), clock)
+        readback = serial_fox.read_fox(source, Deadline(60, clock), wall=wall)
+        self.assertEqual(readback.reset_time, 42.5)
         source = serial_fox.TranscriptSource(timed(transcript("classic_hard")), clock)
         readback = serial_fox.read_fox(source, Deadline(60, clock), reset=False, wall=wall)
         self.assertIsNone(readback.reset_time)
@@ -690,9 +781,11 @@ class TranscriptSourceTest(unittest.TestCase):
 
 
 class FakeSerial:
-    """Records the order of line-state changes the way a port would see them."""
+    """Records the order of line-state changes the way a port would see them,
+    with the fake clock's time of each when one is given."""
 
     instances = []
+    clock = None
 
     def __init__(self):
         self.events = []
@@ -705,7 +798,16 @@ class FakeSerial:
         self.closed = False
         self.data = b""
         self.fail_read = None
+        # Raise on the RTS write once this many events were recorded.
+        self.fail_rts_after = None
+        # Every event with the fake clock's time, when one is set.
+        self.timed = []
         FakeSerial.instances.append(self)
+
+    def _record(self, event):
+        self.events.append(event)
+        if FakeSerial.clock is not None:
+            self.timed.append((FakeSerial.clock(),) + event)
 
     @property
     def dtr(self):
@@ -714,7 +816,7 @@ class FakeSerial:
     @dtr.setter
     def dtr(self, value):
         self._dtr = value
-        self.events.append(("dtr", value))
+        self._record(("dtr", value))
 
     @property
     def rts(self):
@@ -722,12 +824,14 @@ class FakeSerial:
 
     @rts.setter
     def rts(self, value):
+        if self.fail_rts_after is not None and len(self.events) >= self.fail_rts_after:
+            raise OSError(5, "Input/output error")
         self._rts = value
-        self.events.append(("rts", value))
+        self._record(("rts", value))
 
     def open(self):
         self.opened = True
-        self.events.append(("open",))
+        self._record(("open",))
 
     def close(self):
         self.closed = True
@@ -743,48 +847,193 @@ class FakeSerial:
         return chunk
 
 
+def line_states(events, dtr=None, rts=None):
+    """The (DTR, RTS) pairs a port passes through for a list of writes, from
+    the given starting state."""
+    states = []
+    for event in events:
+        if event[0] == "dtr":
+            dtr = event[1]
+        elif event[0] == "rts":
+            rts = event[1]
+        else:
+            continue
+        states.append((dtr, rts))
+    return states
+
+
+BRIDGE = devices.Port("/dev/ttyUSB0", *CP210X)
+JTAG = devices.Port("/dev/ttyACM0", *ESP)
+NANO_PORT = devices.Port("/dev/ttyACM1", *NANO)
+# The hard resets as the fake port records them: esptool's RTS pulse with the
+# DTR rewrite for the USB-Serial-JTAG peripheral, the bridge pulse ending with
+# both lines asserted again.
+USB_HARD_RESET = [("rts", True), ("dtr", False), ("rts", False), ("dtr", False)]
+BRIDGE_HARD_RESET = [("dtr", False), ("rts", True), ("rts", False), ("dtr", True), ("rts", True)]
+
+
 class SerialSourceTest(unittest.TestCase):
+    """The port is opened and reset with the sequences of its USB stack."""
+
     def setUp(self):
         FakeSerial.instances = []
+        FakeSerial.clock = None
         patcher = mock.patch("serial.Serial", FakeSerial)
         patcher.start()
         self.addCleanup(patcher.stop)
         self.slept = []
 
-    def source(self, path="/dev/ttyUSB0"):
-        return serial_fox.SerialSource(path, sleep=self.slept.append)
+    def source(self, port=BRIDGE, sleep=None):
+        return serial_fox.SerialSource(port.device, sleep=sleep or self.slept.append, port=port)
 
-    def test_open_asserts_dtr_then_rts_before_opening(self):
+    def timed_source(self, port):
+        """A source whose sleeps move a fake clock that stamps every write."""
+        clock = serial_fox.FakeClock(0.0)
+        FakeSerial.clock = clock
+
+        def sleep(seconds):
+            self.slept.append(seconds)
+            clock.advance(seconds)
+
+        return self.source(port, sleep), clock
+
+    def test_bridge_open_asserts_dtr_then_rts_before_opening(self):
         source = self.source()
         port = FakeSerial.instances[0]
         self.assertEqual(port.port, "/dev/ttyUSB0")
         self.assertEqual(port.baudrate, 115200)
         self.assertEqual(port.events, [("dtr", True), ("rts", True), ("open",)])
         self.assertIs(source.serial, port)
+        self.assertEqual(source.stack, usbstack.UART_BRIDGE)
 
-    def test_reset_is_esptool_hard_reset_then_lines_asserted_again(self):
-        source = self.source()
+    def test_bridge_reset_is_esptool_hard_reset_then_lines_asserted_again(self):
+        source, clock = self.timed_source(BRIDGE)
         port = FakeSerial.instances[0]
         del port.events[:]
-        source.reset()
-        self.assertEqual(port.events, [("dtr", False), ("rts", True), ("rts", False), ("dtr", True), ("rts", True)])
-        self.assertEqual(self.slept, [serial_fox.RESET_PULSE_SECONDS, serial_fox.RESET_PULSE_SECONDS])
+        released = source.reset(clock)
+        self.assertEqual(port.events, BRIDGE_HARD_RESET)
+        self.assertEqual(self.slept, [usbstack.RESET_PULSE_SECONDS, usbstack.RESET_PULSE_SECONDS])
+        # Stamped when EN rises, after the first pulse and before the second.
+        self.assertEqual(released, usbstack.RESET_PULSE_SECONDS)
+        self.assertEqual(clock.now, 2 * usbstack.RESET_PULSE_SECONDS)
 
-    def test_reset_survives_the_device_dropping_off_the_bus(self):
+    def test_bridge_reset_survives_the_device_dropping_off_the_bus(self):
         source = self.source()
         port = FakeSerial.instances[0]
-
-        class Dropping(FakeSerial):
-            pass
-
-        def failing_rts(self, value):
-            raise OSError(5, "Input/output error")
-
-        Dropping.rts = property(FakeSerial.rts.fget, failing_rts)
-        port.__class__ = Dropping
         port.events = [("start",)]
-        source.reset()
+        port.fail_rts_after = 2
+        self.assertIsNotNone(source.reset())
         self.assertEqual(port.events, [("start",), ("dtr", False)])
+        self.assertTrue(port.closed)
+        self.assertIsNone(source.serial)
+
+    def test_usb_serial_jtag_open_never_asserts_rts_and_ends_with_both_lines_released(self):
+        source = self.source(JTAG)
+        port = FakeSerial.instances[0]
+        self.assertEqual(source.stack, usbstack.USB_SERIAL_JTAG)
+        self.assertEqual(port.events, [("dtr", True), ("rts", False), ("open",), ("dtr", False)])
+        self.assertNotIn(("rts", True), port.events)
+        # RTS is released before DTR, so the lines never pass through RTS
+        # asserted alone, the peripheral's reset.
+        self.assertNotIn((False, True), line_states(port.events, dtr=True, rts=True))
+        self.assertEqual((port.dtr, port.rts), (False, False))
+
+    def test_usb_serial_jtag_reset_is_esptool_s_usb_hard_reset(self):
+        source, clock = self.timed_source(JTAG)
+        port = FakeSerial.instances[0]
+        del port.events[:]
+        released = source.reset(clock)
+        self.assertEqual(port.events, USB_HARD_RESET)
+        self.assertEqual(self.slept, [usbstack.USB_HOLD_SECONDS, usbstack.USB_SETTLE_SECONDS])
+        # DTR stays released throughout and RTS is never released while DTR
+        # is asserted.
+        self.assertEqual([value for name, value in port.events if name == "dtr"], [False, False])
+        self.assertNotIn((True, False), line_states(port.events, dtr=False, rts=False))
+        # Stamped when RTS is released, 0.2 s in, before the 0.2 s settle.
+        self.assertEqual(released, usbstack.USB_HOLD_SECONDS)
+        self.assertEqual(clock.now, usbstack.USB_HOLD_SECONDS + usbstack.USB_SETTLE_SECONDS)
+        self.assertEqual(port.timed[-2][0], usbstack.USB_HOLD_SECONDS)
+        self.assertEqual((port.dtr, port.rts), (False, False))
+
+    def test_usb_serial_jtag_dropping_off_the_bus_during_the_hold_goes_to_reopen(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "ttyACM0")
+            with open(path, "w"):
+                pass
+            source, clock = self.timed_source(devices.Port(path, *ESP))
+            port = FakeSerial.instances[0]
+            del port.events[:]
+            port.fail_rts_after = 2
+            released = source.reset(clock)
+            self.assertEqual(port.events, [("rts", True), ("dtr", False)])
+            self.assertEqual(self.slept, [usbstack.USB_HOLD_SECONDS])
+            # The chip restarted when reset was asserted, which is the stamp.
+            self.assertEqual(released, 0.0)
+            self.assertTrue(port.closed)
+            self.assertIsNone(source.serial)
+            with self.assertRaises(serial_fox.PortGone):
+                source.read(0.0)
+            source.reopen(Deadline(1.0, clock))
+            self.assertEqual(len(FakeSerial.instances), 2)
+            self.assertEqual(FakeSerial.instances[-1].events, [("dtr", True), ("rts", False), ("open",), ("dtr", False)])
+
+    def test_usb_serial_jtag_gone_before_the_first_write_is_port_gone_too(self):
+        source = self.source(JTAG)
+        port = FakeSerial.instances[0]
+        del port.events[:]
+        port.fail_rts_after = 0
+        self.assertIsNotNone(source.reset())
+        self.assertEqual(port.events, [])
+        self.assertIsNone(source.serial)
+
+    def test_nano_is_opened_with_both_lines_asserted_and_never_reset(self):
+        source = self.source(NANO_PORT)
+        port = FakeSerial.instances[0]
+        self.assertEqual(source.stack, usbstack.TINYUSB)
+        self.assertEqual(port.events, [("dtr", True), ("rts", True), ("open",)])
+        del port.events[:]
+        self.assertIsNone(source.reset())
+        self.assertEqual(port.events, [])
+        self.assertEqual(self.slept, [])
+        self.assertIs(source.serial, port)
+
+    def test_unknown_id_and_no_id_get_the_bridge_sequences(self):
+        for port in (devices.Port("/dev/ttyUSB1", *OTHER), devices.Port("/dev/ttyS0", None, None, None, None), None):
+            FakeSerial.instances = []
+            self.slept = []
+            path = port.device if port is not None else "/dev/ttyS1"
+            with mock.patch.object(devices, "list_ports", return_value=[]):
+                source = serial_fox.SerialSource(path, sleep=self.slept.append, port=port)
+            fake = FakeSerial.instances[0]
+            self.assertIsNone(source.stack, port)
+            self.assertEqual(fake.events, [("dtr", True), ("rts", True), ("open",)], port)
+            del fake.events[:]
+            source.reset()
+            self.assertEqual(fake.events, BRIDGE_HARD_RESET, port)
+
+    def test_port_is_looked_up_by_path_when_not_given(self):
+        listed = [devices.Port("/dev/ttyUSB0", *CP210X), devices.Port("/dev/ttyACM0", *ESP)]
+        with mock.patch.object(devices, "list_ports", return_value=listed):
+            source = serial_fox.SerialSource("/dev/ttyACM0", sleep=self.slept.append)
+        self.assertEqual(source.port, listed[1])
+        self.assertEqual(source.stack, usbstack.USB_SERIAL_JTAG)
+        self.assertEqual(FakeSerial.instances[0].events, [("dtr", True), ("rts", False), ("open",), ("dtr", False)])
+
+    def test_release_and_reset_write_the_same_lines_for_the_same_stack(self):
+        from foxverify import bootloader
+        for port, expected in ((BRIDGE, BRIDGE_HARD_RESET), (JTAG, USB_HARD_RESET)):
+            FakeSerial.instances = []
+            said = []
+            bootloader.release(bootloader.Hold(True, port.device, port), said.append, self.slept.append)
+            released = FakeSerial.instances[0]
+            self.assertEqual(said, [bootloader.RELEASED % port.device])
+            self.assertTrue(released.closed)
+            FakeSerial.instances = []
+            source = self.source(port)
+            source.reset()
+            reset = FakeSerial.instances[0]
+            self.assertEqual(released.events, reset.events, port)
+            self.assertEqual(released.events[-len(expected):], expected, port)
 
     def test_read_returns_text_or_none_and_raises_port_gone(self):
         source = self.source()
@@ -808,7 +1057,7 @@ class SerialSourceTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             path = os.path.join(directory, "ttyACM0")
             clock = serial_fox.FakeClock()
-            source = serial_fox.SerialSource(path, sleep=clock.advance)
+            source = serial_fox.SerialSource(path, sleep=clock.advance, port=devices.Port(path, *CP210X))
             source.close()
             with self.assertRaises(RunError) as caught:
                 source.reopen(Deadline(1.0, clock))
@@ -819,6 +1068,26 @@ class SerialSourceTest(unittest.TestCase):
             source.reopen(Deadline(1.0, clock))
             self.assertIsNotNone(source.serial)
             self.assertEqual(FakeSerial.instances[-1].events, [("dtr", True), ("rts", True), ("open",)])
+
+
+class DownloadModeTest(unittest.TestCase):
+    """The ROM's download-mode lines, as the boards print them."""
+
+    def test_rom_lines(self):
+        self.assertEqual(serial_fox.download_mode_line(
+            "rst:0x1 (POWERON),boot:0x0 (DOWNLOAD(USB/UART0))\r"), serial_fox.BOOT_LINE)
+        self.assertEqual(serial_fox.download_mode_line(
+            "rst:0x15 (USB_UART_CHIP_RESET),boot:0x0 (DOWNLOAD(USB/UART0))"), serial_fox.BOOT_LINE)
+        self.assertEqual(serial_fox.download_mode_line(
+            "rst:0x1 (POWERON_RESET),boot:0x3 (DOWNLOAD_BOOT(UART0/UART1/SDIO_REI_REO_V2))"), serial_fox.BOOT_LINE)
+        self.assertEqual(serial_fox.download_mode_line("waiting for download\r"), serial_fox.WAITING_LINE)
+        for line in ("rst:0x1 (POWERON),boot:0xc (SPI_FAST_FLASH_BOOT)", "rst:0x1 (POWERON),boot:0x8 (SPI_FAST_FLASH_BOOT)",
+                     "rst:0x1 (POWERON_RESET),boot:0x13 (SPI_FAST_FLASH_BOOT)", "Initializing...",
+                     "Fox: iBeacon EASY", "entry 0x4084bb20"):
+            self.assertIsNone(serial_fox.download_mode_line(line), line)
+        for name in TRANSCRIPTS:
+            for line in transcript(name).splitlines():
+                self.assertIsNone(serial_fox.download_mode_line(line), (name, line))
 
 
 if __name__ == "__main__":

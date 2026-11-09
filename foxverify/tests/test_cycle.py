@@ -147,6 +147,14 @@ class TextTest(unittest.TestCase):
         one = fed(heard(2.0, 3, 1.0), reset_time=None)
         self.assertIsNone(one.first_transmission())
 
+    def test_first_transmission_of_a_fox_that_was_not_reset(self):
+        """A USB stack without a reset leaves no instant to measure from, and
+        the line says so without blaming --no-reset."""
+        one = fed(heard(2.0, 3, 1.0), reset_time=None)
+        self.assertEqual(cycle.first_transmission_line(one, False),
+                         "first transmission: not measured (the fox was not reset)")
+        self.assertEqual(cycle.first_transmission_line(one, True), "first transmission: not measured (--no-reset)")
+
     def test_median_rssi(self):
         one = fed([Heard(1.0, -40), Heard(2.0, -44), Heard(3.0, -42), Heard(4.0, None)])
         self.assertEqual(one.rssi_text(), "median -42 dBm over 3 frames")
