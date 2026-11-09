@@ -20,10 +20,13 @@ below takes what is left of it. The steps are the same for every project:
 5. Pick the header block the banner names. A serial MAC that differs from
    the block's MAC means the fox was built from another header: that row
    FAILs and nothing else is checked.
-6. The on-air rows for the project, then the rows only the serial can
-   confirm (sleep timers, PSK, MAX_CLIENTS, TXPOWER, EXT_PAN_ID).
-7. The table, the notes and the summary; exit 0, 1 on any FAIL, 2 when
-   the run could not happen.
+6. The on-air rows for the project, then the rows the air does not decide
+   (PSK, MAX_CLIENTS, TXPOWER with the median RSSI heard, EXT_PAN_ID) and
+   the two timers: measured on the air when ``--timeout`` covers one cycle
+   plus the boot allowance (``cycle``), ``serial only`` with a note naming
+   the ``--timeout`` that would measure them otherwise.
+7. The table, the ``first transmission`` line, the notes and the summary;
+   exit 0, 1 on any FAIL, 2 when the run could not happen.
 
 Without a sniffer, or with ``--serial-only``, the on-air rows are
 ``unverified`` with that reason and a note says so.
@@ -44,10 +47,19 @@ import sys
 import time
 from typing import Callable, List, Optional, TextIO
 
-from . import conf, devices, privileges, serial_fox
+from . import conf, cycle, devices, privileges, serial_fox
 from .conf import Block, ConfError
 from .report import Deadline, Report, RunError
 from .serial_fox import PROJECT_DIRS, Readback
+
+# The frame granularity of each radio in seconds: the longest normal spacing
+# between two frames from the fox, which bounds how late the last frame of a
+# wake can be heard after the radio stopped. Wi-Fi AP beacons come every
+# 102.4 ms and iBeacon advertisements every 20-40 ms; Classic inquiry
+# responses come every 1-3 s while the host inquires. A Wi-Fi client's probe
+# bursts are spaced as the station chooses, so their granularity is observed
+# (None), and a Zigbee fox's is its PACKET_INTERVAL.
+GRANULARITY = {"classic_discoverable": 3.0, "iBeacon": 1.0, "AP": 1.0, "CLIENT": None}
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 TRANSCRIPT_ENV = "FOXVERIFY_TRANSCRIPT"
@@ -147,9 +159,18 @@ class Run:
         self.serial_only = bool(args.serial_only or self.replay)
         self.air_reason = "--serial-only" if args.serial_only else SERIAL_ONLY
         self.source = None
+        # The wall clock the sniffers stamp frames with, and the wait between
+        # polls of a scan thread; a replay moves its own clock instead.
+        self.wall: Callable[[], float] = self.clock if self.replay else time.time
+        self.sleep: Callable[[float], None] = self.clock.advance if self.replay else time.sleep
         # Paths of the tools start_air found, for the project's rows.
         self.tshark: Optional[str] = None
         self.bluetoothctl: Optional[str] = None
+        # The frames heard from the fox and the serial follower, set by plan()
+        # when a sniffer listens; the reason the timer rows stay serial only.
+        self.cycle: Optional[cycle.Cycle] = None
+        self.follower: Optional[serial_fox.Follower] = None
+        self.timer_reason = ""
 
     # The steps shared by every project.
 
@@ -171,13 +192,53 @@ class Run:
                 listen = None
             if not self.header_matches(block, readback):
                 return self.report.emit()
+            if listen is not None:
+                self.plan(block, readback)
             self.rows(block, readback, listen)
             self.serial_rows(block, readback)
+            if self.cycle is not None:
+                self.report.line(cycle.first_transmission_line(self.cycle, self.args.no_reset))
         finally:
             self.stop_air(air)
             if self.source is not None:
                 self.source.close()
         return self.report.emit()
+
+    def plan(self, block: Block, readback: Readback) -> None:
+        """Decide whether the sniffer listens through the first sleep to
+        measure the timers: only when the fox was reset by this run and
+        ``--timeout`` covers TIME_TO_WAKE + TIME_TO_SLEEP + BOOT_ALLOWANCE.
+        Either way the frames heard feed the first transmission line and the
+        median RSSI."""
+        measure = False
+        wake = block.integer("TIME_TO_WAKE") if "TIME_TO_WAKE" in block else None
+        sleep = block.integer("TIME_TO_SLEEP") if "TIME_TO_SLEEP" in block else None
+        if self.args.no_reset:
+            self.timer_reason = "--no-reset"
+        elif wake is not None and sleep is not None:
+            if cycle.fits(wake, sleep, self.args.timeout):
+                measure = True
+            else:
+                self.report.note(cycle.budget_note(wake, sleep, self.args.timeout))
+        # A Bluetooth scan runs from before the reset; a Wi-Fi or Zigbee
+        # capture starts after the readback has named the channel.
+        listen_time = readback.reset_time if self.want_hci else None
+        self.cycle = cycle.Cycle(readback.reset_time, self.granularity(block, readback), measure, wake,
+                                 clock=self.wall, listen_time=listen_time, radio_time=readback.banner_time)
+        if measure:
+            self.follower = serial_fox.Follower(self.source, self.wall, self.random_channel(block, readback),
+                                               self.report.debug)
+
+    def granularity(self, block: Block, readback: Readback) -> Optional[float]:
+        return GRANULARITY[self.project]
+
+    def random_channel(self, block: Block, readback: Readback) -> bool:
+        """True when the fox picks a channel at every wake, so wake 2 may be
+        on another channel than wake 1."""
+        return False
+
+    def measuring(self) -> bool:
+        return self.cycle is not None and self.cycle.measure
 
     def load_header(self) -> str:
         try:
@@ -214,7 +275,7 @@ class Run:
             except (OSError, ValueError) as error:
                 raise RunError("cannot open %s: %s" % (fox.path, error))
         return serial_fox.read_fox(self.source, self.deadline, reset=not self.args.no_reset,
-                                   say=self.report.say, debug=self.report.debug)
+                                   say=self.report.say, debug=self.report.debug, wall=self.wall)
 
     def header_matches(self, block: Block, readback: Readback) -> bool:
         """True when the fox's address is the block's MAC_ADDR. Otherwise the
@@ -230,17 +291,46 @@ class Run:
         return False
 
     def serial_row(self, block: Block, readback: Readback, name: str, field: str,
-                   address: bool = False) -> None:
+                   address: bool = False, reason: str = "", air: Optional[str] = None) -> None:
         """A row for a value only the serial readback can confirm. ``address``
-        compares colon separated hex without regard to case."""
+        compares colon separated hex without regard to case; ``reason`` says
+        why the air cannot, and ``air`` is shown without deciding anything."""
         if name not in block:
             return
         serial = readback.upper(field) if address else readback.get(field)
-        self.report.check(name, block.display(name), serial, on_air=False)
+        self.report.check(name, block.display(name), serial, air, on_air=False, reason=reason)
 
     def timers(self, block: Block, readback: Readback) -> None:
-        self.serial_row(block, readback, "TIME_TO_WAKE", "time_to_wake")
-        self.serial_row(block, readback, "TIME_TO_SLEEP", "time_to_sleep")
+        """The TIME_TO_WAKE and TIME_TO_SLEEP rows: measured on the air when
+        the run listened through the first sleep, serial only otherwise."""
+        if self.measuring():
+            cycle.rows(self.report, block, readback, self.cycle, self.random_channel(block, readback))
+            return
+        self.serial_row(block, readback, "TIME_TO_WAKE", "time_to_wake", reason=self.timer_reason)
+        self.serial_row(block, readback, "TIME_TO_SLEEP", "time_to_sleep", reason=self.timer_reason)
+
+    def tx_power(self, block: Block, readback: Readback) -> None:
+        """The TXPOWER row, with the median RSSI of the frames heard in its
+        air column: a signal strength at an unknown distance does not confirm
+        a transmit power, so the verdict stays serial only."""
+        rssi = self.cycle.rssi_text() if self.cycle is not None else None
+        self.serial_row(block, readback, "TXPOWER", "tx_power", air=rssi)
+
+    def poll_scan(self, scan, mac: str, goal: Callable[[], bool]) -> None:
+        """Wait for a scan thread to reach ``goal``, taking the frames it heard
+        from the fox into the cycle, and on through the first sleep when the
+        cycle is being measured. The thread is stopped afterwards and what it
+        heard in the meantime taken too."""
+        def read(timeout: float):
+            self.sleep(timeout)
+            return scan.take_heard(mac)
+
+        cycle.listen(self.cycle, self.deadline, read, goal, self.follower, debug=self.report.debug)
+        scan.stop()
+        scan.join(STOP_SECONDS)
+        if self.cycle is not None:
+            for frame in scan.take_heard(mac):
+                self.cycle.feed(frame)
 
     def no_sniffer(self, text: str) -> None:
         self.report.note(text + ", " + SERIAL_ONLY)
@@ -297,7 +387,8 @@ class ClassicRun(Run):
         btmgmt = shutil.which("btmgmt")
         self.bluetoothctl = shutil.which("bluetoothctl")
         self.report.debug("inquiry on %s for %s" % (selection.hci.path, ", ".join(candidates)))
-        scan = btclassic.Inquiry(selection.hci.path, self.deadline, btmgmt, debug=self.report.debug)
+        scan = btclassic.Inquiry(selection.hci.path, self.deadline, btmgmt, debug=self.report.debug,
+                                 clock=self.wall)
         scan.start()
         return scan
 
@@ -312,7 +403,11 @@ class ClassicRun(Run):
             btclassic.rows(self.report, block, readback, None, reason=self.air_reason)
             return
         mac = block.mac("MAC_ADDR")
+        # Back to back inquiries are asked for before the target is named, so
+        # the thread never ends its loop between the two.
+        scan.keep_going = self.measuring()
         scan.set_target(mac)
+        self.poll_scan(scan, mac, lambda: scan.named(mac) or not scan.is_alive())
         found = scan.result(self.deadline).get(mac)
         name = None
         if found is not None and found.name is None:
@@ -339,7 +434,8 @@ class IBeaconRun(Run):
             return None
         self.check_privileges(selection)
         self.report.debug("active scan on %s for %s" % (selection.hci.path, ", ".join(candidates)))
-        scan = ble.BleScan(selection.hci.path, candidates, self.deadline, debug=self.report.debug)
+        scan = ble.BleScan(selection.hci.path, candidates, self.deadline, debug=self.report.debug,
+                           clock=self.wall)
         scan.start()
         return scan
 
@@ -354,14 +450,16 @@ class IBeaconRun(Run):
             ble.rows(self.report, block, readback, None, reason=self.air_reason)
             return
         mac = block.mac("MAC_ADDR")
+        scan.keep_scanning = self.measuring()
         scan.set_target(mac)
+        self.poll_scan(scan, mac, lambda: scan.complete(mac) or not scan.is_alive())
         seen = scan.result(self.deadline).get(mac)
         ble.rows(self.report, block, readback, seen,
                  reason="%s not seen by the scan before the deadline" % mac)
 
     def serial_rows(self, block, readback):
         self.timers(block, readback)
-        self.serial_row(block, readback, "TXPOWER", "tx_power")
+        self.tx_power(block, readback)
 
 
 class WifiRun(Run):
@@ -379,6 +477,14 @@ class WifiRun(Run):
         self.tshark = shutil.which("tshark")
         return selection.wifi.path
 
+    def granularity(self, block, readback):
+        return GRANULARITY[readback.banner.mode]
+
+    def random_channel(self, block, readback):
+        # Only an AP picks a channel; a client probes on every channel and
+        # its card hops anyway.
+        return "CHANNEL" in block and block.integer("CHANNEL") == 0 and readback.banner.mode == "AP"
+
     def rows(self, block, readback, interface):
         from . import wifi
         mode = readback.banner.mode
@@ -394,19 +500,23 @@ class WifiRun(Run):
             if channel is None:
                 wifi.ap_rows(self.report, block, readback, None, "the fox did not print its channel")
                 return
-            self.report.say("listening for beacons from %s on channel %d with %s" % (mac, channel, interface))
+            self.report.say("listening for beacons from %s on channel %d with %s%s" % (
+                mac, channel, interface, " through the first sleep" if self.measuring() else ""))
             with wifi.monitor_mode(interface):
                 beacon = wifi.observe_ap(interface, mac, channel, self.deadline, self.tshark,
-                                         debug=self.report.debug)
+                                         debug=self.report.debug, cycle=self.cycle, follower=self.follower,
+                                         random_channel=self.random_channel(block, readback))
             wifi.ap_rows(self.report, block, readback, beacon,
                          "no beacon from %s on channel %d before the deadline" % (mac, channel))
         else:
             channels = wifi.probe_channels(block)
-            self.report.say("listening for probe requests from %s on channel%s %s with %s" % (
-                mac, "s" if len(channels) > 1 else "", ",".join(str(c) for c in channels), interface))
+            self.report.say("listening for probe requests from %s on channel%s %s with %s%s" % (
+                mac, "s" if len(channels) > 1 else "", ",".join(str(c) for c in channels), interface,
+                " through the first sleep" if self.measuring() else ""))
             with wifi.monitor_mode(interface):
                 probes = wifi.observe_client(interface, mac, block.string("FSSID"), channels,
-                                             self.deadline, self.tshark, debug=self.report.debug)
+                                             self.deadline, self.tshark, debug=self.report.debug,
+                                             cycle=self.cycle, follower=self.follower)
             wifi.client_rows(self.report, block, readback, probes,
                              "no probe request from %s before the deadline" % mac)
 
@@ -414,7 +524,7 @@ class WifiRun(Run):
         self.serial_row(block, readback, "PSK", "psk")
         self.serial_row(block, readback, "MAX_CLIENTS", "max_clients")
         self.timers(block, readback)
-        self.serial_row(block, readback, "TXPOWER", "tx_power")
+        self.tx_power(block, readback)
 
 
 class ZigbeeRun(Run):
@@ -434,6 +544,12 @@ class ZigbeeRun(Run):
         self.tshark = shutil.which("tshark")
         return selection.sniffer.path
 
+    def granularity(self, block, readback):
+        return float(block.integer("PACKET_INTERVAL"))
+
+    def random_channel(self, block, readback):
+        return block.integer("CHANNEL") == 0
+
     def rows(self, block, readback, sniffer):
         from . import zigbee
         if sniffer is None:
@@ -447,17 +563,22 @@ class ZigbeeRun(Run):
         interval = block.integer("PACKET_INTERVAL")
         interval_reason = zigbee.interval_fits(interval, self.deadline.remaining())
         want = 1 if interval_reason else 2
-        self.report.say("listening on channel %d with %s for %s" % (
-            channel, sniffer, "one Link Status frame" if want == 1 else "two Link Status frames"))
+        self.report.say("listening on channel %d with %s for %s%s" % (
+            channel, sniffer, "one Link Status frame" if want == 1 else "two Link Status frames",
+            " and through the first sleep" if self.measuring() else ""))
         observation = zigbee.observe(sniffer, channel, self.deadline, self.tshark, pan_id, want,
-                                     debug=self.report.debug)
+                                     debug=self.report.debug, cycle=self.cycle, follower=self.follower,
+                                     random_channel=self.random_channel(block, readback),
+                                     mac=block.mac("MAC_ADDR"))
         zigbee.rows(self.report, block, readback, observation, interval_reason,
                     reason="no frame from a coordinator on channel %d before the deadline" % channel)
 
     def serial_rows(self, block, readback):
-        self.serial_row(block, readback, "EXT_PAN_ID", "ext_pan_id", address=True)
+        from . import zigbee
+        self.serial_row(block, readback, "EXT_PAN_ID", "ext_pan_id", address=True,
+                        reason=zigbee.EXT_PAN_ID_REASON)
         self.timers(block, readback)
-        self.serial_row(block, readback, "TXPOWER", "tx_power")
+        self.tx_power(block, readback)
 
 
 RUNS = {

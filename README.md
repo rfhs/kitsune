@@ -45,27 +45,45 @@ sudo ./verify hci0 --no-reset             # Classic or iBeacon: wait for the fox
 ```
 Every `DEVICE` is a plain name and the script works out what it is: a network interface (`wlan1`) is the Wi-Fi sniffer, `hciN` is the Bluetooth adapter, a serial port with the nRF52840 sniffer's USB id (`1915:154A` or `1915:154B`, depending on the firmware release) is the 802.15.4 sniffer and any other serial port is the fox. Without a fox on the command line the one serial port with a fox USB id is used: Espressif `303A` (the M5 AtomS3, StampS3 and XIAO ESP32-C5 USB-Serial-JTAG), Arduino `2341:0070` (the Nano ESP32's TinyUSB), or a CP210x `10C4`, WCH `1A86` or FTDI `0403` bridge (the M5 Atom). If there is none the script waits `--wait-for-fox` seconds for a native USB board to wake, and if there are several it lists them and asks for one. The nRF sniffer and a lone `hci0` are found on their own; a Wi-Fi interface never is, because putting the wrong card into monitor mode takes the laptop offline. The whole run stays under `--timeout` seconds, 60 by default.
 
-The table has the columns `value | header | serial | air | verdict`. `pass` means header, serial and air agree; `FAIL` means any of them differs, and the exit status is 1; `serial` is a value that is not on the air by design (the sleep timers, the PSK text, `MAX_CLIENTS`, `TXPOWER`, `EXT_PAN_ID`) and agrees between header and serial; `unverified` is a value the sniffer should have seen but did not within the time, with the reason. A fox built from another conference header FAILs its `MAC_ADDR` row with a note saying so, and a fox that halted on a fatal code (a readback that differs from its header, a radio that would not start) gets the note `the fox refused to run: <the line it printed>` and nothing is listened for; both exit 1. A device that is not a fox, a fox built for another project, a missing tool or a missing privilege is said in plain words and the exit status is 2. Without a sniffer the run is serial-only and says so. The iBeacon MEDIUM demo, when everything agrees:
+The table has the columns `value | header | serial | air | verdict`. `pass` means header, serial and air agree; `FAIL` means any of them differs, and the exit status is 1; `serial only` is a value the air does not decide (the PSK text, `MAX_CLIENTS`, `TXPOWER`, `EXT_PAN_ID`, and the two sleep timers when the run is too short to measure them) and agrees between header and serial; `unverified` is a value the sniffer should have seen but did not within the time, with the reason. A fox built from another conference header FAILs its `MAC_ADDR` row with a note saying so, and a fox that halted on a fatal code (a readback that differs from its header, a radio that would not start) gets the note `the fox refused to run: <the line it printed>` and nothing is listened for; both exit 1. A device that is not a fox, a fox built for another project, a missing tool or a missing privilege is said in plain words and the exit status is 2. Without a sniffer the run is serial-only and says so.
+
+`TIME_TO_WAKE` and `TIME_TO_SLEEP` are measured on the air when `--timeout` is at least `TIME_TO_WAKE + TIME_TO_SLEEP + 5` seconds, the 5 being the boot allowance, the time a fox may take from a reset to its first frame. The sniffer then keeps listening through the fox's first sleep until it hears the fox again, and the rows read `on the air 15.0 s` (first to last frame of the first wake) and `off the air 5.0 s` (last frame of the first wake to the first of the second). `TIME_TO_WAKE` passes when the fox was on the air for `TIME_TO_WAKE` seconds, allowing the radio's spacing between frames below and the boot allowance above; `TIME_TO_SLEEP` passes when one cycle, first frame to first frame, is `TIME_TO_WAKE + TIME_TO_SLEEP` within 1 s or one percent, and the gap is at most `TIME_TO_SLEEP` plus the allowance plus that spacing, so a `TIME_TO_SLEEP 0` fox passes when it reboots in under 5 s. The end of the first wake is the fox's `Going to sleep` line, or its serial device disappearing, which a native USB board's does in deep sleep; a fox that picks its channel at random (`CHANNEL 0`) has its wake 2 channel read from serial and the sniffer retuned to it. A wake 2 the sniffer does not hear is a `FAIL` of the `TIME_TO_SLEEP` row, with the air column saying `wake 2 not heard before the deadline`, `wake 2 not heard: its channel was not seen on serial` or `wake 2 not heard on channel 9 after retuning at +33.2 s`: a rig told the channel on serial that still cannot find the fox means a hunter with a scanner has no chance. With the default `--timeout 60` the iBeacon MEDIUM demo (5/5, 15 s needed) and the Wi-Fi EASY AP (15/5, 25 s) are measured; the Classic HARD demo (30/30) needs `--timeout 65`, the 300/0 foxes `--timeout 305`. When the budget does not fit, the two rows stay `serial only` and a note names the `--timeout` that would measure them, as in `TIME_TO_WAKE and TIME_TO_SLEEP: serial only, --timeout 60 is under the 65 s the cycle needs (TIME_TO_WAKE + TIME_TO_SLEEP + 5)`; `--no-reset` gives no instant to measure from, so the rows say `serial only: --no-reset`.
+
+Whenever a sniffer is present and the fox was reset, the line `first transmission: 1.5 s after reset` under the table gives the time from the reset to the fox's first frame, with `, over the 5 s boot allowance` appended on a measured run whose fox took longer, which is the evidence for changing the allowance. The Bluetooth scans run from before the reset and hear the first frame; a Wi-Fi or Zigbee capture can only start once the serial readback has named the channel, so when it hears the fox at once the line reads `first transmission: by 3.1 s after reset (the sniffer started listening at 3.0 s; the radio was up at 1.4 s by serial)`, the last figure being the banner's arrival, which the fox prints once its radio is up, and the timer rules allow for the part of the first wake that went unheard. The `TXPOWER` row's air column shows the median RSSI of every frame heard from the fox, `median -42 dBm over 148 frames`; the verdict stays `serial only`, since a signal strength at an unknown distance does not confirm a transmit power. The Zigbee `EXT_PAN_ID` row says why it is serial only: the extended PAN ID travels only in beacons, which a coordinator sends in reply to a beacon request, and the nRF sniffer firmware (`channel`, `receive`, `sleep`) cannot transmit one. The Wi-Fi EASY AP demo, when everything agrees:
 ```
-Fox: iBeacon MEDIUM
-value         | header                               | serial                               | air                                  | verdict
-MAC_ADDR      | F2:63:89:10:8D:1D                    | F2:63:89:10:8D:1D                    | F2:63:89:10:8D:1D                    | pass
-DEVICE_NAME   | Demo Cath BLE Medium Fox             | Demo Cath BLE Medium Fox             | Demo Cath BLE Medium Fox             | pass
-BEACON_UUID   | 162EEB7B-743C-47E9-9414-BBD6149B4E40 | 162EEB7B-743C-47E9-9414-BBD6149B4E40 | 162EEB7B-743C-47E9-9414-BBD6149B4E40 | pass
-MAJOR         | 5                                    | 5                                    | 5                                    | pass
-MINOR         | 88                                   | 88                                   | 88                                   | pass
-SIGNAL_POWER  | -59                                  | -59                                  | -59                                  | pass
-TIME_TO_WAKE  | 5                                    | 5                                    | -                                    | serial
-TIME_TO_SLEEP | 5                                    | 5                                    | -                                    | serial
-TXPOWER       | ESP_PWR_LVL_N0                       | ESP_PWR_LVL_N0                       | -                                    | serial
-pass: 6 pass, 0 FAIL, 3 serial, 0 unverified, NN s of 60 s
+Fox: wifi_ap_client EASY AP
+value         | header                     | serial                     | air                            | verdict
+MAC_ADDR      | F2:F4:90:22:0D:0F          | F2:F4:90:22:0D:0F          | F2:F4:90:22:0D:0F              | pass
+CHANNEL       | 1                          | 1                          | 1                              | pass
+FSSID         | Demo Hiro WiFi AP Easy Fox | Demo Hiro WiFi AP Easy Fox | Demo Hiro WiFi AP Easy Fox     | pass
+SSID_HIDDEN   | 0                          | 0                          | 0                              | pass
+SECURITY      | WPA2-PSK/CCMP              | -                          | WPA2-PSK/CCMP                  | pass
+PSK           | 0123456789                 | 0123456789                 | -                              | serial only
+MAX_CLIENTS   | 1                          | 1                          | -                              | serial only
+TIME_TO_WAKE  | 15                         | 15                         | on the air 13.4 s              | pass
+TIME_TO_SLEEP | 5                          | 5                          | off the air 5.0 s              | pass
+TXPOWER       | WIFI_POWER_17dBm           | WIFI_POWER_17dBm           | median -42 dBm over 133 frames | serial only
+first transmission: by 3.1 s after reset (the sniffer started listening at 3.0 s; the radio was up at 1.4 s by serial)
+pass: 7 pass, 0 FAIL, 3 serial only, 0 unverified, NN s of 60 s
+```
+The Classic HARD demo at the default `--timeout 60`:
+```
+Fox: classic_discoverable HARD
+value         | header                 | serial                 | air                    | verdict
+MAC_ADDR      | F2:F6:6D:BC:2A:80      | F2:F6:6D:BC:2A:80      | F2:F6:6D:BC:2A:80      | pass
+NAME          | Demo Case BTC Hard Fox | Demo Case BTC Hard Fox | Demo Case BTC Hard Fox | pass
+TIME_TO_WAKE  | 30                     | 30                     | -                      | serial only
+TIME_TO_SLEEP | 30                     | 30                     | -                      | serial only
+first transmission: 2.1 s after reset
+note: TIME_TO_WAKE and TIME_TO_SLEEP: serial only, --timeout 60 is under the 65 s the cycle needs (TIME_TO_WAKE + TIME_TO_SLEEP + 5)
+pass: 2 pass, 0 FAIL, 2 serial only, 0 unverified, NN s of 60 s
 ```
 
 What each fox needs on the air, and the privilege for it:
 - Bluetooth Classic: `btmgmt` (bluez) runs an inquiry on `hci0`; needs root or `CAP_NET_ADMIN`.
 - iBeacon: an active BLE scan with [bleak](https://github.com/hbldh/bleak) on `hci0`; no root needed.
 - Wi-Fi: `tshark`, `iw` and `ip` put the named card into monitor mode and read beacons (AP) or probe requests (client); needs root. The card's type and state are put back when the script ends, including on Ctrl-C.
-- Zigbee: an nRF52840 dongle running Nordic's 802.15.4 sniffer firmware (the one Kismet uses) and `tshark`; no root needed, only access to the dongle's serial port. `PACKET_INTERVAL` needs two Link Status frames, so an interval above about 20 seconds cannot be confirmed within the 60 second limit and is reported `unverified`.
+- Zigbee: an nRF52840 dongle running Nordic's 802.15.4 sniffer firmware (the one Kismet uses) and `tshark`; no root needed, only access to the dongle's serial port. `PACKET_INTERVAL` needs two Link Status frames, so an interval above about 20 seconds cannot be confirmed within the 60 second limit and is reported `unverified`. The dongle only receives, which is why `EXT_PAN_ID` stays serial only.
 
 The `verify` scripts never call `sudo` themselves; run them under it when the check above needs root, or use `flash_verify` below, which does. Packages:
 - Debian and Ubuntu: `python3-serial python3-bleak tshark bluez iw`
@@ -79,9 +97,9 @@ The iBeacon script prints the same hint when `import bleak` fails. Python 3.9 or
 
 ### Flashing and verifying in one step
 
-`flash_verify`, next to `verify` in every project, builds one environment of the project's `platformio.ini`, uploads it to the fox and then runs `verify`. The environment comes first; everything after it goes to `verify` unchanged:
+`flash_verify`, next to `verify` in every project, builds one environment of the project's `platformio.ini`, uploads it to the fox and then runs `verify`. The environment comes first; everything after it goes to `verify` unchanged, so a `--timeout` long enough for one cycle plus the 5 s boot allowance makes `verify` measure `TIME_TO_WAKE` and `TIME_TO_SLEEP` on the air after the flash:
 ```
-cd bluetooth/classic_discoverable && ./flash_verify m5atom-hard hci0
+cd bluetooth/classic_discoverable && ./flash_verify m5atom-hard hci0 --timeout 65
 cd bluetooth/iBeacon && ./flash_verify m5atom-medium
 cd wifi/wifi_ap_client && ./flash_verify m5atom-easy-ap wlan1
 cd zigbee/zigbee_coordinator && ./flash_verify seeed-xiao-esp32c5-easy-coordinator -v

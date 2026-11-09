@@ -4,7 +4,8 @@ import shutil
 import tempfile
 import unittest
 
-from foxverify import conf, report, tshark, wifi
+from foxverify import conf, report, serial_fox, tshark, wifi
+from foxverify.cycle import Cycle, Heard
 from foxverify.report import Deadline, RunError
 from foxverify.serial_fox import parse_transcript
 from foxverify.tests import frozen_text, read_fixture
@@ -98,6 +99,102 @@ class BeaconTest(unittest.TestCase):
         reader = FakeReader(wifi.AP_FIELDS, [(10.0, BEACONS[0])], clock)
         self.assertIsNone(wifi.wait_for_beacon(reader, "F2:F4:90:22:0D:0F", dl))
 
+    def test_rssi_is_the_first_antenna(self):
+        self.assertEqual(beacon(0).rssi, -42)
+        self.assertEqual(beacon(1).rssi, -61)
+        self.assertEqual(beacon(0).heard(), Heard(1730000000.123456, -42))
+        self.assertIsNone(wifi.parse_beacon(tshark.parse_line(BEACONS[0].rsplit("\t", 1)[0], wifi.AP_FIELDS)).rssi)
+        self.assertEqual(wifi.AP_FIELDS[-1], "radiotap.dbm_antsignal")
+        self.assertEqual(wifi.CLIENT_FIELDS[-1], "radiotap.dbm_antsignal")
+
+
+def beacon_line(when, rssi=-42):
+    """A beacon from the EASY AP fox stamped ``when`` seconds on the fake clock."""
+    cells = BEACONS[0].split("\t")
+    cells[0] = "%.6f" % when
+    cells[-1] = str(rssi)
+    return "\t".join(cells)
+
+
+class BeaconCycleTest(unittest.TestCase):
+    """Beacons fed to the cycle, through the sleep, with the card retuned for a
+    random-channel fox."""
+
+    def test_every_beacon_feeds_the_cycle_and_the_read_stops_at_the_first_without_measuring(self):
+        dl, clock = deadline(60, start=0.0)
+        reader = FakeReader(wifi.AP_FIELDS, [(1.0, beacon_line(1.0)), (0.1, beacon_line(1.1, -40))], clock)
+        one = Cycle(0.0, 1.0, measure=False, clock=clock)
+        b = wifi.wait_for_beacon(reader, "F2:F4:90:22:0D:0F", dl, cycle=one)
+        self.assertEqual(b.rssi, -42)
+        self.assertEqual(one.frames, [Heard(1.0, -42)])
+        self.assertEqual(one.rssi_text(), "median -42 dBm over 1 frame")
+
+    def test_measured_cycle_listens_through_the_sleep(self):
+        dl, clock = deadline(60, start=0.0)
+        wake1 = [(1.0, beacon_line(1.0))] + [(0.5, beacon_line(1.0 + 0.5 * i)) for i in range(1, 31)]
+        wake2 = [(5.0, beacon_line(21.0, -44)), (0.5, beacon_line(21.5, -44))]
+        reader = FakeReader(wifi.AP_FIELDS, wake1 + wake2, clock)
+        source = serial_fox.TranscriptSource([(16.3, "Going to sleep\n")], clock)
+        follower = serial_fox.Follower(source, clock)
+        one = Cycle(0.0, 1.0, measure=True, wake=15, clock=clock)
+        b = wifi.wait_for_beacon(reader, "F2:F4:90:22:0D:0F", dl, cycle=one, follower=follower)
+        self.assertEqual(b.time, 1.0)
+        self.assertTrue(one.complete())
+        self.assertAlmostEqual(one.sleep_time, 16.3, delta=0.3)
+        self.assertEqual(len(one.wake1()), 31)
+        self.assertAlmostEqual(one.span(), 15.0)
+        self.assertAlmostEqual(one.gap(), 5.0)
+        self.assertAlmostEqual(one.period(), 20.0)
+        self.assertEqual(one.rssi_text(), "median -42 dBm over 32 frames")
+        self.assertLess(clock.now, 22.0)
+
+    def test_random_channel_retunes_the_card_from_wake_2_serial(self):
+        dl, clock = deadline(60, start=0.0)
+        wake1 = [(1.0, beacon_line(1.0)), (0.5, beacon_line(1.5))]
+        wake2 = [(29.0, beacon_line(30.5, -50))]
+        reader = FakeReader(wifi.AP_FIELDS, wake1 + wake2, clock)
+        source = serial_fox.TranscriptSource([(2.0, "Going to sleep\n"), (26.0, "Initializing...\n"),
+                                              (1.0, "Operating channel: 9\n")], clock)
+        follower = serial_fox.Follower(source, clock)
+        one = Cycle(0.0, 1.0, measure=True, wake=15, clock=clock)
+        tuned = []
+        wifi.wait_for_beacon(reader, "F2:F4:90:22:0D:0F", dl, cycle=one, follower=follower, retune=tuned.append)
+        self.assertEqual(tuned, [9])
+        self.assertEqual(one.retuned[0], 9)
+        self.assertAlmostEqual(one.retuned[1], 29.0, delta=0.5)
+        self.assertTrue(one.complete())
+
+    def test_observe_ap_retunes_through_iw(self):
+        """observe_ap with a fake popen that plays tshark through a real pipe
+        and a follower that names wake 2's channel at once."""
+        import subprocess
+        import sys
+        dl = Deadline(20)
+        run = Recorder()
+        script = "import sys, time; sys.stdout.write(%r); sys.stdout.flush(); time.sleep(0.5); sys.stdout.write(%r); sys.stdout.flush()" % (
+            BEACONS[0] + "\n", beacon_line(1730000030.0) + "\n")
+
+        class Follower:
+            def poll(self):
+                pass
+
+            def boundary(self):
+                return 1730000010.0
+
+            def channel(self):
+                return 9
+
+        def popen(argv, **kwargs):
+            return subprocess.Popen([sys.executable, "-c", script], **kwargs)
+
+        one = Cycle(1730000000.0, 1.0, measure=True, wake=15, clock=lambda: 1730000030.0)
+        b = wifi.observe_ap("wlan1", "F2:F4:90:22:0D:0F", 1, dl, "tshark", run, popen, cycle=one,
+                            follower=Follower(), random_channel=True)
+        self.assertEqual(b.bssid, "F2:F4:90:22:0D:0F")
+        self.assertEqual(run.calls, [["iw", "dev", "wlan1", "set", "channel", "1"],
+                                     ["iw", "dev", "wlan1", "set", "channel", "9"]])
+        self.assertTrue(one.complete())
+
 
 class ChannelChoiceTest(unittest.TestCase):
     def test_ap_channel_from_header_or_serial(self):
@@ -155,6 +252,38 @@ class ProbeTest(unittest.TestCase):
         with self.assertRaises(RunError):
             wifi.collect_probes(reader, "F2:44:5E:10:97:F4", "x", dl, [1], lambda c: None, clock=clock)
 
+    def test_probes_feed_the_cycle_with_an_observed_granularity(self):
+        """A client fox probing in bursts 2.4 s apart through a 300/0 cycle:
+        every probe is a frame, the granularity is the burst spacing, and the
+        read goes on through the sleep to wake 2."""
+        def probe(when, rssi=-38):
+            cells = PROBES[3].split("\t")
+            cells[0] = "%.6f" % when
+            cells[-1] = str(rssi)
+            return "\t".join(cells)
+
+        dl, clock = deadline(60, start=0.0)
+        times = [1.0, 1.1, 3.5, 3.6, 6.0, 6.1, 8.5, 8.6, 11.0, 11.1, 13.5, 13.6]
+        items = [(times[0], probe(times[0]))] + [(b - a, probe(b)) for a, b in zip(times, times[1:])]
+        items += [(5.0, probe(18.6, -40)), (0.1, probe(18.7, -40))]
+        reader = FakeReader(wifi.CLIENT_FIELDS, items, clock)
+        source = serial_fox.TranscriptSource([(16.2, "Going to sleep\n")], clock)
+        follower = serial_fox.Follower(source, clock)
+        one = Cycle(0.0, None, measure=True, wake=15, clock=clock)
+        tuned = []
+        probes = wifi.collect_probes(reader, "F2:44:5E:10:97:F4", "Demo Ng WiFi Client Easy Fox", dl, [6],
+                                     tuned.append, clock=clock, cycle=one, follower=follower)
+        self.assertEqual(tuned, [6])
+        # The read stops at wake 2's first frame; the second never arrives.
+        self.assertEqual(probes.count, 13)
+        self.assertTrue(probes.carried("Demo Ng WiFi Client Easy Fox"))
+        self.assertTrue(one.complete())
+        self.assertEqual(len(one.wake1()), 12)
+        self.assertAlmostEqual(one.granularity(), 2.4)
+        self.assertAlmostEqual(one.span(), 12.6)
+        self.assertAlmostEqual(one.gap(), 5.0)
+        self.assertEqual(one.rssi_text(), "median -38 dBm over 13 frames")
+
 
 class RowsTest(unittest.TestCase):
     def setUp(self):
@@ -191,7 +320,7 @@ class RowsTest(unittest.TestCase):
                                     "Operating SSID: Demo YT WiFi AP Hard Fox\nHidden SSID: 1\n")
         wifi.ap_rows(self.report, block, readback, beacon(1))
         rows = {row.value: row for row in self.report.rows}
-        self.assertEqual(rows["FSSID"].verdict, "serial")
+        self.assertEqual(rows["FSSID"].verdict, "serial only")
         self.assertEqual(rows["SSID_HIDDEN"].verdict, "pass")
         self.assertEqual(rows["SSID_HIDDEN"].air, "1")
 

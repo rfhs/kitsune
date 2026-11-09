@@ -21,7 +21,17 @@ RTS asserted again, DTR first, because TinyUSB's ``write()`` drops output
 while DTR is low and raising RTS before DTR would pulse EN a second time.
 
 After the reset the device may re-enumerate; ``SerialSource.read`` raises
-``PortGone`` and ``read_fox`` reopens the same by-id path.
+``PortGone`` and ``read_fox`` reopens the same by-id path. The wall clock
+time of the reset is kept in ``Readback.reset_time`` for the first
+transmission figure.
+
+``Follower`` reads the port after the readback while the sniffer listens
+through the fox's first sleep. It watches for ``Going to sleep``, the exact
+end of wake 1, and takes the port vanishing, as a native USB board's does in
+deep sleep, as the same signal. Every line after that belongs to wake 2 and
+is parsed into its own ``Readback``, so a random-channel fox's wake 2
+``Operating channel`` line can retune the sniffer; the port is opened again
+after it vanished only when those lines are wanted.
 
 Not-a-fox outcomes after the reset, each a ``RunError`` (exit 2) with the text
 in the constants below: nothing at all within 10 s, or output without a banner
@@ -151,6 +161,10 @@ LINES: List[Tuple[str, "re.Pattern[str]"]] = [
     ("minor", re.compile(r"^Minor: 0x[0-9A-Fa-f]{4} \((\d+)\)$")),
     ("signal_power", re.compile(r"^Signal power: (-?\d+)$")),
 ]
+# The first regex of each field, for code that looks for one line.
+LINES_BY_FIELD: Dict[str, "re.Pattern[str]"] = {}
+for _field, _pattern in LINES:
+    LINES_BY_FIELD.setdefault(_field, _pattern)
 
 # Lines that mean the fox refused to run or is not healthy. The firmware
 # prints one of these, then "Fatal <code>: <reason>" and PANIC before it
@@ -177,6 +191,11 @@ class Readback:
         self.fields: Dict[str, str] = {}
         self.problems: List[str] = []
         self.unmatched: List[str] = []
+        # Wall clock times of the reset pulse, None when the fox was not
+        # reset, and of the banner's arrival, which the fox prints once its
+        # radio is up.
+        self.reset_time: Optional[float] = None
+        self.banner_time: Optional[float] = None
 
     def feed(self, line: str) -> Optional[str]:
         """Record one complete line; return the field it set, if any."""
@@ -324,17 +343,24 @@ class SerialSource:
             raise PortGone("%s: %s" % (self.path, error))
         return self._decoder.decode(data)
 
+    def try_open(self) -> bool:
+        """One attempt to open the device path again; False when it is not
+        back yet."""
+        import serial
+        if not os.path.exists(self.path):
+            return False
+        try:
+            self.open()
+        except (serial.SerialException, OSError):
+            return False
+        return True
+
     def reopen(self, deadline: Deadline) -> None:
         """Wait for the device path to come back and open it again."""
-        import serial
         self.close()
         while True:
-            if os.path.exists(self.path):
-                try:
-                    self.open()
-                    return
-                except (serial.SerialException, OSError):
-                    pass
+            if self.try_open():
+                return
             if deadline.expired():
                 raise RunError(PORT_GONE)
             self.sleep(min(REOPEN_POLL_SECONDS, deadline.remaining()))
@@ -345,9 +371,12 @@ class TranscriptSource:
     for a serial-only run against a saved transcript.
 
     ``items`` are lines, each optionally preceded by a delay in seconds as
-    ``(delay, line)``. ``read`` advances ``clock`` by the delay of the next
-    line when the clock is a ``FakeClock``; with the real clock it sleeps.
-    After the last line every read times out.
+    ``(delay, line)``. With a ``FakeClock`` a line is due its delay after the
+    previous line was due, ``read`` moves the clock to the due time of the
+    next line when that is within the timeout, and a line whose moment has
+    passed is delivered at once, so a poll with a zero timeout catches up
+    with lines the clock has moved past. With the real clock ``read`` sleeps
+    the delay. After the last line every read times out.
     """
 
     def __init__(self, items, clock=None, sleep: Callable[[float], None] = time.sleep,
@@ -363,6 +392,8 @@ class TranscriptSource:
         self.sleep = sleep
         self.resets = 0
         self.reopens = 0
+        # On a fake clock, the time the next line's delay counts from.
+        self._ref: Optional[float] = clock() if hasattr(clock, "advance") else None
 
     @classmethod
     def from_file(cls, path: str, **kwargs) -> "TranscriptSource":
@@ -381,10 +412,20 @@ class TranscriptSource:
     def reopen(self, deadline: Deadline) -> None:
         self.reopens += 1
 
+    def try_open(self) -> bool:
+        self.reopens += 1
+        return True
+
     def close(self) -> None:
         pass
 
+    @staticmethod
+    def _line(text: str) -> str:
+        return text if text.endswith("\n") else text + "\n"
+
     def read(self, timeout: float) -> Optional[str]:
+        if self._ref is not None:
+            return self._read_on_clock(timeout)
         if not self.items:
             self._advance(timeout)
             return None
@@ -395,9 +436,23 @@ class TranscriptSource:
             return None
         self.items.pop(0)
         self._advance(delay)
-        if not line.endswith("\n"):
-            line += "\n"
-        return line
+        return self._line(line)
+
+    def _read_on_clock(self, timeout: float) -> Optional[str]:
+        now = self.clock()
+        if not self.items:
+            self.clock.advance(timeout)
+            return None
+        delay, line = self.items[0]
+        due = self._ref + delay
+        if due > now + timeout:
+            self.clock.advance(timeout)
+            return None
+        self.items.pop(0)
+        if due > now:
+            self.clock.advance(due - now)
+        self._ref = due
+        return self._line(line)
 
 
 class FakeClock:
@@ -415,14 +470,16 @@ class FakeClock:
 
 def read_fox(source, deadline: Deadline, reset: bool = True,
              say: Callable[[str], None] = lambda text: None,
-             debug: Callable[[str], None] = lambda text: None) -> Readback:
+             debug: Callable[[str], None] = lambda text: None,
+             wall: Callable[[], float] = time.time) -> Readback:
     """Reset the fox, wait for its banner, read its readback lines.
 
     Returns the ``Readback`` once a problem line, the awake line plus
     ``DRAIN_SECONDS``, a quiet spell after the banner or the deadline ends it.
     A fox whose radio start failed prints its "Error ..." line before the
     banner; the read goes on to the banner and stops there. Raises
-    ``RunError`` with the not-a-fox texts when no banner arrives.
+    ``RunError`` with the not-a-fox texts when no banner arrives. ``wall`` is
+    the clock the sniffers stamp frames with; the reset is stamped on it.
     """
     readback = Readback()
     buffer = ""
@@ -430,6 +487,7 @@ def read_fox(source, deadline: Deadline, reset: bool = True,
     if reset:
         debug("resetting the fox on %s" % source.path)
         source.reset()
+        readback.reset_time = wall()
     started = clock()
     first_output: Optional[float] = None
     last_line: Optional[float] = None
@@ -488,10 +546,85 @@ def read_fox(source, deadline: Deadline, reset: bool = True,
             last_line = now
             debug("serial: " + line.rstrip("\r"))
             if readback.feed(line) == "banner":
+                readback.banner_time = wall()
                 say(readback.banner.text())
     if buffer.strip():
         readback.feed(buffer)
     return readback
+
+
+class Follower:
+    """Reads the fox's port after the readback, without blocking, while the
+    sniffer listens through the first sleep.
+
+    ``poll`` takes whatever arrived. Until the fox has gone to sleep only the
+    ``Going to sleep`` line matters and is stamped on ``clock``; the port
+    vanishing is stamped the same way. From then on every line is wake 2's
+    and goes into ``wake2``. With ``reopen`` the port is tried again on every
+    poll after it vanished, which a random-channel fox needs for its wake 2
+    channel; without it a vanished port is left alone.
+    """
+
+    def __init__(self, source, clock: Callable[[], float] = time.time, reopen: bool = False,
+                 debug: Callable[[str], None] = lambda text: None):
+        self.source = source
+        self.clock = clock
+        self.reopen = reopen
+        self.debug = debug
+        self.wake2 = Readback()
+        self.sleep_time: Optional[float] = None
+        self.gone_time: Optional[float] = None
+        self.gone = False
+        self.reopened = False
+        self._buffer = ""
+        self._asleep = False
+
+    def poll(self) -> None:
+        if self.gone:
+            if not self.reopen or not self.source.try_open():
+                return
+            self.gone = False
+            self.reopened = True
+            self._asleep = True
+            self._buffer = ""
+            self.debug("serial device is back, reading wake 2")
+        try:
+            chunk = self.source.read(0.0)
+        except PortGone:
+            self.gone = True
+            if self.gone_time is None:
+                self.gone_time = self.clock()
+                self._asleep = True
+                self.debug("serial device gone, taking it as the end of wake 1")
+            return
+        if chunk is None:
+            return
+        self._buffer += chunk
+        while "\n" in self._buffer:
+            line, self._buffer = self._buffer.split("\n", 1)
+            line = line.rstrip("\r")
+            if line.strip():
+                self._line(line)
+
+    def _line(self, line: str) -> None:
+        self.debug("serial: " + line)
+        if self._asleep:
+            self.wake2.feed(line)
+            return
+        if LINES_BY_FIELD["sleeping"].match(line):
+            self.sleep_time = self.clock()
+            self._asleep = True
+
+    def boundary(self) -> Optional[float]:
+        """When wake 1 ended, by the sleep line or the port vanishing."""
+        return self.sleep_time if self.sleep_time is not None else self.gone_time
+
+    def channel(self) -> Optional[int]:
+        """Wake 2's operating channel once the fox printed it."""
+        return self.wake2.integer("channel")
+
+    def pan_id(self) -> Optional[int]:
+        return self.wake2.integer("pan_id")
 
 
 def block_for(readback: Readback, project: str, header_text: str) -> Block:

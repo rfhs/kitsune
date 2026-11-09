@@ -508,7 +508,164 @@ class ReadFoxTest(unittest.TestCase):
         self.assertTrue(readback.complete())
 
 
+    def test_reset_is_stamped_on_the_wall_clock(self):
+        wall = serial_fox.FakeClock(1730000000.0)
+        clock = serial_fox.FakeClock()
+        source = serial_fox.TranscriptSource(timed(transcript("classic_hard")), clock)
+        readback = serial_fox.read_fox(source, Deadline(60, clock), wall=wall)
+        self.assertEqual(readback.reset_time, 1730000000.0)
+        self.assertEqual(readback.banner_time, 1730000000.0)
+        source = serial_fox.TranscriptSource(timed(transcript("classic_hard")), clock)
+        readback = serial_fox.read_fox(source, Deadline(60, clock), reset=False, wall=wall)
+        self.assertIsNone(readback.reset_time)
+        self.assertEqual(readback.banner_time, 1730000000.0)
+        # On one clock the banner comes after the reset by the lines before it.
+        source = serial_fox.TranscriptSource(timed(transcript("classic_hard")), clock)
+        readback = serial_fox.read_fox(source, Deadline(60, clock), wall=clock)
+        banner = next(i for i, line in enumerate(transcript("classic_hard").splitlines()) if line.startswith("Fox:"))
+        self.assertAlmostEqual(readback.banner_time - readback.reset_time, 1.0 + 0.05 * banner, places=3)
+
+
+class Vanishing(serial_fox.TranscriptSource):
+    """A transcript source whose port goes away at a given clock time and is
+    back ``away`` seconds later, as a native USB board's does in deep sleep."""
+
+    def __init__(self, items, clock, gone_at, away):
+        serial_fox.TranscriptSource.__init__(self, items, clock)
+        self.gone_at = gone_at
+        self.back_at = gone_at + away
+        self.gone = False
+        self.vanished = False
+
+    def read(self, timeout):
+        if not self.vanished and self.clock() >= self.gone_at:
+            self.gone = self.vanished = True
+            raise serial_fox.PortGone("gone")
+        if self.gone:
+            raise serial_fox.PortGone("still gone")
+        return serial_fox.TranscriptSource.read(self, timeout)
+
+    def try_open(self):
+        if self.clock() < self.back_at:
+            return False
+        self.gone = False
+        self.reopens += 1
+        return True
+
+
+class FollowerTest(unittest.TestCase):
+    """The serial port read through the first sleep: the sleep line, the port
+    vanishing, the reopen for wake 2's channel."""
+
+    WAKE2 = ["Initializing...\n", "ESP32 boot count: 1\n", "Setting up WiFi AP...\n",
+             "Fox: wifi_ap_client HARD AP\n", "Device address: F2:72:C1:79:16:1B\n",
+             "Operating channel: 9\n", "Operating SSID: Demo YT WiFi AP Hard Fox\n"]
+
+    def test_going_to_sleep_is_the_boundary_and_later_lines_are_wake_2(self):
+        clock = serial_fox.FakeClock(0.0)
+        source = serial_fox.TranscriptSource([(30.0, "Going to sleep\n"), (40.0, "Initializing...\n"),
+                                              (1.0, "Operating channel: 9\n")], clock)
+        follower = serial_fox.Follower(source, clock)
+        follower.poll()
+        self.assertIsNone(follower.boundary())
+        clock.advance(29.9)
+        follower.poll()
+        self.assertIsNone(follower.boundary())
+        clock.advance(0.2)
+        follower.poll()
+        self.assertAlmostEqual(follower.boundary(), 30.1)
+        self.assertIsNone(follower.channel())
+        clock.advance(41.0)
+        follower.poll()
+        follower.poll()
+        self.assertEqual(follower.channel(), 9)
+        self.assertEqual(follower.wake2.get("initializing"), "Initializing...")
+        self.assertFalse(follower.gone)
+
+    def test_lines_before_the_sleep_are_not_wake_2(self):
+        clock = serial_fox.FakeClock(0.0)
+        source = serial_fox.TranscriptSource([(1.0, "Operating channel: 7\n"), (2.0, "Going to sleep\n")], clock)
+        follower = serial_fox.Follower(source, clock)
+        clock.advance(5.0)
+        follower.poll()
+        follower.poll()
+        self.assertIsNone(follower.channel())
+        self.assertEqual(follower.boundary(), 5.0)
+
+    def test_vanished_port_is_the_boundary_and_stays_closed_without_reopen(self):
+        clock = serial_fox.FakeClock(0.0)
+        source = Vanishing([(100.0, "never\n")], clock, gone_at=20.0, away=5.0)
+        follower = serial_fox.Follower(source, clock)
+        clock.advance(19.0)
+        follower.poll()
+        self.assertIsNone(follower.boundary())
+        clock.advance(1.5)
+        follower.poll()
+        self.assertEqual(follower.boundary(), 20.5)
+        self.assertTrue(follower.gone)
+        clock.advance(30.0)
+        follower.poll()
+        self.assertTrue(follower.gone)
+        self.assertEqual(source.reopens, 0)
+
+    def test_reopen_reads_wake_2_channel(self):
+        clock = serial_fox.FakeClock(0.0)
+        items = [(26.0, line) if i == 0 else (0.1, line) for i, line in enumerate(self.WAKE2)]
+        source = Vanishing(items, clock, gone_at=20.0, away=5.0)
+        follower = serial_fox.Follower(source, clock, reopen=True)
+        clock.advance(20.5)
+        follower.poll()
+        self.assertEqual(follower.boundary(), 20.5)
+        clock.advance(2.0)
+        follower.poll()
+        self.assertTrue(follower.gone)
+        self.assertEqual(source.reopens, 0)
+        clock.advance(3.0)
+        follower.poll()
+        self.assertFalse(follower.gone)
+        self.assertTrue(follower.reopened)
+        self.assertEqual(source.reopens, 1)
+        for _ in range(12):
+            clock.advance(0.1)
+            follower.poll()
+        self.assertEqual(follower.channel(), 9)
+        self.assertEqual(follower.wake2.banner.difficulty, "HARD")
+        self.assertEqual(follower.pan_id(), None)
+
+    def test_port_that_never_comes_back(self):
+        clock = serial_fox.FakeClock(0.0)
+        source = Vanishing([(100.0, "never\n")], clock, gone_at=20.0, away=1000.0)
+        follower = serial_fox.Follower(source, clock, reopen=True)
+        clock.advance(21.0)
+        for _ in range(10):
+            follower.poll()
+            clock.advance(5.0)
+        self.assertTrue(follower.gone)
+        self.assertIsNone(follower.channel())
+        self.assertEqual(follower.boundary(), 21.0)
+
+    def test_zigbee_wake_2_pan_id(self):
+        clock = serial_fox.FakeClock(0.0)
+        source = serial_fox.TranscriptSource([(1.0, "Going to sleep\n"), (2.0, "Operating channel: 22\n"),
+                                              (0.1, "Operating PAN ID: 0xBEEF\n")], clock)
+        follower = serial_fox.Follower(source, clock)
+        clock.advance(5.0)
+        for _ in range(4):
+            follower.poll()
+        self.assertEqual((follower.channel(), follower.pan_id()), (22, 0xBEEF))
+
+
 class TranscriptSourceTest(unittest.TestCase):
+    def test_elapsed_clock_time_counts_against_the_next_delay(self):
+        clock = serial_fox.FakeClock(0.0)
+        source = serial_fox.TranscriptSource([(3.0, "late\n")], clock)
+        self.assertIsNone(source.read(0.0))
+        clock.advance(2.0)
+        self.assertIsNone(source.read(0.0))
+        clock.advance(1.0)
+        self.assertEqual(source.read(0.0), "late\n")
+        self.assertEqual(clock.now, 3.0)
+
     def test_from_file_and_delays(self):
         clock = serial_fox.FakeClock()
         source = serial_fox.TranscriptSource.from_file(fixture("transcripts", "classic_easy.log"), clock=clock)

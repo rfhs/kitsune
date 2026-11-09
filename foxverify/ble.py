@@ -25,6 +25,11 @@ signal power as a signed byte, so 0xC5 is -59 dBm. Bluedroid sends a
 ``DEVICE_NAME`` of up to 29 characters complete; the header guard keeps the
 names in that range, and ``expected_name`` says what a longer one would look
 like on the air.
+
+Every advertisement or scan response from a candidate address is also logged
+as ``cycle.Heard`` with its RSSI, and ``BleScan.take_heard`` hands the run
+what arrived for the fox; with ``keep_scanning`` the scan goes on after the
+fox is complete so the run can hear it through its first sleep into wake 2.
 """
 from __future__ import annotations
 
@@ -32,9 +37,10 @@ import asyncio
 import struct
 import threading
 import time
-from typing import Callable, Dict, Iterable, NamedTuple, Optional, Union
+from typing import Callable, Dict, Iterable, List, NamedTuple, Optional, Union
 
 from .conf import Block
+from .cycle import Heard, HeardLog
 from .report import Deadline, Report, RunError
 from .serial_fox import Readback
 
@@ -166,11 +172,16 @@ def target_complete(seen: Dict[str, Seen], target: Optional[str]) -> bool:
 async def scan_async(adapter: str, addresses: Union[str, Iterable[str]], deadline: Deadline,
                      remove_cached: bool = True, debug: Callable[[str], None] = lambda text: None,
                      stop: Optional[threading.Event] = None,
-                     target: Callable[[], Optional[str]] = lambda: None) -> Dict[str, Seen]:
+                     target: Callable[[], Optional[str]] = lambda: None,
+                     seen: Optional[Dict[str, Seen]] = None, heard: Optional[HeardLog] = None,
+                     keep: Callable[[], bool] = lambda: False,
+                     clock: Callable[[], float] = time.time) -> Dict[str, Seen]:
     """Active scan on ``adapter`` collecting what is seen of each address in
     ``addresses`` until the address ``target()`` names was seen with both
-    its payload and its name, ``stop`` is set, or the deadline passes.
-    Returns what was seen, keyed by upper case address."""
+    its payload and its name and ``keep()`` is false, ``stop`` is set, or the
+    deadline passes. Returns what was seen, keyed by upper case address, in
+    ``seen`` when the caller gave the dict; every packet from a candidate
+    goes into ``heard`` as well."""
     bleak = import_bleak()
     want = address_set(addresses)
     if remove_cached:
@@ -178,24 +189,31 @@ async def scan_async(adapter: str, addresses: Union[str, Iterable[str]], deadlin
             await remove_cached_device(adapter, address, debug)
     loop = asyncio.get_running_loop()
     done = asyncio.Event()
-    seen: Dict[str, Seen] = {}
+    if seen is None:
+        seen = {}
+
+    def finished() -> bool:
+        return target_complete(seen, target()) and not keep()
 
     def callback(device, advertisement) -> None:
         address = device.address.upper()
         if address not in want:
             return
+        now = clock()
         payload = advertisement.manufacturer_data.get(APPLE_COMPANY_ID)
         seen[address] = merge(seen.get(address), address, advertisement.local_name, payload,
-                              advertisement.rssi, time.time())
+                              advertisement.rssi, now)
+        if heard is not None:
+            heard.add(address, now, advertisement.rssi)
         debug("seen %s name %r beacon %s rssi %s" % (address, seen[address].name, seen[address].beacon,
                                                      seen[address].rssi))
-        if target_complete(seen, target()):
+        if finished():
             loop.call_soon_threadsafe(done.set)
 
     scanner = bleak.BleakScanner(detection_callback=callback, adapter=adapter, scanning_mode="active")
     await scanner.start()
     try:
-        while not done.is_set() and not target_complete(seen, target()):
+        while not done.is_set() and not finished():
             remaining = deadline.remaining()
             if remaining <= 0 or (stop is not None and stop.is_set()):
                 break
@@ -203,6 +221,8 @@ async def scan_async(adapter: str, addresses: Union[str, Iterable[str]], deadlin
                 await asyncio.wait_for(done.wait(), min(remaining, 0.25))
             except asyncio.TimeoutError:
                 pass
+            if done.is_set() and not finished():
+                done.clear()
     finally:
         await scanner.stop()
     return seen
@@ -212,27 +232,40 @@ class BleScan(threading.Thread):
     """The active scan on its own thread, started before the fox is reset.
 
     ``set_target`` names the fox's address once the banner has chosen the
-    header block. ``result(deadline)`` waits for the scan to end, which
-    happens when the target was seen with payload and name, when the
-    deadline passes, or when ``stop`` is called, and returns what was seen
-    of every address. An error in the scan is raised from ``result``.
+    header block. ``seen`` fills while the scan runs; ``complete(address)``
+    says whether an address was seen with payload and name, and
+    ``take_heard(address)`` hands over the frames from it since the last
+    call. The scan ends when the target is complete unless ``keep_scanning``
+    is set, when the deadline passes, or when ``stop`` is called;
+    ``result(deadline)`` waits for that and returns what was seen of every
+    address. An error in the scan is raised from ``result``.
     """
 
     def __init__(self, adapter: str, addresses: Union[str, Iterable[str]], deadline: Deadline,
-                 remove_cached: bool = True, debug: Callable[[str], None] = lambda text: None):
+                 remove_cached: bool = True, debug: Callable[[str], None] = lambda text: None,
+                 clock: Callable[[], float] = time.time):
         threading.Thread.__init__(self, daemon=True)
         self.adapter = adapter
         self.addresses = address_set(addresses)
         self.deadline = deadline
         self.remove_cached = remove_cached
         self.debug = debug
+        self.clock = clock
         self.target: Optional[str] = None
+        self.keep_scanning = False
         self.seen: Dict[str, Seen] = {}
+        self.heard = HeardLog()
         self.error: Optional[BaseException] = None
         self._stopping = threading.Event()
 
     def set_target(self, address: str) -> None:
         self.target = address.upper()
+
+    def complete(self, address: str) -> bool:
+        return target_complete(self.seen, address.upper())
+
+    def take_heard(self, address: str) -> List[Heard]:
+        return self.heard.take(address)
 
     def start(self) -> None:
         import_bleak()
@@ -240,9 +273,9 @@ class BleScan(threading.Thread):
 
     def run(self) -> None:
         try:
-            self.seen = asyncio.run(scan_async(self.adapter, self.addresses, self.deadline,
-                                               self.remove_cached, self.debug, self._stopping,
-                                               lambda: self.target))
+            asyncio.run(scan_async(self.adapter, self.addresses, self.deadline, self.remove_cached,
+                                   self.debug, self._stopping, lambda: self.target, self.seen,
+                                   self.heard, lambda: self.keep_scanning, self.clock))
         except BaseException as error:
             self.error = error
 

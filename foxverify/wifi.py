@@ -20,6 +20,11 @@ sends one on every 2.4 GHz channel each time it scans for the network, which
 takes about a second, so the card dwells on each channel at least that long:
 the header's ``CHANNEL`` when it has one, otherwise channels 1-11 in turn.
 
+Both captures feed every frame from the fox, with its ``radiotap.dbm_antsignal``
+RSSI, into the run's ``cycle.Cycle`` and go on through the fox's first sleep
+when the cycle is being measured, retuning a random-channel AP fox's card to
+the channel its wake 2 prints on serial.
+
 tshark prints ``wlan.ssid`` as text on most builds and as hex bytes on some, so
 an SSID cell is compared both ways. MACs are compared upper case.
 """
@@ -34,6 +39,7 @@ from typing import Callable, Iterator, List, NamedTuple, Optional, Sequence
 
 from . import tshark
 from .conf import Block
+from .cycle import Cycle, Heard, listen
 from .report import Deadline, FAIL, PASS, Report, RunError, UNVERIFIED
 from .serial_fox import Readback
 
@@ -55,9 +61,9 @@ HOP_POLL = 0.25
 
 AP_FIELDS = ("frame.time_epoch", "wlan.fc.type_subtype", "wlan.bssid", "wlan.sa", "wlan.ssid",
              "wlan.ds.current_channel", "wlan.ht.info.primarychannel", "radiotap.channel.freq",
-             "wlan.rsn.akms.type", "wlan.rsn.pcs.type")
+             "wlan.rsn.akms.type", "wlan.rsn.pcs.type", "radiotap.dbm_antsignal")
 CLIENT_FIELDS = ("frame.time_epoch", "wlan.fc.type_subtype", "wlan.sa", "wlan.ssid",
-                 "radiotap.channel.freq")
+                 "radiotap.channel.freq", "radiotap.dbm_antsignal")
 
 
 def default_run(argv: Sequence[str]) -> subprocess.CompletedProcess:
@@ -235,6 +241,11 @@ class Beacon(NamedTuple):
     frequency: Optional[int]
     akms: List[int]
     ciphers: List[int]
+    rssi: Optional[int]
+
+    def heard(self) -> Optional[Heard]:
+        """The frame as the cycle records it, None without a timestamp."""
+        return None if self.time is None else Heard(self.time, self.rssi)
 
     def claimed_channel(self) -> Optional[int]:
         """The channel the AP says it is on: the DS Parameter Set, or the HT
@@ -287,7 +298,14 @@ def parse_beacon(record: tshark.Record) -> Beacon:
         tshark.dec_int(record.get("radiotap.channel.freq")),
         _ints(record, "wlan.rsn.akms.type"),
         _ints(record, "wlan.rsn.pcs.type"),
+        rssi(record),
     )
+
+
+def rssi(record: tshark.Record) -> Optional[int]:
+    """The frame's ``radiotap.dbm_antsignal``: the first antenna's value when
+    the card reports several."""
+    return tshark.dec_int(record.first("radiotap.dbm_antsignal"))
 
 
 def is_beacon_from(record: tshark.Record, bssid: str) -> bool:
@@ -320,22 +338,52 @@ def probe_channels(block: Block) -> List[int]:
 
 
 def wait_for_beacon(reader: tshark.FieldReader, bssid: str, deadline: Deadline,
-                    debug: Callable[[str], None] = lambda text: None) -> Optional[Beacon]:
-    record = tshark.read_until(reader, deadline, lambda r: is_beacon_from(r, bssid), debug)
-    return None if record is None else parse_beacon(record)
+                    debug: Callable[[str], None] = lambda text: None, cycle: Optional[Cycle] = None,
+                    follower=None, retune: Optional[Callable[[int], None]] = None) -> Optional[Beacon]:
+    """The first beacon from ``bssid`` before the deadline, or None. Every
+    beacon from it is fed to ``cycle``, and with a cycle being measured the
+    read goes on through the fox's sleep until wake 2 is heard; ``retune``
+    moves the card when ``follower`` reads wake 2's channel."""
+    first: List[Beacon] = []
+
+    def read(timeout: float) -> List[Heard]:
+        record = reader.read(timeout)
+        if record is None:
+            if reader.eof:
+                raise RunError(reader.error())
+            return []
+        debug("tshark: " + "\t".join(record.as_dict().values()))
+        if not is_beacon_from(record, bssid):
+            return []
+        beacon = parse_beacon(record)
+        if not first:
+            first.append(beacon)
+        heard = beacon.heard()
+        return [heard] if heard is not None else []
+
+    listen(cycle, deadline, read, lambda: bool(first), follower, retune, debug)
+    return first[0] if first else None
 
 
 def observe_ap(interface: str, bssid: str, channel: int, deadline: Deadline, tshark_path: str,
                run: Callable = default_run, popen: Callable = subprocess.Popen,
-               debug: Callable[[str], None] = lambda text: None) -> Optional[Beacon]:
+               debug: Callable[[str], None] = lambda text: None, cycle: Optional[Cycle] = None,
+               follower=None, random_channel: bool = False) -> Optional[Beacon]:
     """Tune the monitor interface to ``channel`` and return the first beacon
-    from ``bssid`` before the deadline, or None. The interface is already in
-    monitor mode (``monitor_mode``)."""
+    from ``bssid`` before the deadline, or None, feeding ``cycle`` as
+    ``wait_for_beacon`` says. With ``random_channel`` the card follows wake
+    2's channel from the serial port. The interface is already in monitor
+    mode (``monitor_mode``)."""
     set_channel(interface, channel, run)
     argv = tshark.live_command(tshark_path, interface, AP_FIELDS, beacon_filter(bssid))
     debug("running: " + " ".join(argv))
+
+    def retune(new_channel: int) -> None:
+        set_channel(interface, new_channel, run)
+
     with tshark.FieldReader(argv, AP_FIELDS, popen) as reader:
-        return wait_for_beacon(reader, bssid, deadline, debug)
+        return wait_for_beacon(reader, bssid, deadline, debug, cycle, follower,
+                               retune if random_channel else None)
 
 
 class Probes(NamedTuple):
@@ -367,43 +415,40 @@ class Probes(NamedTuple):
 def collect_probes(reader: tshark.FieldReader, mac: str, ssid: str, deadline: Deadline,
                    channels: Sequence[int], tune: Callable[[int], None],
                    dwell: float = PROBE_DWELL, clock: Callable[[], float] = time.monotonic,
-                   debug: Callable[[str], None] = lambda text: None) -> Probes:
+                   debug: Callable[[str], None] = lambda text: None, cycle: Optional[Cycle] = None,
+                   follower=None) -> Probes:
     """Read probe requests from ``mac`` until one carries ``ssid`` or the
     deadline passes, moving the card through ``channels`` every ``dwell``
-    seconds. A single channel is never changed."""
+    seconds. A single channel is never changed. Every probe from the fox is
+    fed to ``cycle``; with a cycle being measured the read goes on through
+    the sleep, still hopping, since the station probes on every channel."""
     want = norm_mac(mac)
-    seen_mac: Optional[str] = None
+    state = {"mac": None, "count": 0, "first_time": None, "carried": False, "index": 0,
+             "next_hop": clock() + dwell}
     ssids: List[Optional[str]] = []
     seen_channels: List[int] = []
-    count = 0
-    first_time: Optional[float] = None
-    index = 0
     tune(channels[0])
-    next_hop = clock() + dwell
-    while True:
-        remaining = deadline.remaining()
-        if remaining <= 0:
-            break
-        timeout = remaining
+
+    def read(timeout: float) -> List[Heard]:
         if len(channels) > 1:
-            timeout = min(remaining, max(0.0, next_hop - clock()), HOP_POLL)
+            timeout = min(timeout, max(0.0, state["next_hop"] - clock()), HOP_POLL)
         record = reader.read(timeout)
         now = clock()
-        if len(channels) > 1 and now >= next_hop:
-            index = (index + 1) % len(channels)
-            tune(channels[index])
-            next_hop = now + dwell
+        if len(channels) > 1 and now >= state["next_hop"]:
+            state["index"] = (state["index"] + 1) % len(channels)
+            tune(channels[state["index"]])
+            state["next_hop"] = now + dwell
         if record is None:
             if reader.eof:
                 raise RunError(reader.error())
-            continue
+            return []
         if tshark.hex_int(record.first("wlan.fc.type_subtype")) != PROBE_REQUEST:
-            continue
+            return []
         source = norm_mac(record.get("wlan.sa"))
         if source != want:
-            continue
-        seen_mac = source
-        count += 1
+            return []
+        state["mac"] = source
+        state["count"] += 1
         cell = record.get("wlan.ssid")
         debug("probe request from %s for %r" % (want, cell))
         ssids.append(cell)
@@ -411,20 +456,27 @@ def collect_probes(reader: tshark.FieldReader, mac: str, ssid: str, deadline: De
         if channel is not None and channel not in seen_channels:
             seen_channels.append(channel)
         time_text = record.first("frame.time_epoch")
-        if first_time is None and time_text:
-            first_time = float(time_text)
+        if not time_text:
+            return []
+        when = float(time_text)
+        if state["first_time"] is None:
+            state["first_time"] = when
         if ssid_matches(cell, ssid):
-            break
-    return Probes(seen_mac, count, ssids, seen_channels, first_time)
+            state["carried"] = True
+        return [Heard(when, rssi(record))]
+
+    listen(cycle, deadline, read, lambda: state["carried"], follower, debug=debug)
+    return Probes(state["mac"], state["count"], ssids, seen_channels, state["first_time"])
 
 
 def observe_client(interface: str, mac: str, ssid: str, channels: Sequence[int], deadline: Deadline,
                    tshark_path: str, run: Callable = default_run, popen: Callable = subprocess.Popen,
                    dwell: float = PROBE_DWELL,
-                   debug: Callable[[str], None] = lambda text: None) -> Probes:
+                   debug: Callable[[str], None] = lambda text: None, cycle: Optional[Cycle] = None,
+                   follower=None) -> Probes:
     """Listen for the client fox's probe requests on ``channels`` until one
-    carries ``ssid`` or the deadline passes. The interface is already in
-    monitor mode."""
+    carries ``ssid`` or the deadline passes, feeding ``cycle`` as
+    ``collect_probes`` says. The interface is already in monitor mode."""
     argv = tshark.live_command(tshark_path, interface, CLIENT_FIELDS, probe_filter(mac))
     debug("running: " + " ".join(argv))
 
@@ -433,7 +485,8 @@ def observe_client(interface: str, mac: str, ssid: str, channels: Sequence[int],
         set_channel(interface, channel, run)
 
     with tshark.FieldReader(argv, CLIENT_FIELDS, popen) as reader:
-        return collect_probes(reader, mac, ssid, deadline, list(channels), tune, dwell, debug=debug)
+        return collect_probes(reader, mac, ssid, deadline, list(channels), tune, dwell, debug=debug,
+                              cycle=cycle, follower=follower)
 
 
 def _channel_header(block: Block) -> Optional[object]:

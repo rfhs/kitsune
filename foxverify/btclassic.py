@@ -14,9 +14,13 @@ not yet know which block of the header the fox was built from, so it keeps
 every device that answers and the caller names the address to look for with
 ``set_target`` once the banner has arrived. An inquiry stops as soon as the
 target answered with a name, and another one starts while the remaining time
-allows, because the fox may still have been booting during the first. btmgmt
-needs root or CAP_NET_ADMIN, checked by the caller through ``privileges``
-before the fox is reset.
+allows, because the fox may still have been booting during the first. With
+``keep_going`` the inquiries run back to back, each to its end, until the
+caller stops them or the deadline passes: the fox only answers while the host
+inquires, so that is how it is heard through its sleep into wake 2. Every
+``dev_found`` for a candidate address is logged as ``cycle.Heard`` with its
+RSSI. btmgmt needs root or CAP_NET_ADMIN, checked by the caller through
+``privileges`` before the fox is reset.
 
 When the fox answered without a name in its EIR, ``remote_name`` asks
 ``bluetoothctl info`` for the name bluetoothd resolved, and when it has none
@@ -33,6 +37,7 @@ import time
 from typing import Callable, Dict, List, NamedTuple, Optional, Sequence
 
 from .conf import Block
+from .cycle import Heard, HeardLog
 from .report import Deadline, Report, RunError
 from .serial_fox import Readback
 from .tshark import LineReader
@@ -126,17 +131,23 @@ def run_inquiry(argv: Sequence[str], deadline: Deadline, target: Callable[[], Op
                 popen: Callable = subprocess.Popen,
                 debug: Callable[[str], None] = lambda text: None,
                 stop: Optional[threading.Event] = None,
-                parser: Optional[BtmgmtParser] = None) -> BtmgmtParser:
+                parser: Optional[BtmgmtParser] = None,
+                heard: Optional[HeardLog] = None, keep: Callable[[], bool] = lambda: False,
+                clock: Callable[[], float] = time.time) -> BtmgmtParser:
     """One ``btmgmt find -b``: read until the address ``target()`` names
-    answered with a name, the inquiry ended, ``stop`` was set or the deadline
-    passed. Every device that answered is in the returned parser."""
+    answered with a name (unless ``keep()`` says the inquiry runs to its end),
+    the inquiry ended, ``stop`` was set or the deadline passed. Every device
+    that answered is in the returned parser; every ``dev_found`` line goes
+    into ``heard`` stamped on ``clock``."""
     if parser is None:
         parser = BtmgmtParser()
     reader = LineReader(argv, popen).start()
     try:
         while True:
             remaining = deadline.remaining()
-            if remaining <= 0 or (stop is not None and stop.is_set()) or named(parser, target()):
+            if remaining <= 0 or (stop is not None and stop.is_set()):
+                break
+            if named(parser, target()) and not keep():
                 break
             line = reader.read(min(remaining, POLL_SECONDS))
             if line is None:
@@ -147,7 +158,10 @@ def run_inquiry(argv: Sequence[str], deadline: Deadline, target: Callable[[], Op
                     break
                 continue
             debug("btmgmt: " + line)
-            parser.feed(line)
+            response = DEV_FOUND.search(line) is not None
+            found = parser.feed(line)
+            if response and found is not None and heard is not None:
+                heard.add(found.address, clock(), found.rssi)
     finally:
         reader.stop()
     return parser
@@ -157,19 +171,28 @@ def inquiry(adapter: str, deadline: Deadline, btmgmt: str,
             target: Callable[[], Optional[str]] = lambda: None,
             popen: Callable = subprocess.Popen,
             debug: Callable[[str], None] = lambda text: None,
-            stop: Optional[threading.Event] = None) -> BtmgmtParser:
+            stop: Optional[threading.Event] = None,
+            parser: Optional[BtmgmtParser] = None, heard: Optional[HeardLog] = None,
+            keep: Callable[[], bool] = lambda: False,
+            clock: Callable[[], float] = time.time) -> BtmgmtParser:
     """Inquiries on ``adapter`` until the target answered with a name, ``stop``
-    was set, or the time left is too short for another full inquiry. The
+    was set, or the time left is too short for another full inquiry. While
+    ``keep()`` is true they run back to back to the deadline instead. The
     devices of every inquiry are in the returned parser; a later answer with
     a name replaces an earlier one without."""
     argv = btmgmt_command(btmgmt, adapter)
-    parser = BtmgmtParser()
+    if parser is None:
+        parser = BtmgmtParser()
     while True:
         debug("running: " + " ".join(argv))
-        run_inquiry(argv, deadline, target, popen, debug, stop, parser)
-        if named(parser, target()) or (stop is not None and stop.is_set()):
+        run_inquiry(argv, deadline, target, popen, debug, stop, parser, heard, keep, clock)
+        if stop is not None and stop.is_set():
             return parser
-        if deadline.remaining() < INQUIRY_SECONDS:
+        if keep():
+            if deadline.remaining() <= 0:
+                return parser
+            continue
+        if named(parser, target()) or deadline.remaining() < INQUIRY_SECONDS:
             return parser
 
 
@@ -178,31 +201,45 @@ class Inquiry(threading.Thread):
 
     ``set_target`` names the fox's address once the banner has chosen the
     header block; until then every answer is kept and none ends the inquiry.
-    ``result`` waits for the thread and returns the parser; an error from
-    btmgmt is raised there.
+    ``parser`` fills while the thread runs, ``named(address)`` says whether
+    an address answered with a name and ``take_heard(address)`` hands over
+    its responses since the last call. ``keep_going`` makes the inquiries run
+    back to back until ``stop`` or the deadline. ``result`` waits for the
+    thread and returns the parser; an error from btmgmt is raised there.
     """
 
     def __init__(self, adapter: str, deadline: Deadline, btmgmt: str,
                  popen: Callable = subprocess.Popen,
-                 debug: Callable[[str], None] = lambda text: None):
+                 debug: Callable[[str], None] = lambda text: None,
+                 clock: Callable[[], float] = time.time):
         threading.Thread.__init__(self, daemon=True)
         self.adapter = adapter
         self.deadline = deadline
         self.btmgmt = btmgmt
         self.popen = popen
         self.debug = debug
+        self.clock = clock
         self.target: Optional[str] = None
-        self.parser: Optional[BtmgmtParser] = None
+        self.keep_going = False
+        self.parser = BtmgmtParser()
+        self.heard = HeardLog()
         self.error: Optional[BaseException] = None
         self._stopping = threading.Event()
 
     def set_target(self, address: str) -> None:
         self.target = address.upper()
 
+    def named(self, address: str) -> bool:
+        return named(self.parser, address.upper())
+
+    def take_heard(self, address: str) -> List[Heard]:
+        return self.heard.take(address)
+
     def run(self) -> None:
         try:
-            self.parser = inquiry(self.adapter, self.deadline, self.btmgmt, lambda: self.target,
-                                  self.popen, self.debug, self._stopping)
+            inquiry(self.adapter, self.deadline, self.btmgmt, lambda: self.target, self.popen,
+                    self.debug, self._stopping, self.parser, self.heard, lambda: self.keep_going,
+                    self.clock)
         except BaseException as error:
             self.error = error
 
@@ -219,7 +256,7 @@ class Inquiry(threading.Thread):
             if isinstance(self.error, RunError):
                 raise self.error
             raise RunError("inquiry on %s failed: %s" % (self.adapter, self.error))
-        return self.parser if self.parser is not None else BtmgmtParser()
+        return self.parser
 
 
 def parse_info_name(text: str) -> Optional[str]:
