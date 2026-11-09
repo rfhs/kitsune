@@ -83,16 +83,18 @@ constexpr bool pan_id_random = rfhs_str_eq(RFHS_STR(PAN_ID), "0");
 ZigbeeGateway zbCoordinator = ZigbeeGateway(ZIGBEE_ENDPOINT);
 
 constexpr uint8_t mac_addr[] = MAC_ADDR;
-static_assert(sizeof(mac_addr) == 8, "MAC_ADDR must be exactly 8 bytes");
-static_assert((mac_addr[0] & 0x01) == 0, "MAC_ADDR: bit 0 of the first byte (I/G) must be 0, use an even first byte");
-static_assert(!rfhs_all_bytes(mac_addr, 8, 0x00), "MAC_ADDR must not be all zeros");
-// Most significant byte first like MAC_ADDR; rfhsstartzigbee reverses it
+RFHS_CHECK_ADDRESS(mac_addr, 8);
+// Most significant byte first like MAC_ADDR; rfhsstartradio() reverses it
 // for the stack.
 constexpr uint8_t ext_pan_id[] = EXT_PAN_ID;
 static_assert(sizeof(ext_pan_id) == 8, "EXT_PAN_ID must be exactly 8 bytes");
 static_assert(!rfhs_all_bytes(ext_pan_id, 8, 0x00), "EXT_PAN_ID must not be all zeros, the stack reads that as no network");
 static_assert(!rfhs_all_bytes(ext_pan_id, 8, 0xFF), "EXT_PAN_ID must not be all 0xFF, that is the wildcard");
 int set_channel;
+
+// The awake LED colour: cyan for Zigbee.
+#define RFHS_AWAKE_COLOR 0x00FFFF
+constexpr uint32_t rfhs_awake_color = RFHS_AWAKE_COLOR;
 
 bool rfhssetzigbeemac() {
   // This has to run before the stack starts: the stack reads the address
@@ -104,7 +106,12 @@ bool rfhssetzigbeemac() {
   }
 }
 
-bool rfhsstartzigbee() {
+// Sets the address, forms the network on the conference channel and applies
+// the power, PAN ID, extended PAN ID and packet interval to it.
+bool rfhsstartradio() {
+  if (!rfhsmacset(rfhssetzigbeemac())) {
+    return false;
+  }
 #if CHANNEL > 0
   set_channel = CHANNEL;
 #else
@@ -146,71 +153,45 @@ bool rfhsstartzigbee() {
 
 // Reads back what the stack is using, prints it and refuses to run when it
 // is not what the conference header asked for.
-bool rfhscheckzigbee() {
-  esp_zb_ieee_addr_t long_addr;
-  esp_zb_get_long_address(long_addr);
+bool rfhscheckradio() {
   // The stack stores the address least significant byte first, so it is
   // printed and compared from the last byte.
-  Serial.printf("Started Coordinator with MAC Address: %02X:%02X:%02X:%02X:%02X:%02X:%02X:%02X\r\n",
-      long_addr[7], long_addr[6], long_addr[5], long_addr[4],
-      long_addr[3], long_addr[2], long_addr[1], long_addr[0]);
-  for (int i = 0; i < sizeof(mac_addr); i++) {
-    if (long_addr[sizeof(mac_addr) - 1 - i] != mac_addr[i]) {
-      Serial.println("Read MAC Address != Requested Mac Address");
-      return false;
-    }
-  }
-  Serial.printf("Operating channel: %d\r\n", esp_zb_get_current_channel());
-  if (esp_zb_get_current_channel() != set_channel) {
-    Serial.printf("Requested channel: %d\r\n", set_channel);
-    Serial.println("Operating channel != Requested Channel");
+  esp_zb_ieee_addr_t long_addr;
+  esp_zb_get_long_address(long_addr);
+  if (!rfhscheckaddress(long_addr, mac_addr, sizeof(mac_addr), true)) {
     return false;
   }
-  Serial.printf("Operating PAN ID: 0x%04X\r\n", esp_zb_get_pan_id());
-  if (!pan_id_random && esp_zb_get_pan_id() != PAN_ID) {
-    Serial.printf("Requested PAN ID: 0x%04X\r\n", PAN_ID);
-    Serial.println("Operating PAN ID != Requested PAN ID");
+  if (!rfhscheckint("Operating channel", "channel", esp_zb_get_current_channel(), set_channel, "")) {
+    return false;
+  }
+  // A random PAN ID has nothing to be compared with, so it is compared with
+  // itself and only printed.
+  unsigned pan_id = esp_zb_get_pan_id();
+  if (!rfhscheckhex16("Operating PAN ID", "PAN ID", pan_id, pan_id_random ? pan_id : PAN_ID, false)) {
     return false;
   }
   // The stack stores it least significant byte first, like the MAC.
   esp_zb_ext_pan_id_t read_ext_pan_id;
   esp_zb_nwk_get_extended_pan_id(read_ext_pan_id);
-  Serial.printf("Extended PAN ID: %02X:%02X:%02X:%02X:%02X:%02X:%02X:%02X\r\n",
-      read_ext_pan_id[7], read_ext_pan_id[6], read_ext_pan_id[5], read_ext_pan_id[4],
-      read_ext_pan_id[3], read_ext_pan_id[2], read_ext_pan_id[1], read_ext_pan_id[0]);
-  for (int i = 0; i < sizeof(ext_pan_id); i++) {
-    if (read_ext_pan_id[sizeof(ext_pan_id) - 1 - i] != ext_pan_id[i]) {
-      Serial.println("Read Extended PAN ID != Requested Extended PAN ID");
-      return false;
-    }
+  if (!rfhscheckbytes("Extended PAN ID", "extended PAN ID", read_ext_pan_id, ext_pan_id, sizeof(ext_pan_id), true)) {
+    return false;
   }
   // Zigbee gives the coordinator short address 0x0000 and the stack has
   // no public way to change it once the network exists. Kismet shows it
   // next to the PAN ID, so make sure it really is 0x0000.
-  Serial.printf("Short address: 0x%04X\r\n", esp_zb_get_short_address());
-  if (esp_zb_get_short_address() != 0x0000) {
-    Serial.println("Short address != 0x0000");
+  if (!rfhscheckhex16("Short address", "short address", esp_zb_get_short_address(), 0x0000, false)) {
     return false;
   }
-  Serial.printf("Packet interval: %ds\r\n", esp_zb_nwk_get_link_status_period());
-  if (esp_zb_nwk_get_link_status_period() != PACKET_INTERVAL) {
-    Serial.printf("Requested packet interval: %ds\r\n", PACKET_INTERVAL);
-    Serial.println("Packet interval != Requested packet interval");
+  if (!rfhscheckint("Packet interval", "packet interval", esp_zb_nwk_get_link_status_period(), PACKET_INTERVAL, "s")) {
     return false;
   }
-  // The radio stores the power per channel; rfhsstartzigbee() set every
+  // The radio stores the power per channel; rfhsstartradio() set every
   // channel to TXPOWER and this reads the operating channel's value back.
   int8_t tx_power;
   esp_zb_get_tx_power(&tx_power);
-  Serial.printf("Tx power: %d dBm\r\n", tx_power);
-  if (tx_power != TXPOWER) {
-    Serial.printf("Requested tx power: %d dBm\r\n", TXPOWER);
-    Serial.println("Tx power != Requested tx power");
-    return false;
-  }
-  return true;
+  return rfhscheckint("Tx power", "tx power", tx_power, TXPOWER, " dBm");
 }
 
-void disableZigbee() {
+void rfhsstopradio() {
   Zigbee.stop();
 }

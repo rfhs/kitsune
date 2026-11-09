@@ -1,67 +1,25 @@
 #include <Arduino.h>
-
 #include "current_conf.h"
-#include <rfhssleeptimers.h>
-#include <rfhsledmacros.h>
-#include <rfhsbanner.h>
+#define RFHS_PROJECT "zigbee_coordinator"
+#include <rfhsfox.h>
 #include <rfhszigbee.h>
 
 void setup() {
-  // Bring up serial early so we can debug
-  Serial.begin(115200);
-  Serial.flush();
-
-  // Before this desired mac address is not set
-  // Speed counts
-  if (rfhssetzigbeemac()) {
-    Serial.println("MAC address set successfully");
-  } else {
-    Serial.println("Error setting MAC address");
+  rfhsboot("Zigbee Coordinator");
+  rfhsled(RFHS_LED_AWAKE);
+  if (!rfhsstartradio()) {
+    rfhsfatal(RFHS_FATAL_RADIO);
   }
-
-  rfhsledinit();
-
-  Serial.flush();
-  Serial.println();
-  Serial.println("Initializing...");
-  rfhsboottimer();
-
-  Serial.println("Setting up Zigbee Coordinator…");
-  if (!rfhsstartzigbee()) {
-    Serial.flush();
-    disableZigbee();
-    rfhsledfatal();
-  }
-  // The radio is up, so the host has had time to open the port; see rfhsbanner.h.
-  RFHS_BANNER("zigbee_coordinator");
+  RFHS_BANNER();
   rfhsprintsleeptimers();
-  if (!rfhscheckzigbee()) {
-    Serial.flush();
-    disableZigbee();
-    rfhsledfatal();
+  if (!rfhscheckradio()) {
+    rfhsfatal(RFHS_FATAL_READBACK);
   }
-  Serial.flush();
-  ledcolor(0x00ffff); // CYAN
-
-  Serial.println("Awake and screaming");
-  delay(TIME_TO_WAKE * mS_TO_S);
-  Serial.println("Going to sleep");
-  ledcolor(0x880000);  // HALF RED
-  disableZigbee();
-  ledcolor(0xff0000);  // RED
-  delay(75); // Give the led time to set before sleeping
-  // subtract sleep time on line 43
-  int sleepy_tyme = uS_TO_S * TIME_TO_SLEEP - 75;
-  if (sleepy_tyme < 0 ) {
-    sleepy_tyme = 0;
-  }
-  esp_deep_sleep(sleepy_tyme);
-  // This line should never run so it's a canary for sleep failed
-  rfhsledfatal();
+  rfhsawake(TIME_TO_WAKE);
+  rfhsstopradio();
+  rfhssleep(TIME_TO_SLEEP);
 }
 
-void loop(){
-  // setup should sleep then restart so this should also never run.
-  Serial.println("Entered loop, we are broken");
-  rfhsledfatal();
+void loop() {
+  rfhsfatal(RFHS_FATAL_LOOP);
 }

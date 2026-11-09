@@ -7,7 +7,8 @@
 #define MAC_ADDR {0xF2, 0x81, 0x5A, 0xC1, 0xA3, 0x26}
 // Seconds awake, at least 15 so a Bluetooth inquiry can reach the fox
 #define TIME_TO_WAKE 300
-// Seconds asleep, 0 reboots at once
+// Seconds off the air, 0 reboots at once. The fox shortens its sleep by its
+// boot time so one cycle is exactly TIME_TO_WAKE + TIME_TO_SLEEP
 #define TIME_TO_SLEEP 0
 #endif
 
@@ -20,6 +21,7 @@
 #define MAC_ADDR {0xF2, 0xF6, 0x6D, 0xBC, 0x2A, 0x80}
 // Seconds awake, at least 15 so a Bluetooth inquiry can reach the fox
 #define TIME_TO_WAKE 30
-// Seconds asleep, 0 reboots at once
+// Seconds off the air, 0 reboots at once. The fox shortens its sleep by its
+// boot time so one cycle is exactly TIME_TO_WAKE + TIME_TO_SLEEP
 #define TIME_TO_SLEEP 30
 #endif

@@ -28,23 +28,33 @@ static_assert(sizeof(NAME) - 1 >= 1 && sizeof(NAME) - 1 <= 32, "NAME must be 1-3
 #error "TIME_TO_WAKE must be at least 15 seconds: a Bluetooth inquiry takes 10.24 seconds and the fox needs about 2 seconds after boot to answer one"
 #endif
 
+// The awake LED colour: deep blue for Bluetooth Classic.
+#define RFHS_AWAKE_COLOR 0x0000FF
+constexpr uint32_t rfhs_awake_color = RFHS_AWAKE_COLOR;
+
 BluetoothSerial SerialBT;
 
-void rfhssetbtclassicname() {
-  // String localName=String(), bool isMaster=false
-  SerialBT.begin(NAME, false); //Bluetooth device name
+// Sets the address, then starts the stack discoverable under NAME; the false
+// makes the fox wait for connections rather than initiate them.
+bool rfhsstartradio() {
+  if (!rfhsmacset(rfhssetbtmac())) {
+    return false;
+  }
+  return SerialBT.begin(NAME, false);
 }
 
-void rfhsstartclassicdiscoverable() {
-  rfhssetbtmac();
-  rfhssetbtclassicname();
-}
-
-// Prints the name and address hunters see and refuses to run when the
+// Prints the address and name hunters see and refuses to run when the
 // address differs from the conference header. Bluedroid in Arduino core
 // 2.x has no call that returns the Classic device name, so the configured
 // NAME is printed; the address is read back from the stack.
-bool rfhscheckclassicdiscoverable() {
+bool rfhscheckradio() {
+  if (!rfhscheckbtaddress(esp_bt_dev_get_address())) {
+    return false;
+  }
   Serial.println("Device name: " NAME);
-  return rfhscheckbtaddress(esp_bt_dev_get_address());
+  return true;
+}
+
+void rfhsstopradio() {
+  SerialBT.end();
 }

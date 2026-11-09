@@ -17,9 +17,7 @@
 #error "MAC_ADDR must be defined in the conference header, 6 bytes"
 #endif
 constexpr uint8_t rfhs_bt_mac[] = MAC_ADDR;
-static_assert(sizeof(rfhs_bt_mac) == 6, "MAC_ADDR must be exactly 6 bytes");
-static_assert((rfhs_bt_mac[0] & 0x01) == 0, "MAC_ADDR: bit 0 of the first byte (I/G) must be 0, use an even first byte");
-static_assert(!rfhs_all_bytes(rfhs_bt_mac, 6, 0x00), "MAC_ADDR must not be all zeros");
+RFHS_CHECK_ADDRESS(rfhs_bt_mac, 6);
 static_assert(!(rfhs_bt_mac[3] == 0x9E && rfhs_bt_mac[4] == 0x8B && rfhs_bt_mac[5] <= 0x3F),
     "MAC_ADDR: the last three bytes 9E:8B:00 to 9E:8B:3F are Bluetooth inquiry access codes, pick another LAP");
 
@@ -58,22 +56,12 @@ bool rfhssetbtmac() {
 
 // Prints the address the Bluetooth controller is using and refuses to run
 // when it differs from MAC_ADDR. addr is what esp_bt_dev_get_address()
-// returned: the six bytes, or NULL when the stack is not enabled.
+// returned: the six bytes most significant first, or NULL when the stack is
+// not enabled.
 bool rfhscheckbtaddress(const uint8_t *addr) {
   if (addr == NULL) {
     Serial.println("Device address: unavailable, the Bluetooth stack is not enabled");
     return false;
   }
-  Serial.printf("Device address: %02X:%02X:%02X:%02X:%02X:%02X\r\n",
-      addr[0], addr[1], addr[2], addr[3], addr[4], addr[5]);
-  for (size_t i = 0; i < sizeof(rfhs_bt_mac); i++) {
-    if (addr[i] != rfhs_bt_mac[i]) {
-      Serial.printf("Requested address: %02X:%02X:%02X:%02X:%02X:%02X\r\n",
-          rfhs_bt_mac[0], rfhs_bt_mac[1], rfhs_bt_mac[2],
-          rfhs_bt_mac[3], rfhs_bt_mac[4], rfhs_bt_mac[5]);
-      Serial.println("Device address != Requested address");
-      return false;
-    }
-  }
-  return true;
+  return rfhscheckaddress(addr, rfhs_bt_mac, sizeof(rfhs_bt_mac), false);
 }

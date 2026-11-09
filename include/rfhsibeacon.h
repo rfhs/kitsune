@@ -92,9 +92,13 @@ static_assert(rfhs_str_eq(RFHS_STR(TXPOWER), "ESP_PWR_LVL_N12") || rfhs_str_eq(R
 // MIN: 400 MAX: 500 results in 315ms interval
 // MIN: 5000 MAX: 6000 results in 4-7s interval
 
+// The awake LED colour: a lighter blue than Bluetooth Classic's.
+#define RFHS_AWAKE_COLOR 0x60A0FF
+constexpr uint32_t rfhs_awake_color = RFHS_AWAKE_COLOR;
+
 BLEAdvertising *pAdvertising;
-// The manufacturer data block of the advertisement; rfhscheckibeacon()
-// reads it back after it has been handed to the stack.
+// The manufacturer data block of the advertisement; rfhscheckradio() reads
+// it back after it has been handed to the stack.
 BLEBeacon myBeacon;
 
 void init_beacon() {
@@ -113,25 +117,31 @@ void init_beacon() {
 
 }
 
-void rfhsstartibeacon() {
-  rfhssetbtmac();
+// Sets the address, starts the stack and advertises the beacon. Every call
+// after the address set is void in this core, so only the address set can
+// fail here; a dead stack shows up in the readback.
+bool rfhsstartradio() {
+  if (!rfhsmacset(rfhssetbtmac())) {
+    return false;
+  }
   BLEDevice::init(DEVICE_NAME);
- 
+
   BLEDevice::setPower(TXPOWER);
   // The advertising power type is set on its own as well, so the readback
-  // of that type in rfhscheckibeacon() asks the controller for a value it
+  // of that type in rfhscheckradio() asks the controller for a value it
   // was given.
   BLEDevice::setPower(TXPOWER, ESP_BLE_PWR_TYPE_ADV);
 
   pAdvertising = BLEDevice::getAdvertising();
   pAdvertising->setAdvertisementType(ADV_TYPE);
-  pAdvertising->setMinPreferred(0x0); 
+  pAdvertising->setMinPreferred(0x0);
   pAdvertising->setMinInterval(ADV_MIN_INTERVAL);
   pAdvertising->setMaxInterval(ADV_MAX_INTERVAL);
 
   init_beacon();
 
   pAdvertising->start();
+  return true;
 }
 
 // Prints what the beacon transmits and refuses to run when any of it
@@ -157,7 +167,11 @@ static const char *rfhsblepowername(esp_power_level_t level, char *name, size_t 
   return name;
 }
 
-bool rfhscheckibeacon() {
+bool rfhscheckradio() {
+  BLEAddress address = BLEDevice::getAddress();
+  if (!rfhscheckbtaddress(*address.getNative())) {
+    return false;
+  }
   Serial.println("Device name: " DEVICE_NAME);
   std::string data = myBeacon.getData();
   if (data.size() != 25) {
@@ -170,35 +184,16 @@ bool rfhscheckibeacon() {
       "%02X%02X%02X%02X-%02X%02X-%02X%02X-%02X%02X-%02X%02X%02X%02X%02X%02X",
       d[4], d[5], d[6], d[7], d[8], d[9], d[10], d[11],
       d[12], d[13], d[14], d[15], d[16], d[17], d[18], d[19]);
-  Serial.printf("Beacon UUID: %s\r\n", uuid);
-  if (strcasecmp(uuid, BEACON_UUID) != 0) {
-    Serial.println("Requested UUID: " BEACON_UUID);
-    Serial.println("Beacon UUID != Requested UUID");
+  if (!rfhscheckstr("Beacon UUID", "UUID", uuid, BEACON_UUID, true)) {
     return false;
   }
-  unsigned major = ((unsigned)d[20] << 8) | d[21];
-  Serial.printf("Major: 0x%04X (%u)\r\n", major, major);
-  if (major != (unsigned)MAJOR) {
-    Serial.printf("Requested major: 0x%04X (%u)\r\n", (unsigned)MAJOR, (unsigned)MAJOR);
-    Serial.println("Major != Requested major");
+  if (!rfhscheckhex16("Major", "major", ((unsigned)d[20] << 8) | d[21], (unsigned)MAJOR, true)) {
     return false;
   }
-  unsigned minor = ((unsigned)d[22] << 8) | d[23];
-  Serial.printf("Minor: 0x%04X (%u)\r\n", minor, minor);
-  if (minor != (unsigned)MINOR) {
-    Serial.printf("Requested minor: 0x%04X (%u)\r\n", (unsigned)MINOR, (unsigned)MINOR);
-    Serial.println("Minor != Requested minor");
+  if (!rfhscheckhex16("Minor", "minor", ((unsigned)d[22] << 8) | d[23], (unsigned)MINOR, true)) {
     return false;
   }
-  int power = (int8_t)d[24];
-  Serial.printf("Signal power: %d\r\n", power);
-  if (power != (int)(int8_t)SIGNAL_POWER) {
-    Serial.printf("Requested signal power: %d\r\n", (int)(int8_t)SIGNAL_POWER);
-    Serial.println("Signal power != Requested signal power");
-    return false;
-  }
-  BLEAddress address = BLEDevice::getAddress();
-  if (!rfhscheckbtaddress(*address.getNative())) {
+  if (!rfhscheckint("Signal power", "signal power", (int8_t)d[24], (int)(int8_t)SIGNAL_POWER, "")) {
     return false;
   }
   esp_power_level_t level = esp_ble_tx_power_get(ESP_BLE_PWR_TYPE_ADV);
@@ -212,4 +207,12 @@ bool rfhscheckibeacon() {
     return false;
   }
   return true;
+}
+
+// Stops advertising. pAdvertising is NULL when the address set failed and
+// the stack never started.
+void rfhsstopradio() {
+  if (pAdvertising != NULL) {
+    pAdvertising->stop();
+  }
 }
