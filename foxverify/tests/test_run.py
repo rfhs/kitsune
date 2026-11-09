@@ -26,13 +26,16 @@ RUNS = {
         ("TIME_TO_WAKE", "serial"), ("TIME_TO_SLEEP", "serial")]),
     "ibeacon_easy": ("iBeacon", [
         ("MAC_ADDR", "unverified"), ("DEVICE_NAME", "unverified"), ("BEACON_UUID", "unverified"),
-        ("MAJOR", "unverified"), ("MINOR", "unverified"), ("SIGNAL_POWER", "unverified")]),
+        ("MAJOR", "unverified"), ("MINOR", "unverified"), ("SIGNAL_POWER", "unverified"),
+        ("TIME_TO_WAKE", "serial"), ("TIME_TO_SLEEP", "serial"), ("TXPOWER", "serial")]),
     "ibeacon_medium": ("iBeacon", [
         ("MAC_ADDR", "unverified"), ("DEVICE_NAME", "unverified"), ("BEACON_UUID", "unverified"),
-        ("MAJOR", "unverified"), ("MINOR", "unverified"), ("SIGNAL_POWER", "unverified")]),
+        ("MAJOR", "unverified"), ("MINOR", "unverified"), ("SIGNAL_POWER", "unverified"),
+        ("TIME_TO_WAKE", "serial"), ("TIME_TO_SLEEP", "serial"), ("TXPOWER", "serial")]),
     "ibeacon_hard": ("iBeacon", [
         ("MAC_ADDR", "unverified"), ("DEVICE_NAME", "unverified"), ("BEACON_UUID", "unverified"),
-        ("MAJOR", "unverified"), ("MINOR", "unverified"), ("SIGNAL_POWER", "unverified")]),
+        ("MAJOR", "unverified"), ("MINOR", "unverified"), ("SIGNAL_POWER", "unverified"),
+        ("TIME_TO_WAKE", "serial"), ("TIME_TO_SLEEP", "serial"), ("TXPOWER", "serial")]),
     "wifi_easy_ap": ("wifi_ap_client", [
         ("MAC_ADDR", "unverified"), ("CHANNEL", "unverified"), ("FSSID", "unverified"),
         ("SSID_HIDDEN", "unverified"), ("SECURITY", "unverified"),
@@ -156,8 +159,10 @@ class SerialOnlyRunTest(unittest.TestCase):
         rows = {row[0]: row for row in result.rows}
         self.assertEqual(rows["SIGNAL_POWER"][1:3], ("-59", "-59"))
         self.assertEqual(rows["BEACON_UUID"][1], "DB6A0ED0-1DC3-4348-BD78-E997A0C082A3")
-        self.assertEqual(result.notes, ["advertising power -12 dBm (level 0), set in include/rfhsibeacon.h "
-                                        "per difficulty, not a conference value"])
+        self.assertEqual(rows["TIME_TO_WAKE"][1:3], ("10", "10"))
+        self.assertEqual(rows["TIME_TO_SLEEP"][1:3], ("30", "30"))
+        self.assertEqual(rows["TXPOWER"][1:], ("ESP_PWR_LVL_N12", "ESP_PWR_LVL_N12", "-", "serial"))
+        self.assertEqual(result.notes, [])
 
     def test_environment_variable_names_the_transcript(self):
         result = verify("classic_discoverable", fixture("transcripts", "classic_hard.log"), env_transcript=True)
@@ -283,11 +288,14 @@ def transcript_for(project, difficulty, mode, block):
         lines += ["Device name: " + block.string("NAME"), "Device address: " + block.mac("MAC_ADDR")]
     elif project == "iBeacon":
         power = block.integer("SIGNAL_POWER")
+        # The ESP_PWR_LVL_* name spells out its dBm: N12 is -12, P9 is +9.
+        tx_power = block.identifier("TXPOWER")
+        dbm = int(tx_power[len("ESP_PWR_LVL_"):].replace("N", "-").replace("P", ""))
         lines += ["Device name: " + block.string("DEVICE_NAME"), "Beacon UUID: " + block.string("BEACON_UUID"),
                   "Major: 0x%04X (%d)" % (block.integer("MAJOR"), block.integer("MAJOR")),
                   "Minor: 0x%04X (%d)" % (block.integer("MINOR"), block.integer("MINOR")),
                   "Signal power: %d" % (power - 256 if power > 127 else power),
-                  "Device address: " + block.mac("MAC_ADDR"), "Advertising power: 0 dBm (level 4)"]
+                  "Device address: " + block.mac("MAC_ADDR"), "Tx power: %s (%d dBm)" % (tx_power, dbm)]
     elif project == "wifi_ap_client" and mode == "AP":
         lines += ["Started AP with MAC Address: " + block.mac("MAC_ADDR"),
                   "Operating channel: %d" % (block.integer("CHANNEL") or 6),
@@ -464,7 +472,8 @@ class AirRunTest(unittest.TestCase):
                             lambda candidates: scan)
         self.assertEqual(scan.target, "F2:63:89:10:8D:1D")
         self.assertEqual(result.code, EXIT_OK, result.out)
-        self.assertEqual([v for _, v in result.verdicts], ["pass"] * 6)
+        self.assertEqual([v for _, v in result.verdicts], ["pass"] * 6 + ["serial"] * 3)
+        self.assertTrue(result.summary.startswith("pass: 6 pass, 0 FAIL, 3 serial, 0 unverified"), result.summary)
         wrong = seen["F2:63:89:10:8D:1D"]._replace(beacon=ble.decode_ibeacon(payload)._replace(major=6))
         result, _ = air_run(run.IBeaconRun, "iBeacon", fixture("transcripts", "ibeacon_medium.log"),
                             lambda candidates: FakeScan({"F2:63:89:10:8D:1D": wrong}))

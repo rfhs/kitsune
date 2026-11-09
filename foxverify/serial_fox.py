@@ -110,7 +110,8 @@ _MAC8 = r"((?:[0-9A-Fa-f]{2}:){7}[0-9A-Fa-f]{2})"
 _U16 = r"(0x[0-9A-Fa-f]{4})"
 
 # (field, regex) for every line a fox prints, in the firmware's own formats.
-# A field with several lines (mac, sleeping) is written by whichever appears.
+# A field with several lines (mac, sleeping, tx_power) is written by whichever
+# appears.
 # Group 1 is the value kept; a regex without groups keeps the whole line.
 LINES: List[Tuple[str, "re.Pattern[str]"]] = [
     # include/rfhssleeptimers.h and every main.cpp
@@ -125,12 +126,14 @@ LINES: List[Tuple[str, "re.Pattern[str]"]] = [
     ("tx_power_status", re.compile(r"^Set power status: (ok|failed)$")),
     ("time_to_wake", re.compile(r"^Time to wake: (\d+)s$")),
     ("time_to_sleep", re.compile(r"^Time to sleep: (\d+)s$")),
-    # include/rfhswifi.h and include/rfhszigbee.h; Wi-Fi prints the
-    # WIFI_POWER_* name, Zigbee a dBm number.
+    # include/rfhswifi.h, include/rfhszigbee.h and include/rfhsibeacon.h;
+    # Wi-Fi prints the WIFI_POWER_* name, Zigbee a dBm number, iBeacon the
+    # ESP_PWR_LVL_* name with its dBm in parentheses.
     ("psk", re.compile(r"^Operating PSK: (.*)$")),
     ("ssid_hidden", re.compile(r"^Hidden SSID: ([01])$")),
     ("max_clients", re.compile(r"^Max clients: (\d+)$")),
     ("tx_power", re.compile(r"^Tx power: (\S+?)(?: dBm)?$")),
+    ("tx_power", re.compile(r"^Tx power: (ESP_PWR_LVL_\w+) \(-?\d+ dBm\)$")),
     # include/rfhszigbee.h and wifi/wifi_ap_client/src/main.cpp
     ("mac", re.compile(r"^Started Coordinator with MAC Address: " + _MAC8 + "$")),
     ("mac", re.compile(r"^Started AP with MAC Address: " + _MAC6 + "$")),
@@ -149,8 +152,6 @@ LINES: List[Tuple[str, "re.Pattern[str]"]] = [
     ("major", re.compile(r"^Major: 0x[0-9A-Fa-f]{4} \((\d+)\)$")),
     ("minor", re.compile(r"^Minor: 0x[0-9A-Fa-f]{4} \((\d+)\)$")),
     ("signal_power", re.compile(r"^Signal power: (-?\d+)$")),
-    ("adv_power", re.compile(r"^Advertising power: (-?\d+) dBm \(level \d+\)$")),
-    ("adv_power_level", re.compile(r"^Advertising power: -?\d+ dBm \(level (\d+)\)$")),
     ("advertising", re.compile(r"^(iBeacon advertising!)$")),
 ]
 

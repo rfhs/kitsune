@@ -12,7 +12,8 @@ WIFI = "wifi/wifi_ap_client"
 ZIGBEE = "zigbee/zigbee_coordinator"
 
 CLASSIC_NAMES = ["NAME", "MAC_ADDR", "TIME_TO_WAKE", "TIME_TO_SLEEP"]
-IBEACON_NAMES = ["DEVICE_NAME", "BEACON_UUID", "MAJOR", "MINOR", "SIGNAL_POWER", "MAC_ADDR"]
+IBEACON_NAMES = ["DEVICE_NAME", "BEACON_UUID", "MAJOR", "MINOR", "SIGNAL_POWER", "MAC_ADDR",
+                 "TIME_TO_WAKE", "TIME_TO_SLEEP", "TXPOWER"]
 WIFI_AP_NAMES = ["FSSID", "PSK", "MAC_ADDR", "CHANNEL", "SSID_HIDDEN", "MAX_CLIENTS",
                  "TIME_TO_WAKE", "TIME_TO_SLEEP", "TXPOWER"]
 WIFI_CLIENT_NAMES = ["FSSID", "PSK", "MAC_ADDR", "TIME_TO_WAKE", "TIME_TO_SLEEP", "TXPOWER"]
@@ -110,6 +111,18 @@ class DemoHeaderTest(unittest.TestCase):
         self.assertEqual(block.integer("MINOR"), 88)
         self.assertEqual(block.integer("SIGNAL_POWER"), 0xC5)
         self.assertEqual(block.mac("MAC_ADDR"), "F2:63:89:10:8D:1D")
+        self.assertEqual(block.integer("TIME_TO_WAKE"), 5)
+        self.assertEqual(block.integer("TIME_TO_SLEEP"), 5)
+        self.assertEqual(block.identifier("TXPOWER"), "ESP_PWR_LVL_N0")
+        self.assertEqual(block.display("TXPOWER"), "ESP_PWR_LVL_N0")
+        easy = conf.select(frozen_text("iBeacon"), conf.defined_for("iBeacon", "EASY"))
+        self.assertEqual(easy.integer("TIME_TO_WAKE"), 300)
+        self.assertEqual(easy.integer("TIME_TO_SLEEP"), 0)
+        self.assertEqual(easy.identifier("TXPOWER"), "ESP_PWR_LVL_P9")
+        hard = conf.select(frozen_text("iBeacon"), conf.defined_for("iBeacon", "HARD"))
+        self.assertEqual(hard.integer("TIME_TO_WAKE"), 10)
+        self.assertEqual(hard.integer("TIME_TO_SLEEP"), 30)
+        self.assertEqual(hard.identifier("TXPOWER"), "ESP_PWR_LVL_N12")
 
     def test_wifi_frozen_values(self):
         text = frozen_text("wifi_ap_client")
@@ -179,6 +192,11 @@ class LiveDemoRangeTest(unittest.TestCase):
             self.assertTrue(0 <= block.integer("MINOR") <= 65535, key)
             self.assertTrue(-128 <= block.integer("SIGNAL_POWER") <= 255, key)
             self.unicast_mac(block, "MAC_ADDR", 6, key)
+            self.assertTrue(5 <= block.integer("TIME_TO_WAKE") <= 2147483, key)
+            self.assertTrue(0 <= block.integer("TIME_TO_SLEEP") <= 2147, key)
+            self.assertIn(block.identifier("TXPOWER"),
+                          ["ESP_PWR_LVL_N12", "ESP_PWR_LVL_N9", "ESP_PWR_LVL_N6", "ESP_PWR_LVL_N3",
+                           "ESP_PWR_LVL_N0", "ESP_PWR_LVL_P3", "ESP_PWR_LVL_P6", "ESP_PWR_LVL_P9"], key)
 
     def test_wifi(self):
         text = project_header(WIFI)

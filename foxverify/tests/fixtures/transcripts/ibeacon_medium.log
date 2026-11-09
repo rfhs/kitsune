@@ -2,12 +2,14 @@ Initializing...
 ESP32 boot count: 12
 Sleep stats: 131s since cold boot, 11s since last wakeup
 Fox: iBeacon MEDIUM
+Time to wake: 5s
+Time to sleep: 5s
 Device name: Demo Cath BLE Medium Fox
 Beacon UUID: 162EEB7B-743C-47E9-9414-BBD6149B4E40
 Major: 0x0005 (5)
 Minor: 0x0058 (88)
 Signal power: -59
 Device address: F2:63:89:10:8D:1D
-Advertising power: 0 dBm (level 4)
+Tx power: ESP_PWR_LVL_N0 (0 dBm)
 iBeacon advertising!
 entering deep sleep

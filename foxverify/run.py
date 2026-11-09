@@ -364,11 +364,8 @@ class IBeaconRun(Run):
                  reason="%s not seen by the scan before the deadline" % mac)
 
     def serial_rows(self, block, readback):
-        power = readback.get("adv_power")
-        level = readback.get("adv_power_level")
-        if power is not None:
-            self.report.note("advertising power %s dBm (level %s), set in include/rfhsibeacon.h "
-                             "per difficulty, not a conference value" % (power, level))
+        self.timers(block, readback)
+        self.serial_row(block, readback, "TXPOWER", "tx_power")
 
 
 class WifiRun(Run):

@@ -16,6 +16,13 @@
 #define SIGNAL_POWER        0xc5
 // 6 bytes, first byte even (I/G bit clear), last three bytes not 9E:8B:00-9E:8B:3F
 #define MAC_ADDR            {0xF2, 0x82, 0x42, 0xD0, 0x84, 0xBC}
+// Seconds on the air, at least 5 so an active scan can hear the beacon and read its name
+#define TIME_TO_WAKE        300
+// Seconds off the air, 0 reboots at once. The fox shortens its sleep by its
+// boot time so one cycle is exactly TIME_TO_WAKE + TIME_TO_SLEEP
+#define TIME_TO_SLEEP       0
+// Advertising power, an ESP_PWR_LVL_* name from ESP_PWR_LVL_N12 (-12 dBm) to ESP_PWR_LVL_P9 (+9 dBm) in 3 dBm steps
+#define TXPOWER             ESP_PWR_LVL_P9
 
 #elif defined(MEDIUM)
 // RFHS_CHALLENGE_NAME "BLE Medium Fox"
@@ -31,6 +38,13 @@
 #define SIGNAL_POWER        0xc5
 // 6 bytes, first byte even (I/G bit clear), last three bytes not 9E:8B:00-9E:8B:3F
 #define MAC_ADDR            {0xF2, 0x63, 0x89, 0x10, 0x8D, 0x1D}
+// Seconds on the air, at least 5 so an active scan can hear the beacon and read its name
+#define TIME_TO_WAKE        5
+// Seconds off the air, 0 reboots at once. The fox shortens its sleep by its
+// boot time so one cycle is exactly TIME_TO_WAKE + TIME_TO_SLEEP
+#define TIME_TO_SLEEP       5
+// Advertising power, an ESP_PWR_LVL_* name from ESP_PWR_LVL_N12 (-12 dBm) to ESP_PWR_LVL_P9 (+9 dBm) in 3 dBm steps
+#define TXPOWER             ESP_PWR_LVL_N0
 
 #elif defined(HARD)
 // RFHS_CHALLENGE_NAME "BLE Hard Fox"
@@ -46,5 +60,12 @@
 #define SIGNAL_POWER        0xc5
 // 6 bytes, first byte even (I/G bit clear), last three bytes not 9E:8B:00-9E:8B:3F
 #define MAC_ADDR            {0xF2, 0xAC, 0x87, 0x05, 0x0A, 0xC7}
+// Seconds on the air, at least 5 so an active scan can hear the beacon and read its name
+#define TIME_TO_WAKE        10
+// Seconds off the air, 0 reboots at once. The fox shortens its sleep by its
+// boot time so one cycle is exactly TIME_TO_WAKE + TIME_TO_SLEEP
+#define TIME_TO_SLEEP       30
+// Advertising power, an ESP_PWR_LVL_* name from ESP_PWR_LVL_N12 (-12 dBm) to ESP_PWR_LVL_P9 (+9 dBm) in 3 dBm steps
+#define TXPOWER             ESP_PWR_LVL_N12
 
 #endif

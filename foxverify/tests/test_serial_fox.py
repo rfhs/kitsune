@@ -19,6 +19,8 @@ WIFI_COMMON = dict(TIMERS, mac="MAC_ADDR", ssid="FSSID", psk="PSK", tx_power="TX
 WIFI_AP = dict(WIFI_COMMON, ssid_hidden="SSID_HIDDEN", max_clients="MAX_CLIENTS")
 ZIGBEE = dict(TIMERS, mac="MAC_ADDR", channel="CHANNEL", pan_id="PAN_ID", ext_pan_id="EXT_PAN_ID",
               packet_interval="PACKET_INTERVAL", tx_power="TXPOWER")
+IBEACON = dict(TIMERS, name="DEVICE_NAME", uuid="BEACON_UUID", major="MAJOR", minor="MINOR",
+               address="MAC_ADDR", tx_power="TXPOWER")
 
 # transcript -> (project, difficulty, mode, serial field -> header macro)
 TRANSCRIPTS = {
@@ -26,15 +28,9 @@ TRANSCRIPTS = {
                      dict(TIMERS, name="NAME", address="MAC_ADDR")),
     "classic_hard": ("classic_discoverable", "HARD", None,
                      dict(TIMERS, name="NAME", address="MAC_ADDR")),
-    "ibeacon_easy": ("iBeacon", "EASY", None,
-                     {"name": "DEVICE_NAME", "uuid": "BEACON_UUID", "major": "MAJOR",
-                      "minor": "MINOR", "address": "MAC_ADDR"}),
-    "ibeacon_medium": ("iBeacon", "MEDIUM", None,
-                       {"name": "DEVICE_NAME", "uuid": "BEACON_UUID", "major": "MAJOR",
-                        "minor": "MINOR", "address": "MAC_ADDR"}),
-    "ibeacon_hard": ("iBeacon", "HARD", None,
-                     {"name": "DEVICE_NAME", "uuid": "BEACON_UUID", "major": "MAJOR",
-                      "minor": "MINOR", "address": "MAC_ADDR"}),
+    "ibeacon_easy": ("iBeacon", "EASY", None, IBEACON),
+    "ibeacon_medium": ("iBeacon", "MEDIUM", None, IBEACON),
+    "ibeacon_hard": ("iBeacon", "HARD", None, IBEACON),
     "wifi_easy_ap": ("wifi_ap_client", "EASY", "AP", dict(WIFI_AP, channel="CHANNEL")),
     "wifi_hard_ap": ("wifi_ap_client", "HARD", "AP", WIFI_AP),
     "wifi_fiveeasy_ap": ("wifi_ap_client", "FIVEEASY", "AP", dict(WIFI_AP, channel="CHANNEL")),
@@ -119,7 +115,7 @@ class TranscriptTest(unittest.TestCase):
                     self.assertEqual(value, block.string(macro), "%s: %s" % (name, field))
                 elif text.startswith("{") or macro == "EXT_PAN_ID":
                     self.assertTrue(serial_fox.same_mac(block.mac(macro), value), "%s: %s" % (name, field))
-                elif text.startswith("WIFI_POWER_"):
+                elif text.startswith(("WIFI_POWER_", "ESP_PWR_LVL_")):
                     self.assertEqual(value, block.identifier(macro), "%s: %s" % (name, field))
                 else:
                     self.assertEqual(readback.integer(field), block.integer(macro), "%s: %s" % (name, field))
@@ -180,14 +176,22 @@ class TranscriptTest(unittest.TestCase):
         self.assertEqual(readback.integer("minor"), 88)
         self.assertEqual(readback.integer("signal_power"), -59)
         self.assertEqual(readback.get("address"), "F2:AC:87:05:0A:C7")
-        self.assertEqual(readback.integer("adv_power"), -12)
-        self.assertEqual(readback.integer("adv_power_level"), 0)
+        self.assertEqual(readback.get("tx_power"), "ESP_PWR_LVL_N12")
+        self.assertEqual(readback.integer("time_to_wake"), 10)
+        self.assertEqual(readback.integer("time_to_sleep"), 30)
         self.assertEqual(readback.get("advertising"), "iBeacon advertising!")
         self.assertEqual(readback.get("sleeping"), "entering deep sleep")
         easy = serial_fox.parse_transcript(transcript("ibeacon_easy"))
-        self.assertEqual(easy.integer("adv_power"), 9)
-        self.assertEqual(easy.integer("adv_power_level"), 7)
+        self.assertEqual(easy.get("tx_power"), "ESP_PWR_LVL_P9")
+        self.assertEqual(easy.integer("time_to_wake"), 300)
+        self.assertEqual(easy.integer("time_to_sleep"), 0)
         self.assertIsNone(easy.get("sleeping"))
+        mismatch = serial_fox.parse_transcript("Tx power: ESP_PWR_LVL_P3 (3 dBm)\n"
+                                               "Requested tx power: ESP_PWR_LVL_N0 (0 dBm)\n"
+                                               "Tx power != Requested tx power\nPANIC\n")
+        self.assertEqual(mismatch.get("tx_power"), "ESP_PWR_LVL_P3")
+        self.assertEqual(mismatch.get("requested:tx power"), "ESP_PWR_LVL_N0 (0 dBm)")
+        self.assertEqual(mismatch.problems, ["Tx power != Requested tx power", "PANIC"])
 
     def test_classic_fields(self):
         readback = serial_fox.parse_transcript(transcript("classic_hard"))

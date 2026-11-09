@@ -45,7 +45,21 @@ sudo ./verify hci0 --no-reset             # Classic or iBeacon: wait for the fox
 ```
 Every `DEVICE` is a plain name and the script works out what it is: a network interface (`wlan1`) is the Wi-Fi sniffer, `hciN` is the Bluetooth adapter, a serial port with the nRF52840 sniffer's USB id (`1915:154A`) is the 802.15.4 sniffer and any other serial port is the fox. Without a fox on the command line the one ESP32 serial device is used; if there is none the script waits `--wait-for-fox` seconds for a native USB board to wake, and if there are several it lists them and asks for one. The nRF sniffer and a lone `hci0` are found on their own; a Wi-Fi interface never is, because putting the wrong card into monitor mode takes the laptop offline. The whole run stays under `--timeout` seconds, 60 by default.
 
-The table has the columns `value | header | serial | air | verdict`. `pass` means header, serial and air agree; `FAIL` means any of them differs, and the exit status is 1; `serial` is a value that is not on the air by design (the sleep timers, the PSK text, `MAX_CLIENTS`, `TXPOWER`, `EXT_PAN_ID`) and agrees between header and serial; `unverified` is a value the sniffer should have seen but did not within the time, with the reason. A device that is not a fox, a fox built for another project, a fox built from another conference header, a missing tool or a missing privilege is said in plain words and the exit status is 2. Without a sniffer the run is serial-only and says so.
+The table has the columns `value | header | serial | air | verdict`. `pass` means header, serial and air agree; `FAIL` means any of them differs, and the exit status is 1; `serial` is a value that is not on the air by design (the sleep timers, the PSK text, `MAX_CLIENTS`, `TXPOWER`, `EXT_PAN_ID`) and agrees between header and serial; `unverified` is a value the sniffer should have seen but did not within the time, with the reason. A device that is not a fox, a fox built for another project, a fox built from another conference header, a missing tool or a missing privilege is said in plain words and the exit status is 2. Without a sniffer the run is serial-only and says so. The iBeacon MEDIUM demo, when everything agrees:
+```
+Fox: iBeacon MEDIUM
+value         | header                               | serial                               | air                                  | verdict
+MAC_ADDR      | F2:63:89:10:8D:1D                    | F2:63:89:10:8D:1D                    | F2:63:89:10:8D:1D                    | pass
+DEVICE_NAME   | Demo Cath BLE Medium Fox             | Demo Cath BLE Medium Fox             | Demo Cath BLE Medium Fox             | pass
+BEACON_UUID   | 162EEB7B-743C-47E9-9414-BBD6149B4E40 | 162EEB7B-743C-47E9-9414-BBD6149B4E40 | 162EEB7B-743C-47E9-9414-BBD6149B4E40 | pass
+MAJOR         | 5                                    | 5                                    | 5                                    | pass
+MINOR         | 88                                   | 88                                   | 88                                   | pass
+SIGNAL_POWER  | -59                                  | -59                                  | -59                                  | pass
+TIME_TO_WAKE  | 5                                    | 5                                    | -                                    | serial
+TIME_TO_SLEEP | 5                                    | 5                                    | -                                    | serial
+TXPOWER       | ESP_PWR_LVL_N0                       | ESP_PWR_LVL_N0                       | -                                    | serial
+pass: 6 pass, 0 FAIL, 3 serial, 0 unverified, NN s of 60 s
+```
 
 What each fox needs on the air, and the privilege for it:
 - Bluetooth Classic: `btmgmt` (bluez) runs an inquiry on `hci0`; needs root or `CAP_NET_ADMIN`.
@@ -92,6 +106,8 @@ Inside a project, `src/main.cpp` includes `src/current_conf.h`, a symlink to one
 - `<year><conference>.h` files are real conferences, rolled from the skel.
 
 Each header has one block per difficulty (`#if defined(EASY)`, `#if defined(HARD)`, ...) and every tunable is a `#define` inside it. Every tunable has a comment giving its permitted values, and the shared header that uses it refuses to compile anything else: a 5 byte MAC, a passphrase under 8 characters, a Zigbee channel of 5. The error message names the variable and the range. `./qa/guard-test` proves every one of those checks still fires.
+
+The iBeacon fox's on-air window, its sleep and its advertising power are conference values too: `TIME_TO_WAKE`, `TIME_TO_SLEEP` and `TXPOWER` (an `ESP_PWR_LVL_*` name, `ESP_PWR_LVL_N12` to `ESP_PWR_LVL_P9`) in every block. `TIME_TO_WAKE` must be at least 5 seconds because the name only travels in the scan response: an active scan has to hear an advertisement and then ask for the name, and a shorter window lets a scan miss the fox or see it without its name.
 
 ### Conferences and reports
 

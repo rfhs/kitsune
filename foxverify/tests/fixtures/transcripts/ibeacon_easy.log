@@ -12,11 +12,13 @@ Initializing...
 ESP32 boot count: 0
 Sleep stats: 0s since cold boot, 0s since last wakeup
 Fox: iBeacon EASY
+Time to wake: 300s
+Time to sleep: 0s
 Device name: Demo Bruce BLE Easy Fox
 Beacon UUID: A2AFA582-E4E8-4599-B28B-4E11AC6DD6E8
 Major: 0x0005 (5)
 Minor: 0x0058 (88)
 Signal power: -59
 Device address: F2:82:42:D0:84:BC
-Advertising power: 9 dBm (level 7)
+Tx power: ESP_PWR_LVL_P9 (9 dBm)
 iBeacon advertising!
