@@ -66,6 +66,8 @@ CP210X = (0x10C4, 0xEA60, "CP2104 USB to UART Bridge Controller", "0123ABCD")
 CH9102 = (0x1A86, 0x55D4, "USB Single Serial", "5698001234")
 FTDI = (0x0403, 0x6001, "FT232R USB UART", "A50285BI")
 NRF = (0x1915, 0x154A, "nRF Sniffer for 802.15.4", "F1D2E3C4B5A6")
+NRF_080 = (0x1915, 0x154B, "nRF Sniffer for 802.15.4", "A6B5C4D3E2F1")
+NORDIC_OTHER = (0x1915, 0x520F, "nRF52 USB CDC", "C0FFEE")
 OTHER = (0x1234, 0x5678, "Some modem", "X1")
 
 
@@ -105,6 +107,24 @@ class ClassifyTest(DevicesTestCase):
         self.assertEqual(device.kind, devices.SNIFFER)
         self.assertEqual(device.path, os.path.join(self.tree.by_id,
                                                    "usb-ZEPHYR_nRF_Sniffer_for_802.15.4_F1D2E3C4B5A6-if00"))
+
+    def test_both_sniffer_firmware_ids_are_the_sniffer(self):
+        """The 0.7.x firmware enumerates as 1915:154A, 0.8.0 as 1915:154B; another
+        Nordic product id is not the sniffer."""
+        old = self.tree.port("ttyACM3", *NRF)
+        new = self.tree.port("ttyACM4", *NRF_080)
+        nordic = self.tree.port("ttyACM5", *NORDIC_OTHER)
+        ports = [old, new, nordic]
+        self.assertEqual(self.classify(old.device, ports).kind, devices.SNIFFER)
+        self.assertEqual(self.classify(new.device, ports).kind, devices.SNIFFER)
+        self.assertEqual(self.classify(nordic.device, ports).kind, devices.FOX)
+        self.assertTrue(devices.Port(old.device, *NRF).is_sniffer())
+        self.assertTrue(devices.Port(new.device, *NRF_080).is_sniffer())
+        self.assertFalse(devices.Port(nordic.device, *NORDIC_OTHER).is_sniffer())
+        self.assertFalse(devices.Port(nordic.device, *NORDIC_OTHER).is_fox_candidate())
+        sniffer = devices.autodetect_sniffer(devices.list_ports(self.comports(new, nordic)), self.tree.by_id)
+        self.assertEqual(sniffer.kind, devices.SNIFFER)
+        self.assertEqual(sniffer.path, new.device)
 
     def test_any_other_serial_port_is_the_fox(self):
         fox = self.tree.port("ttyUSB0", *CP210X, link="usb-Silicon_Labs_CP2104_0123ABCD-if00-port0")

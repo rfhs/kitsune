@@ -4,7 +4,8 @@ A positional DEVICE argument is a plain name and is classified by what it is:
 
 - ``/sys/class/net/<name>`` exists: a Wi-Fi interface.
 - ``hci[0-9]+``: a Bluetooth adapter.
-- a serial port whose USB id is ``1915:154A``: the nRF 802.15.4 sniffer.
+- a serial port whose USB id is ``1915:154A`` or ``1915:154B``: the nRF
+  802.15.4 sniffer.
 - any other serial port: the fox.
 
 When no fox is given, the serial ports with an Espressif, Silicon Labs CP210x,
@@ -38,7 +39,9 @@ HCI = "hci"
 SNIFFER = "sniffer"
 FOX = "fox"
 
-NRF_SNIFFER_ID = (0x1915, 0x154A)
+# Nordic's 802.15.4 sniffer firmware enumerates as 1915:154A up to the 0.7.x
+# releases and as 1915:154B from 0.8.0; both speak the same serial protocol.
+NRF_SNIFFER_IDS = {(0x1915, 0x154A), (0x1915, 0x154B)}
 # Vendor ids of the USB serial bridges and native USB stacks the foxes use:
 # Espressif (native USB, also the Arduino Nano ESP32 in TinyUSB mode), Silicon
 # Labs CP210x, WCH CH910x and FTDI.
@@ -80,7 +83,7 @@ class Port(NamedTuple):
                                    self.serial_number or "no serial number")
 
     def is_sniffer(self) -> bool:
-        return (self.vid, self.pid) == NRF_SNIFFER_ID
+        return (self.vid, self.pid) in NRF_SNIFFER_IDS
 
     def is_fox_candidate(self) -> bool:
         return self.vid in FOX_VENDOR_IDS

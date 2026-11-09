@@ -1,7 +1,8 @@
 """The nRF52840 802.15.4 sniffer, a pcap stream for tshark and the Zigbee checks.
 
-The dongle runs Nordic's 802.15.4 sniffer firmware (USB id 1915:154A), the one
-Kismet and Wireshark's extcap drive. It speaks plain text over its serial port:
+The dongle runs Nordic's 802.15.4 sniffer firmware (USB id 1915:154A or
+1915:154B, depending on the firmware release), the one Kismet and Wireshark's
+extcap drive. It speaks plain text over its serial port:
 ``channel N``, ``receive`` and ``sleep``, each ending in CRLF, and reports every
 frame it hears as one line::
 
