@@ -1,0 +1,18 @@
+ESP-ROM:esp32c5-20250228
+Build:Feb 28 2025
+rst:0x1 (POWERON),boot:0xc (SPI_FAST_FLASH_BOOT)
+SPIWP:0xee
+mode:DIO, clock div:1
+load:0x40855610,len:0x1708
+load:0x4084bb20,len:0xd40
+load:0x4084e320,len:0x3104
+entry 0x4084bb20
+Initializing...
+ESP32 boot count: 0
+Sleep stats: 0s since cold boot, 0s since last wakeup
+Setting up Zigbee Coordinator...
+MAC address set successfully
+Error starting Zigbee
+Fox: zigbee_coordinator EASY
+Fatal 1: radio start failed
+PANIC

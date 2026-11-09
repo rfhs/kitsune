@@ -1,23 +1,23 @@
 ESP-ROM:esp32c5-20250228
 Build:Feb 28 2025
-rst:0x1 (POWERON),boot:0xc (SPI_FAST_FLASH_BOOT)
+rst:0x5 (DSLEEP),boot:0xc (SPI_FAST_FLASH_BOOT)
 SPIWP:0xee
 mode:DIO, clock div:1
 load:0x40855610,len:0x1708
 load:0x4084bb20,len:0xd40
 load:0x4084e320,len:0x3104
 entry 0x4084bb20
-Setting up AP (Access Point)…
-MAC address set successfully
-
 Initializing...
 ESP32 boot count: 1
-Sleep stats: 20s since cold boot, 20s since last wakeup
+Sleep stats: 21s since cold boot, 21s since last wakeup
+Last cycle: 21.3s, target 20s
+Setting up WiFi AP...
+MAC address set successfully
+Set power status: ok
 Fox: wifi_ap_client FIVEEASY AP
 Time to wake: 15s
 Time to sleep: 5s
-Set power status: ok
-Started AP with MAC Address: F2:77:20:34:0A:C7
+Device address: F2:77:20:34:0A:C7
 Operating channel: 36
 Operating SSID: Demo Enzo WiFi 5GHz AP Easy Fox
 Operating PSK: 0123456789
@@ -25,3 +25,5 @@ Hidden SSID: 0
 Max clients: 1
 Tx power: WIFI_POWER_17dBm
 Awake and screaming
+Going to sleep
+Cycle behind by 1.3s, rebooting at once

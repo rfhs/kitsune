@@ -37,7 +37,8 @@
 // Seconds awake, at least 1. Keep it to a few minutes so the startup
 // checks and the LED run often
 #define TIME_TO_WAKE 15
-// Seconds asleep, 0 reboots at once
+// Seconds off the air, 0 reboots at once. The fox shortens its sleep by its
+// boot time so one cycle is exactly TIME_TO_WAKE + TIME_TO_SLEEP
 #define TIME_TO_SLEEP 5
 // A WIFI_POWER_* name from the list at the top
 #define TXPOWER WIFI_POWER_17dBm
@@ -61,7 +62,8 @@
 // Seconds awake, at least 1. Keep it to a few minutes so the startup
 // checks and the LED run often
 #define TIME_TO_WAKE 30
-// Seconds asleep, 0 reboots at once
+// Seconds off the air, 0 reboots at once. The fox shortens its sleep by its
+// boot time so one cycle is exactly TIME_TO_WAKE + TIME_TO_SLEEP
 #define TIME_TO_SLEEP 45
 // A WIFI_POWER_* name from the list at the top
 #define TXPOWER WIFI_POWER_7dBm
@@ -85,7 +87,8 @@
 // Seconds awake, at least 1. Keep it to a few minutes so the startup
 // checks and the LED run often
 #define TIME_TO_WAKE 15
-// Seconds asleep, 0 reboots at once
+// Seconds off the air, 0 reboots at once. The fox shortens its sleep by its
+// boot time so one cycle is exactly TIME_TO_WAKE + TIME_TO_SLEEP
 #define TIME_TO_SLEEP 5
 // A WIFI_POWER_* name from the list at the top
 #define TXPOWER WIFI_POWER_17dBm
@@ -109,7 +112,8 @@
 // Seconds awake, at least 1. Keep it to a few minutes so the startup
 // checks and the LED run often
 #define TIME_TO_WAKE 30
-// Seconds asleep, 0 reboots at once
+// Seconds off the air, 0 reboots at once. The fox shortens its sleep by its
+// boot time so one cycle is exactly TIME_TO_WAKE + TIME_TO_SLEEP
 #define TIME_TO_SLEEP 45
 // A WIFI_POWER_* name from the list at the top
 #define TXPOWER WIFI_POWER_7dBm
@@ -129,8 +133,9 @@
 // Seconds awake, at least 1. Keep it to a few minutes so the startup
 // checks and the LED run often
 #define TIME_TO_WAKE 300
-// Seconds asleep, 0 reboots at once
-#define TIME_TO_SLEEP 1
+// Seconds off the air, 0 reboots at once. The fox shortens its sleep by its
+// boot time so one cycle is exactly TIME_TO_WAKE + TIME_TO_SLEEP
+#define TIME_TO_SLEEP 0
 // A WIFI_POWER_* name from the list at the top
 #define TXPOWER WIFI_POWER_17dBm
 #endif
@@ -147,7 +152,8 @@
 // Seconds awake, at least 1. Keep it to a few minutes so the startup
 // checks and the LED run often
 #define TIME_TO_WAKE 300
-// Seconds asleep, 0 reboots at once
+// Seconds off the air, 0 reboots at once. The fox shortens its sleep by its
+// boot time so one cycle is exactly TIME_TO_WAKE + TIME_TO_SLEEP
 #define TIME_TO_SLEEP 0
 // A WIFI_POWER_* name from the list at the top
 #define TXPOWER WIFI_POWER_17dBm

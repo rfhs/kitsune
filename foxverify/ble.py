@@ -266,8 +266,8 @@ def rows(report: Report, block: Block, readback: Readback, seen: Optional[Seen],
          reason: str = "") -> None:
     """The on-air rows of the iBeacon fox: MAC_ADDR, DEVICE_NAME, BEACON_UUID,
     MAJOR, MINOR and SIGNAL_POWER. ``seen`` None means the fox was not heard
-    and ``reason`` says why. The advertising power is the caller's serial-only
-    row."""
+    and ``reason`` says why. The timers and TXPOWER are the caller's
+    serial-only rows."""
     if seen is None and not reason:
         reason = "not seen by the scan"
     beacon = seen.beacon if seen else None

@@ -257,8 +257,20 @@ class DifferentHeaderTest(unittest.TestCase):
         self.assertEqual(rows["SHORT_ADDR"][2:], ("-", "-", "FAIL"))
         self.assertIn("FAIL: not printed on serial", result.out)
         self.assertEqual(rows["TIME_TO_WAKE"][4], "serial")
-        self.assertEqual(len(result.notes), 1)
-        self.assertTrue(result.notes[0].startswith("the fox refused to run: Operating PAN ID != Requested PAN ID"))
+        self.assertEqual(result.notes, ["the fox refused to run: Operating PAN ID != Requested PAN ID"])
+
+    def test_fox_whose_radio_start_failed(self):
+        """The start failure is printed before the banner, which rfhsfatal()
+        prints on its own: the run reports a halted fox with the reason and
+        exits 1, not a device that is not a fox."""
+        result = verify("zigbee_coordinator", fixture("transcripts", "zigbee_start_failed.log"))
+        self.assertEqual(result.code, EXIT_FAIL, result.out + result.err)
+        self.assertEqual(result.err, "")
+        self.assertIn("Fox: zigbee_coordinator EASY", result.out)
+        self.assertEqual(result.rows, [("MAC_ADDR", "F2:5A:3C:91:0E:7B:44:D8", "-", "-", "FAIL")])
+        self.assertIn("FAIL: not printed on serial", result.out)
+        self.assertEqual(result.notes, ["the fox refused to run: Error starting Zigbee"])
+        self.assertTrue(result.summary.startswith("FAIL: 0 pass, 1 FAIL, 0 serial, 0 unverified"), result.summary)
 
     def test_changed_serial_only_value_fails(self):
         header = frozen_text("wifi_ap_client").replace("#define TIME_TO_WAKE 15", "#define TIME_TO_WAKE 20", 1)
@@ -276,16 +288,27 @@ def live_demo(project):
     return os.path.join(REPO, PROJECT_DIRS[project], "src", "conferences", "9999demo.h")
 
 
+SETTING_UP = {"classic_discoverable": "Bluetooth Classic", "iBeacon": "iBeacon",
+              "AP": "WiFi AP", "CLIENT": "WiFi Client", "zigbee_coordinator": "Zigbee Coordinator"}
+
+
 def transcript_for(project, difficulty, mode, block):
-    """The readback lines a fox built from ``block`` prints, in the firmware's
-    formats, so a header can be replayed against itself. A random CHANNEL or
-    PAN_ID is printed as a fixed stand-in for what the fox would have picked."""
-    lines = ["Fox: %s %s%s" % (project, difficulty, " " + mode if mode else "")]
-    if "TIME_TO_WAKE" in block:
-        lines += ["Time to wake: %ss" % block.display("TIME_TO_WAKE"),
-                  "Time to sleep: %ss" % block.display("TIME_TO_SLEEP")]
+    """The lines a fox built from ``block`` prints, in the firmware's formats
+    and order, so a header can be replayed against itself: the boot lines of
+    rfhsboot(), the MAC set, the banner, the timers, the device address first
+    of the readbacks, then the radio's values and "Awake and screaming". A
+    random CHANNEL or PAN_ID is printed as a fixed stand-in for what the fox
+    would have picked."""
+    lines = ["Initializing...", "ESP32 boot count: 0", "Sleep stats: 0s since cold boot, 0s since last wakeup",
+             "Setting up %s..." % SETTING_UP[mode or project], "MAC address set successfully"]
+    if project == "wifi_ap_client":
+        lines.append("Set power status: ok")
+    lines += ["Fox: %s %s%s" % (project, difficulty, " " + mode if mode else ""),
+              "Time to wake: %ss" % block.display("TIME_TO_WAKE"),
+              "Time to sleep: %ss" % block.display("TIME_TO_SLEEP"),
+              "Device address: " + block.mac("MAC_ADDR")]
     if project == "classic_discoverable":
-        lines += ["Device name: " + block.string("NAME"), "Device address: " + block.mac("MAC_ADDR")]
+        lines += ["Device name: " + block.string("NAME")]
     elif project == "iBeacon":
         power = block.integer("SIGNAL_POWER")
         # The ESP_PWR_LVL_* name spells out its dBm: N12 is -12, P9 is +9.
@@ -295,20 +318,17 @@ def transcript_for(project, difficulty, mode, block):
                   "Major: 0x%04X (%d)" % (block.integer("MAJOR"), block.integer("MAJOR")),
                   "Minor: 0x%04X (%d)" % (block.integer("MINOR"), block.integer("MINOR")),
                   "Signal power: %d" % (power - 256 if power > 127 else power),
-                  "Device address: " + block.mac("MAC_ADDR"), "Tx power: %s (%d dBm)" % (tx_power, dbm)]
+                  "Tx power: %s (%d dBm)" % (tx_power, dbm)]
     elif project == "wifi_ap_client" and mode == "AP":
-        lines += ["Started AP with MAC Address: " + block.mac("MAC_ADDR"),
-                  "Operating channel: %d" % (block.integer("CHANNEL") or 6),
+        lines += ["Operating channel: %d" % (block.integer("CHANNEL") or 6),
                   "Operating SSID: " + block.string("FSSID"), "Operating PSK: " + block.string("PSK"),
                   "Hidden SSID: " + block.display("SSID_HIDDEN"), "Max clients: " + block.display("MAX_CLIENTS"),
                   "Tx power: " + block.identifier("TXPOWER")]
     elif project == "wifi_ap_client":
-        lines += ["Started Client with MAC Address: " + block.mac("MAC_ADDR"),
-                  "Operating SSID: " + block.string("FSSID"), "Operating PSK: " + block.string("PSK"),
+        lines += ["Operating SSID: " + block.string("FSSID"), "Operating PSK: " + block.string("PSK"),
                   "Tx power: " + block.identifier("TXPOWER")]
     else:
-        lines += ["Started Coordinator with MAC Address: " + block.mac("MAC_ADDR"),
-                  "Operating channel: %d" % (block.integer("CHANNEL") or 11),
+        lines += ["Operating channel: %d" % (block.integer("CHANNEL") or 11),
                   "Operating PAN ID: 0x%04X" % (0x1234 if block.is_bare_zero("PAN_ID") else block.integer("PAN_ID")),
                   "Extended PAN ID: " + block.mac("EXT_PAN_ID"), "Short address: 0x0000",
                   "Packet interval: %ss" % block.display("PACKET_INTERVAL"),
@@ -598,7 +618,7 @@ class AirRunTest(unittest.TestCase):
     def test_zigbee_without_a_channel_on_serial(self):
         from foxverify import zigbee
         with tempfile.NamedTemporaryFile("w", suffix=".log", delete=False) as handle:
-            handle.write("Fox: zigbee_coordinator EASY\nStarted Coordinator with MAC Address: F2:5A:3C:91:0E:7B:44:D8\n")
+            handle.write("Fox: zigbee_coordinator EASY\nDevice address: F2:5A:3C:91:0E:7B:44:D8\n")
         self.addCleanup(os.unlink, handle.name)
         with mock.patch.object(zigbee, "observe", side_effect=AssertionError("observe must not run")):
             result, _ = air_run(run.ZigbeeRun, "zigbee_coordinator", handle.name, lambda candidates: "/dev/ttyACM3")

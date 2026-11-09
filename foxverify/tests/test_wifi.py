@@ -173,7 +173,7 @@ class RowsTest(unittest.TestCase):
 
     def test_ap_rows_random_channel_accepts_the_fox_choice(self):
         block = conf.select(HEADER, ["AP", "HARD"])
-        readback = parse_transcript("Fox: wifi_ap_client HARD AP\nStarted AP with MAC Address: F2:72:C1:79:16:1B\n"
+        readback = parse_transcript("Fox: wifi_ap_client HARD AP\nDevice address: F2:72:C1:79:16:1B\n"
                                     "Operating channel: 6\nOperating SSID: Demo YT WiFi AP Hard Fox\n"
                                     "Hidden SSID: 0\n")
         b = beacon(1)._replace(ssid="Demo YT WiFi AP Hard Fox")
@@ -187,7 +187,7 @@ class RowsTest(unittest.TestCase):
         block = conf.select(HEADER, ["AP", "HARD"])
         text = HEADER.replace("#define SSID_HIDDEN 0", "#define SSID_HIDDEN 1")
         block = conf.select(text, ["AP", "HARD"])
-        readback = parse_transcript("Started AP with MAC Address: F2:72:C1:79:16:1B\nOperating channel: 6\n"
+        readback = parse_transcript("Device address: F2:72:C1:79:16:1B\nOperating channel: 6\n"
                                     "Operating SSID: Demo YT WiFi AP Hard Fox\nHidden SSID: 1\n")
         wifi.ap_rows(self.report, block, readback, beacon(1))
         rows = {row.value: row for row in self.report.rows}

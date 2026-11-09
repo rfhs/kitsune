@@ -451,7 +451,7 @@ def ap_rows(report: Report, block: Block, readback: Readback, beacon: Optional[B
     and ``reason`` says why; the serial-only values (PSK text, MAX_CLIENTS,
     the timers, TXPOWER) are the caller's rows."""
     header_mac = block.mac("MAC_ADDR")
-    serial_mac = readback.upper("mac")
+    serial_mac = readback.upper("address")
     report.check("MAC_ADDR", header_mac, serial_mac, beacon.bssid if beacon else None,
                  reason=reason)
 
@@ -487,7 +487,7 @@ def client_rows(report: Report, block: Block, readback: Readback, probes: Option
     """The on-air rows of a client fox: MAC_ADDR from the probe requests'
     source and FSSID from the SSID they carry."""
     header_mac = block.mac("MAC_ADDR")
-    serial_mac = readback.upper("mac")
+    serial_mac = readback.upper("address")
     ssid = block.string("FSSID")
     serial_ssid = readback.get("ssid")
     if probes is None or not probes.seen():

@@ -8,16 +8,16 @@ load:0x3fff0030,len:1344
 load:0x40078000,len:13964
 load:0x40080400,len:3600
 entry 0x400805f0
-Setting up WiFi Client…
-MAC address set successfully
-
 Initializing...
 ESP32 boot count: 0
 Sleep stats: 0s since cold boot, 0s since last wakeup
+Setting up WiFi Client...
+MAC address set successfully
+Set power status: ok
 Fox: wifi_ap_client EASY CLIENT
 Time to wake: 300s
-Time to sleep: 1s
-Started Client with MAC Address: F2:44:5E:10:97:F4
+Time to sleep: 0s
+Device address: F2:44:5E:10:97:F4
 Operating SSID: Demo Ng WiFi Client Easy Fox
 Operating PSK: 0123456789
 Tx power: WIFI_POWER_17dBm

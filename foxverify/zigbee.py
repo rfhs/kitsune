@@ -384,7 +384,7 @@ def rows(report: Report, block: Block, readback: Readback, observation: Optional
     if frame is None and not reason:
         reason = "no frame from a coordinator heard"
 
-    report.check("MAC_ADDR", block.mac("MAC_ADDR"), readback.upper("mac"),
+    report.check("MAC_ADDR", block.mac("MAC_ADDR"), readback.upper("address"),
                  frame.mac if frame else None, reason=reason)
 
     channel = block.integer("CHANNEL")

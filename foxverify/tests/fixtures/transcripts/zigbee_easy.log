@@ -7,16 +7,15 @@ load:0x40855610,len:0x1708
 load:0x4084bb20,len:0xd40
 load:0x4084e320,len:0x3104
 entry 0x4084bb20
-MAC address set successfully
-
 Initializing...
 ESP32 boot count: 0
 Sleep stats: 0s since cold boot, 0s since last wakeup
-Setting up Zigbee Coordinator…
+Setting up Zigbee Coordinator...
+MAC address set successfully
 Fox: zigbee_coordinator EASY
 Time to wake: 300s
-Time to sleep: 1s
-Started Coordinator with MAC Address: F2:5A:3C:91:0E:7B:44:D8
+Time to sleep: 0s
+Device address: F2:5A:3C:91:0E:7B:44:D8
 Operating channel: 15
 Operating PAN ID: 0x1337
 Extended PAN ID: F2:5A:3C:91:0E:7B:44:D8

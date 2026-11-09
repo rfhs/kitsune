@@ -2,9 +2,10 @@
 
 Every fox prints at 115200 baud. After its radio is up it prints the banner
 ``Fox: <project> <DIFFICULTY> [<MODE>]`` and then its readback lines, one
-value per line, in the formats of the firmware's ``printf`` calls. ``LINES``
-holds one regex per line the four projects print; ``Readback.feed`` matches
-them and keeps the captured values under the field names in ``LINES``.
+value per line, in the formats of the firmware's ``printf`` calls, the
+device address first and "Awake and screaming" last. ``LINES`` holds one
+regex per line the four projects print; ``Readback.feed`` matches them and
+keeps the captured values under the field names in ``LINES``.
 
 Reset. The pulse is esptool's HardReset: DTR low with RTS high for 0.1 s, then
 RTS low. On a USB-UART board (CP210x, CH910x) RTS drives EN and DTR drives IO0
@@ -45,12 +46,10 @@ NO_OUTPUT_SECONDS = 10.0
 NO_BANNER_SECONDS = 15.0
 RESET_PULSE_SECONDS = 0.1
 # Seconds without a new line after the banner before the readback counts as
-# complete when no project specific last line was seen.
+# complete when the awake line was not seen.
 QUIET_SECONDS = 2.0
-# Seconds the read goes on after the project's last line, so the mismatch and
-# PANIC lines a fox prints right after it are still taken. Classic prints
-# nothing else for TIME_TO_WAKE seconds after its address, so the read cannot
-# wait for a later line there.
+# Seconds the read goes on after the awake line, which ends the readback
+# burst, so a line a fox prints on its heels is still taken.
 DRAIN_SECONDS = 0.5
 # How often a vanished serial device is polled for while it re-enumerates.
 REOPEN_POLL_SECONDS = 0.2
@@ -75,13 +74,9 @@ PROJECT_DIRS = {
     "zigbee_coordinator": "zigbee/zigbee_coordinator",
 }
 
-# The field whose line ends a project's readback on the success path.
-LAST_FIELD = {
-    "classic_discoverable": "address",
-    "iBeacon": "advertising",
-    "wifi_ap_client": "awake",
-    "zigbee_coordinator": "awake",
-}
+# The field whose line ends every fox's readback on the success path: the
+# radio header's checks are printed and then "Awake and screaming".
+LAST_FIELD = "awake"
 
 
 def wrong_project(project: str) -> str:
@@ -105,65 +100,68 @@ class Banner(NamedTuple):
 
 BANNER = re.compile(r"^Fox: (\S+) (EASY|MEDIUM|HARD|FIVEEASY|FIVEHARD)(?: (AP|CLIENT))?$")
 
-_MAC6 = r"((?:[0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2})"
+# Six colon separated bytes for a Bluetooth or Wi-Fi address, eight for the
+# Zigbee EUI-64 and the extended PAN ID.
+_MAC6_OR_8 = r"((?:[0-9A-Fa-f]{2}:){5}(?:(?:[0-9A-Fa-f]{2}:){2})?[0-9A-Fa-f]{2})"
 _MAC8 = r"((?:[0-9A-Fa-f]{2}:){7}[0-9A-Fa-f]{2})"
 _U16 = r"(0x[0-9A-Fa-f]{4})"
 
 # (field, regex) for every line a fox prints, in the firmware's own formats.
-# A field with several lines (mac, sleeping, tx_power) is written by whichever
-# appears.
+# A field with several lines (tx_power) is written by whichever appears.
 # Group 1 is the value kept; a regex without groups keeps the whole line.
 LINES: List[Tuple[str, "re.Pattern[str]"]] = [
-    # include/rfhssleeptimers.h and every main.cpp
+    # include/rfhsfox.h and include/rfhssleeptimers.h, the same in every fox.
+    # "Last cycle" comes with a timer wake-up and "Cycle behind" when a
+    # fox with a non-zero TIME_TO_SLEEP ran past its cycle; both are
+    # informational, no row reads them.
     ("initializing", re.compile(r"^Initializing\.\.\.$")),
     ("boot_count", re.compile(r"^ESP32 boot count: (\d+)$")),
     ("sleep_stats", re.compile(r"^Sleep stats: (-?\d+s since cold boot, -?\d+s since last wakeup)$")),
+    ("last_cycle", re.compile(r"^Last cycle: (\d+\.\d+s, target \d+s)$")),
+    ("setting_up", re.compile(r"^Setting up (.+)\.\.\.$")),
     ("mac_set", re.compile(r"^MAC address set (successfully)$")),
-    ("awake", re.compile(r"^(Awake and screaming)$")),
-    ("sleeping", re.compile(r"^(Going to sleep)$")),
-    ("sleeping", re.compile(r"^(entering deep sleep)$")),
-    ("setting_up", re.compile(r"^Setting up (.+?)\u2026?$")),
-    ("tx_power_status", re.compile(r"^Set power status: (ok|failed)$")),
     ("time_to_wake", re.compile(r"^Time to wake: (\d+)s$")),
     ("time_to_sleep", re.compile(r"^Time to sleep: (\d+)s$")),
+    ("awake", re.compile(r"^(Awake and screaming)$")),
+    ("sleeping", re.compile(r"^(Going to sleep)$")),
+    ("cycle_behind", re.compile(r"^Cycle behind by (\d+\.\d+)s, rebooting at once$")),
+    # include/rfhsconfcheck.h: the first readback line of every fox.
+    ("address", re.compile(r"^Device address: " + _MAC6_OR_8 + "$")),
     # include/rfhswifi.h, include/rfhszigbee.h and include/rfhsibeacon.h;
     # Wi-Fi prints the WIFI_POWER_* name, Zigbee a dBm number, iBeacon the
     # ESP_PWR_LVL_* name with its dBm in parentheses.
+    ("tx_power_status", re.compile(r"^Set power status: (ok|failed)$")),
     ("psk", re.compile(r"^Operating PSK: (.*)$")),
     ("ssid_hidden", re.compile(r"^Hidden SSID: ([01])$")),
     ("max_clients", re.compile(r"^Max clients: (\d+)$")),
     ("tx_power", re.compile(r"^Tx power: (\S+?)(?: dBm)?$")),
     ("tx_power", re.compile(r"^Tx power: (ESP_PWR_LVL_\w+) \(-?\d+ dBm\)$")),
-    # include/rfhszigbee.h and wifi/wifi_ap_client/src/main.cpp
-    ("mac", re.compile(r"^Started Coordinator with MAC Address: " + _MAC8 + "$")),
-    ("mac", re.compile(r"^Started AP with MAC Address: " + _MAC6 + "$")),
-    ("mac", re.compile(r"^Started Client with MAC Address: " + _MAC6 + "$")),
+    # include/rfhswifi.h and include/rfhszigbee.h
     ("channel", re.compile(r"^Operating channel: (\d+)$")),
     ("pan_id", re.compile(r"^Operating PAN ID: " + _U16 + "$")),
     ("ext_pan_id", re.compile(r"^Extended PAN ID: " + _MAC8 + "$")),
     ("short_address", re.compile(r"^Short address: " + _U16 + "$")),
     ("packet_interval", re.compile(r"^Packet interval: (\d+)s$")),
     ("ssid", re.compile(r"^Operating SSID: (.*)$")),
-    # include/rfhsbt.h, rfhsclassicdiscoverable.h and rfhsibeacon.h
+    # include/rfhsclassicdiscoverable.h and include/rfhsibeacon.h
     ("name", re.compile(r"^Device name: (.*)$")),
-    ("address", re.compile(r"^Device address: " + _MAC6 + "$")),
     ("uuid", re.compile(r"^Beacon UUID: ([0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-"
                         r"[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12})$")),
     ("major", re.compile(r"^Major: 0x[0-9A-Fa-f]{4} \((\d+)\)$")),
     ("minor", re.compile(r"^Minor: 0x[0-9A-Fa-f]{4} \((\d+)\)$")),
     ("signal_power", re.compile(r"^Signal power: (-?\d+)$")),
-    ("advertising", re.compile(r"^(iBeacon advertising!)$")),
 ]
 
 # Lines that mean the fox refused to run or is not healthy. The firmware
-# prints one of these, then halts on the fatal LED and prints PANIC.
+# prints one of these, then "Fatal <code>: <reason>" and PANIC before it
+# halts on the blinking LED.
 PROBLEMS = [
     re.compile(r"^.* != .*$"),
     re.compile(r"^Error .*$"),
     re.compile(r"^Device address: unavailable.*$"),
     re.compile(r"^Beacon data is \d+ bytes, not 25$"),
+    re.compile(r"^Fatal \d+: "),
     re.compile(r"^PANIC$"),
-    re.compile(r"^Entered loop, we are broken$"),
 ]
 
 # "Requested <what>: <value>" accompanies a mismatch; kept under requested:<what>.
@@ -231,13 +229,10 @@ class Readback:
         return bool(self.problems)
 
     def complete(self) -> bool:
-        """True once the project's last readback line or a problem was seen."""
+        """True once the awake line or a problem was seen after the banner."""
         if self.banner is None:
             return False
-        if self.problems:
-            return True
-        last = LAST_FIELD.get(self.banner.project)
-        return last is not None and last in self.fields
+        return bool(self.problems) or LAST_FIELD in self.fields
 
     def transcript(self) -> str:
         return "\n".join(self.lines) + ("\n" if self.lines else "")
@@ -423,9 +418,11 @@ def read_fox(source, deadline: Deadline, reset: bool = True,
              debug: Callable[[str], None] = lambda text: None) -> Readback:
     """Reset the fox, wait for its banner, read its readback lines.
 
-    Returns the ``Readback`` once a problem line, the project's last line plus
+    Returns the ``Readback`` once a problem line, the awake line plus
     ``DRAIN_SECONDS``, a quiet spell after the banner or the deadline ends it.
-    Raises ``RunError`` with the not-a-fox texts when no banner arrives.
+    A fox whose radio start failed prints its "Error ..." line before the
+    banner; the read goes on to the banner and stops there. Raises
+    ``RunError`` with the not-a-fox texts when no banner arrives.
     """
     readback = Readback()
     buffer = ""

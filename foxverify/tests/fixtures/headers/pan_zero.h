@@ -6,7 +6,7 @@
 #define CHANNEL 0
 #define PAN_ID 0
 #define TIME_TO_WAKE 300
-#define TIME_TO_SLEEP 1
+#define TIME_TO_SLEEP 0
 #define PACKET_INTERVAL 1
 #define TXPOWER 20
 #endif
@@ -16,7 +16,7 @@
 #define CHANNEL 11
 #define PAN_ID 0x0000
 #define TIME_TO_WAKE 300
-#define TIME_TO_SLEEP 1
+#define TIME_TO_SLEEP 0
 #define PACKET_INTERVAL 15
 #define TXPOWER -15
 #endif

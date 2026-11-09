@@ -14,20 +14,21 @@ PROJECT_DIRS = {
     "zigbee_coordinator": "zigbee/zigbee_coordinator",
 }
 
-TIMERS = {"time_to_wake": "TIME_TO_WAKE", "time_to_sleep": "TIME_TO_SLEEP"}
-WIFI_COMMON = dict(TIMERS, mac="MAC_ADDR", ssid="FSSID", psk="PSK", tx_power="TXPOWER")
+# The fields every fox prints: the device address first, the timers after
+# the banner.
+COMMON = {"address": "MAC_ADDR", "time_to_wake": "TIME_TO_WAKE", "time_to_sleep": "TIME_TO_SLEEP"}
+CLASSIC = dict(COMMON, name="NAME")
+WIFI_COMMON = dict(COMMON, ssid="FSSID", psk="PSK", tx_power="TXPOWER")
 WIFI_AP = dict(WIFI_COMMON, ssid_hidden="SSID_HIDDEN", max_clients="MAX_CLIENTS")
-ZIGBEE = dict(TIMERS, mac="MAC_ADDR", channel="CHANNEL", pan_id="PAN_ID", ext_pan_id="EXT_PAN_ID",
+ZIGBEE = dict(COMMON, channel="CHANNEL", pan_id="PAN_ID", ext_pan_id="EXT_PAN_ID",
               packet_interval="PACKET_INTERVAL", tx_power="TXPOWER")
-IBEACON = dict(TIMERS, name="DEVICE_NAME", uuid="BEACON_UUID", major="MAJOR", minor="MINOR",
-               address="MAC_ADDR", tx_power="TXPOWER")
+IBEACON = dict(COMMON, name="DEVICE_NAME", uuid="BEACON_UUID", major="MAJOR", minor="MINOR",
+               tx_power="TXPOWER")
 
 # transcript -> (project, difficulty, mode, serial field -> header macro)
 TRANSCRIPTS = {
-    "classic_easy": ("classic_discoverable", "EASY", None,
-                     dict(TIMERS, name="NAME", address="MAC_ADDR")),
-    "classic_hard": ("classic_discoverable", "HARD", None,
-                     dict(TIMERS, name="NAME", address="MAC_ADDR")),
+    "classic_easy": ("classic_discoverable", "EASY", None, CLASSIC),
+    "classic_hard": ("classic_discoverable", "HARD", None, CLASSIC),
     "ibeacon_easy": ("iBeacon", "EASY", None, IBEACON),
     "ibeacon_medium": ("iBeacon", "MEDIUM", None, IBEACON),
     "ibeacon_hard": ("iBeacon", "HARD", None, IBEACON),
@@ -106,6 +107,12 @@ class TranscriptTest(unittest.TestCase):
             self.assertEqual(readback.get("initializing"), "Initializing...", name)
             self.assertIsNotNone(readback.integer("boot_count"), name)
             self.assertIn("since cold boot", readback.get("sleep_stats"), name)
+            self.assertEqual(readback.get("mac_set"), "successfully", name)
+            self.assertEqual(readback.get("awake"), "Awake and screaming", name)
+            # Every line from the firmware's first one on has a regex; only
+            # the ROM's boot text before it is unmatched.
+            firmware = readback.lines[readback.lines.index("Initializing..."):]
+            self.assertEqual([line for line in firmware if line in readback.unmatched], [], name)
             block = serial_fox.block_for(readback, project, frozen_text(project))
             for field, macro in fields.items():
                 value = readback.get(field)
@@ -135,9 +142,9 @@ class TranscriptTest(unittest.TestCase):
 
     def test_wifi_fields(self):
         readback = serial_fox.parse_transcript(transcript("wifi_easy_ap"))
-        self.assertEqual(readback.get("setting_up"), "AP (Access Point)")
+        self.assertEqual(readback.get("setting_up"), "WiFi AP")
         self.assertEqual(readback.get("tx_power_status"), "ok")
-        self.assertEqual(readback.get("mac"), "F2:F4:90:22:0D:0F")
+        self.assertEqual(readback.get("address"), "F2:F4:90:22:0D:0F")
         self.assertEqual(readback.integer("channel"), 1)
         self.assertEqual(readback.get("ssid"), "Demo Hiro WiFi AP Easy Fox")
         self.assertEqual(readback.get("psk"), "0123456789")
@@ -146,41 +153,83 @@ class TranscriptTest(unittest.TestCase):
         self.assertEqual(readback.get("tx_power"), "WIFI_POWER_17dBm")
         self.assertEqual(readback.integer("time_to_wake"), 15)
         self.assertEqual(readback.integer("time_to_sleep"), 5)
+        self.assertEqual(readback.get("last_cycle"), "20.0s, target 20s")
         client = serial_fox.parse_transcript(transcript("wifi_hard_client"))
         self.assertEqual(client.get("setting_up"), "WiFi Client")
-        self.assertEqual(client.get("mac"), "F2:83:27:31:80:C7")
+        self.assertEqual(client.get("tx_power_status"), "ok")
+        self.assertEqual(client.get("address"), "F2:83:27:31:80:C7")
         self.assertIsNone(client.get("channel"))
         self.assertEqual(client.get("ssid"), "Demo Mr Lee WiFi Client Hard Fox")
         self.assertEqual(client.get("psk"), "0123456789")
         self.assertIsNone(client.get("ssid_hidden"))
         self.assertIsNone(client.get("max_clients"))
+        self.assertEqual(client.integer("time_to_sleep"), 0)
+        self.assertEqual(client.get("last_cycle"), "301.4s, target 300s")
+
+    def test_cycle_lines(self):
+        """The informational lines of the exact cycle: "Last cycle" on a timer
+        wake-up and "Cycle behind" after "Going to sleep" when the fox could
+        not honour a non-zero TIME_TO_SLEEP."""
+        behind = serial_fox.parse_transcript(transcript("wifi_fiveeasy_ap"))
+        self.assertEqual(behind.get("last_cycle"), "21.3s, target 20s")
+        self.assertEqual(behind.get("sleeping"), "Going to sleep")
+        self.assertEqual(behind.get("cycle_behind"), "1.3")
+        self.assertEqual(behind.lines[-2:], ["Going to sleep", "Cycle behind by 1.3s, rebooting at once"])
+        self.assertFalse(behind.halted())
+        self.assertTrue(behind.complete())
+        for name in ("classic_easy", "ibeacon_easy", "wifi_easy_client", "zigbee_easy"):
+            readback = serial_fox.parse_transcript(transcript(name))
+            self.assertEqual(readback.integer("boot_count"), 0, name)
+            self.assertIsNone(readback.get("last_cycle"), name)
+            self.assertIsNone(readback.get("cycle_behind"), name)
+        for name in ("classic_hard", "ibeacon_medium", "ibeacon_hard", "zigbee_hard"):
+            readback = serial_fox.parse_transcript(transcript(name))
+            self.assertGreater(readback.integer("boot_count"), 0, name)
+            self.assertRegex(readback.get("last_cycle"), r"^\d+\.\ds, target \d+s$", name)
+            self.assertIsNone(readback.get("cycle_behind"), name)
 
     def test_zigbee_and_classic_power_and_timers(self):
         zigbee = serial_fox.parse_transcript(transcript("zigbee_hard"))
+        self.assertEqual(zigbee.get("setting_up"), "Zigbee Coordinator")
+        self.assertEqual(zigbee.get("address"), "F2:A7:19:62:C3:08:BE:35")
         self.assertEqual(zigbee.get("tx_power"), "20")
         self.assertEqual(zigbee.integer("tx_power"), 20)
         self.assertEqual(zigbee.integer("time_to_wake"), 300)
-        self.assertEqual(zigbee.integer("time_to_sleep"), 1)
+        self.assertEqual(zigbee.integer("time_to_sleep"), 0)
+        self.assertEqual(zigbee.get("last_cycle"), "304.2s, target 300s")
         negative = serial_fox.parse_transcript("Tx power: -15 dBm\n")
         self.assertEqual(negative.integer("tx_power"), -15)
         classic = serial_fox.parse_transcript(transcript("classic_hard"))
+        self.assertEqual(classic.get("setting_up"), "Bluetooth Classic")
         self.assertEqual(classic.integer("time_to_wake"), 30)
         self.assertEqual(classic.integer("time_to_sleep"), 30)
+        self.assertEqual(classic.get("last_cycle"), "60.0s, target 60s")
         self.assertIsNone(classic.get("tx_power"))
+
+    def test_address_is_six_or_eight_bytes(self):
+        for text, expected in [("Device address: F2:81:5A:C1:A3:26", "F2:81:5A:C1:A3:26"),
+                               ("Device address: f2:5a:3c:91:0e:7b:44:d8", "f2:5a:3c:91:0e:7b:44:d8")]:
+            self.assertEqual(serial_fox.parse_transcript(text + "\n").get("address"), expected, text)
+        for text in ("Device address: F2:81:5A:C1:A3", "Device address: F2:81:5A:C1:A3:26:27",
+                     "Device address: F2:81:5A:C1:A3:26:27:28:29", "Device address: F2-81-5A-C1-A3-26"):
+            readback = serial_fox.parse_transcript(text + "\n")
+            self.assertIsNone(readback.get("address"), text)
+            self.assertEqual(readback.unmatched, [text], text)
 
     def test_ibeacon_fields(self):
         readback = serial_fox.parse_transcript(transcript("ibeacon_hard"))
+        self.assertEqual(readback.get("setting_up"), "iBeacon")
+        self.assertEqual(readback.get("address"), "F2:AC:87:05:0A:C7")
         self.assertEqual(readback.get("name"), "Demo 3Jane BLE Hard Fox")
         self.assertEqual(readback.upper("uuid"), "DB6A0ED0-1DC3-4348-BD78-E997A0C082A3")
         self.assertEqual(readback.integer("major"), 5)
         self.assertEqual(readback.integer("minor"), 88)
         self.assertEqual(readback.integer("signal_power"), -59)
-        self.assertEqual(readback.get("address"), "F2:AC:87:05:0A:C7")
         self.assertEqual(readback.get("tx_power"), "ESP_PWR_LVL_N12")
         self.assertEqual(readback.integer("time_to_wake"), 10)
         self.assertEqual(readback.integer("time_to_sleep"), 30)
-        self.assertEqual(readback.get("advertising"), "iBeacon advertising!")
-        self.assertEqual(readback.get("sleeping"), "entering deep sleep")
+        self.assertEqual(readback.get("awake"), "Awake and screaming")
+        self.assertEqual(readback.get("sleeping"), "Going to sleep")
         easy = serial_fox.parse_transcript(transcript("ibeacon_easy"))
         self.assertEqual(easy.get("tx_power"), "ESP_PWR_LVL_P9")
         self.assertEqual(easy.integer("time_to_wake"), 300)
@@ -188,24 +237,31 @@ class TranscriptTest(unittest.TestCase):
         self.assertIsNone(easy.get("sleeping"))
         mismatch = serial_fox.parse_transcript("Tx power: ESP_PWR_LVL_P3 (3 dBm)\n"
                                                "Requested tx power: ESP_PWR_LVL_N0 (0 dBm)\n"
-                                               "Tx power != Requested tx power\nPANIC\n")
+                                               "Tx power != Requested tx power\n"
+                                               "Fatal 2: readback mismatch\nPANIC\n")
         self.assertEqual(mismatch.get("tx_power"), "ESP_PWR_LVL_P3")
         self.assertEqual(mismatch.get("requested:tx power"), "ESP_PWR_LVL_N0 (0 dBm)")
-        self.assertEqual(mismatch.problems, ["Tx power != Requested tx power", "PANIC"])
+        self.assertEqual(mismatch.problems, ["Tx power != Requested tx power", "Fatal 2: readback mismatch", "PANIC"])
 
     def test_classic_fields(self):
         readback = serial_fox.parse_transcript(transcript("classic_hard"))
-        self.assertEqual(readback.get("name"), "Demo Case BTC Hard Fox")
         self.assertEqual(readback.get("address"), "F2:F6:6D:BC:2A:80")
+        self.assertEqual(readback.get("name"), "Demo Case BTC Hard Fox")
+        self.assertEqual(readback.get("awake"), "Awake and screaming")
         self.assertEqual(readback.get("sleeping"), "Going to sleep")
         self.assertEqual(readback.integer("boot_count"), 4)
-        self.assertTrue(any(line.startswith("rst:0x1") for line in readback.unmatched))
+        self.assertTrue(any(line.startswith("rst:0x5") for line in readback.unmatched))
+        easy = serial_fox.parse_transcript(transcript("classic_easy"))
+        self.assertIsNone(easy.get("sleeping"))
+        self.assertTrue(any(line.startswith("rst:0x1") for line in easy.unmatched))
 
     def test_mismatch_transcripts_halt(self):
         zigbee = serial_fox.parse_transcript(transcript("zigbee_easy_mismatch"))
         self.assertTrue(zigbee.halted())
         self.assertTrue(zigbee.complete())
-        self.assertEqual(zigbee.problems, ["Operating PAN ID != Requested PAN ID", "PANIC"])
+        self.assertEqual(zigbee.problems, ["Operating PAN ID != Requested PAN ID",
+                                           "Fatal 2: readback mismatch", "PANIC"])
+        self.assertEqual(zigbee.get("address"), "F2:5A:3C:91:0E:7B:44:D8")
         self.assertEqual(zigbee.get("pan_id"), "0x1234")
         self.assertEqual(zigbee.get("requested:pan id"), "0x1337")
         self.assertIsNone(zigbee.get("awake"))
@@ -213,16 +269,40 @@ class TranscriptTest(unittest.TestCase):
         self.assertTrue(classic.halted())
         self.assertEqual(classic.get("address"), "F2:81:5A:C1:A3:28")
         self.assertEqual(classic.get("requested:address"), "F2:81:5A:C1:A3:26")
-        self.assertIn("Device address != Requested address", classic.problems)
+        self.assertIsNone(classic.get("name"))
+        self.assertEqual(classic.problems, ["Device address != Requested address",
+                                            "Fatal 2: readback mismatch", "PANIC"])
+
+    def test_start_failure_transcript_halts_with_the_banner(self):
+        """A radio start failure is printed before the banner, which
+        rfhsfatal() prints on its own; the readback is a halted fox."""
+        readback = serial_fox.parse_transcript(transcript("zigbee_start_failed"))
+        self.assertEqual(readback.banner, serial_fox.Banner("zigbee_coordinator", "EASY", None))
+        self.assertTrue(readback.halted())
+        self.assertTrue(readback.complete())
+        self.assertEqual(readback.problems, ["Error starting Zigbee", "Fatal 1: radio start failed", "PANIC"])
+        self.assertEqual(readback.get("mac_set"), "successfully")
+        self.assertIsNone(readback.get("address"))
+        self.assertIsNone(readback.get("time_to_wake"))
+        self.assertEqual(readback.lines.index("Error starting Zigbee") + 1,
+                         readback.lines.index("Fox: zigbee_coordinator EASY"))
 
     def test_other_problem_lines(self):
         for line in ("Error starting Zigbee", "Error setting MAC address",
                      "Error setting packet interval: ESP_ERR_INVALID_ARG",
+                     "Error setting country code: ESP_ERR_INVALID_ARG",
                      "Device address: unavailable, the Bluetooth stack is not enabled",
-                     "Beacon data is 0 bytes, not 25", "Entered loop, we are broken",
-                     "Read MAC Address != Requested Mac Address", "Short address != 0x0000"):
+                     "Beacon data is 0 bytes, not 25",
+                     "Fatal 1: radio start failed", "Fatal 2: readback mismatch",
+                     "Fatal 3: deep sleep returned", "Fatal 4: loop() reached",
+                     "Operating channel != Requested channel", "Extended PAN ID != Requested extended PAN ID",
+                     "Short address != Requested short address"):
             readback = serial_fox.parse_transcript(line + "\n")
             self.assertEqual(readback.problems, [line], line)
+        for line in ("Fatal: no code", "Fatality 2: readback mismatch", "PANIC!"):
+            readback = serial_fox.parse_transcript(line + "\n")
+            self.assertEqual(readback.problems, [], line)
+            self.assertEqual(readback.unmatched, [line], line)
 
     def test_rom_boot_and_empty_have_no_banner(self):
         rom = serial_fox.parse_transcript(transcript("rom_boot_only"))
@@ -349,18 +429,42 @@ class ReadFoxTest(unittest.TestCase):
         self.assertEqual(run.readback.banner.project, "zigbee_coordinator")
 
     def test_quiet_after_the_banner_ends_the_read(self):
-        lines = ["Initializing...\n", "Fox: classic_discoverable EASY\n", "Device name: Demo Molly BTC Easy Fox\n"]
+        lines = ["Initializing...\n", "Fox: classic_discoverable EASY\n", "Device address: F2:81:5A:C1:A3:26\n"]
         run = Run(timed("".join(lines)))
         self.assertIsNone(run.error)
         self.assertFalse(run.readback.complete())
-        self.assertEqual(run.readback.get("name"), "Demo Molly BTC Easy Fox")
-        self.assertIsNone(run.readback.get("address"))
+        self.assertEqual(run.readback.get("address"), "F2:81:5A:C1:A3:26")
+        self.assertIsNone(run.readback.get("name"))
         self.assertAlmostEqual(run.elapsed(), 1.0 + 0.1 + serial_fox.QUIET_SECONDS, places=3)
+
+    def test_awake_line_ends_the_read_after_the_drain(self):
+        """The read stops DRAIN_SECONDS after "Awake and screaming", so a
+        line a fox prints later is not waited for."""
+        items = timed(transcript("classic_hard"))
+        awake = next(i for i, (_, line) in enumerate(items) if line.startswith("Awake"))
+        items[awake + 1] = (30.0, items[awake + 1][1])
+        run = Run(items)
+        self.assertIsNone(run.error)
+        self.assertTrue(run.readback.complete())
+        self.assertEqual(run.readback.get("awake"), "Awake and screaming")
+        self.assertIsNone(run.readback.get("sleeping"))
+        self.assertAlmostEqual(run.elapsed(), 1.0 + 0.05 * awake + serial_fox.DRAIN_SECONDS, places=3)
 
     def test_problem_line_ends_the_read(self):
         run = Run(timed(transcript("zigbee_easy_mismatch")))
         self.assertIsNone(run.error)
         self.assertTrue(run.readback.halted())
+        self.assertEqual(run.readback.problems, ["Operating PAN ID != Requested PAN ID"])
+        self.assertLess(run.elapsed(), 3.0)
+
+    def test_start_failure_is_read_up_to_the_banner(self):
+        run = Run(timed(transcript("zigbee_start_failed")))
+        self.assertIsNone(run.error)
+        self.assertEqual(run.said, ["Fox: zigbee_coordinator EASY"])
+        self.assertTrue(run.readback.halted())
+        self.assertTrue(run.readback.complete())
+        self.assertEqual(run.readback.problems, ["Error starting Zigbee"])
+        self.assertEqual(run.readback.lines[-1], "Fox: zigbee_coordinator EASY")
         self.assertLess(run.elapsed(), 3.0)
 
     def test_no_reset_waits_for_the_natural_wake(self):

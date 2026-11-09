@@ -131,12 +131,10 @@ def header_macs(text: str) -> List[str]:
 
 class Run:
     """One run of one project's verify script. A subclass names the sniffer
-    kind it wants autodetected, the readback field that carries the fox's
-    address, and the on-air steps."""
+    kind it wants autodetected and the on-air steps."""
 
     want_sniffer = False
     want_hci = False
-    mac_field = "mac"
 
     def __init__(self, project: str, args: argparse.Namespace, out: TextIO = sys.stdout):
         self.project = project
@@ -223,7 +221,7 @@ class Run:
         MAC_ADDR row FAILs: a fox that halted on its own address check says
         so in its note, any other fox was built from a different header."""
         header_mac = block.mac("MAC_ADDR")
-        serial_mac = readback.upper(self.mac_field)
+        serial_mac = readback.upper("address")
         if serial_fox.same_mac(header_mac, serial_mac):
             return True
         self.report.check("MAC_ADDR", header_mac, serial_mac, None)
@@ -283,7 +281,6 @@ class Run:
 
 class ClassicRun(Run):
     want_hci = True
-    mac_field = "address"
 
     def check_tools(self, selection, which=shutil.which):
         if selection.hci is None:
@@ -326,7 +323,6 @@ class ClassicRun(Run):
 
 class IBeaconRun(Run):
     want_hci = True
-    mac_field = "address"
 
     def check_tools(self, selection, which=shutil.which):
         # bleak is the scanner here and the only thing the step can lack;
