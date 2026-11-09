@@ -107,11 +107,76 @@ Inside a project, `src/main.cpp` includes `src/current_conf.h`, a symlink to one
 
 Each header has one block per difficulty (`#if defined(EASY)`, `#if defined(HARD)`, ...) and every tunable is a `#define` inside it. Every tunable has a comment giving its permitted values, and the shared header that uses it refuses to compile anything else: a 5 byte MAC, a passphrase under 8 characters, a Zigbee channel of 5. The error message names the variable and the range. `./qa/guard-test` proves every one of those checks still fires.
 
+Every block of every project has `TIME_TO_WAKE`, the seconds the fox is on the air, and `TIME_TO_SLEEP`, the seconds it is off the air. One cycle, wake-up to wake-up, is exactly `TIME_TO_WAKE + TIME_TO_SLEEP`: the fox stamps the start of each cycle in RTC memory and shortens its sleep by the time its boot and checks took, and after a timer wake-up it prints `Last cycle: 60.0s, target 60s` so the serial output shows whether it kept up. A fox whose boot and checks ran past the end of a non-zero `TIME_TO_SLEEP` prints `Cycle behind by 1.3s, rebooting at once` and starts the next cycle from that moment. `TIME_TO_SLEEP 0` reboots as soon as the wake is over, which reruns the start-up checks every cycle; such a fox prints no `Cycle behind` line. `TIME_TO_WAKE` is 1-2147483 and `TIME_TO_SLEEP` 0-2147 seconds (`include/rfhssleeptimers.h`); Bluetooth Classic needs at least 15 seconds awake so an inquiry can reach it, and iBeacon at least 5, below.
+
 The iBeacon fox's on-air window, its sleep and its advertising power are conference values too: `TIME_TO_WAKE`, `TIME_TO_SLEEP` and `TXPOWER` (an `ESP_PWR_LVL_*` name, `ESP_PWR_LVL_N12` to `ESP_PWR_LVL_P9`) in every block. `TIME_TO_WAKE` must be at least 5 seconds because the name only travels in the scan response: an active scan has to hear an advertisement and then ask for the name, and a shorter window lets a scan miss the fox or see it without its name.
+
+### The shared skeleton
+
+Every `src/main.cpp` is the same twelve lines apart from two strings, the project's directory name and its radio's name. `include/rfhsfox.h` owns everything a fox does that is not its radio: `rfhsboot()` (serial, the boot LED, `Initializing...`, the boot timer, `Setting up <radio>...`), `rfhsmacset()` (`MAC address set successfully` or `Error setting MAC address`), `rfhsawake()` (`Awake and screaming`, then the wake), `rfhssleep()` (`Going to sleep`, the sleep LED and the deep sleep that keeps the cycle exact) and `rfhsfatal()` (the halt described under "The LED"). The radio header that `main.cpp` includes after it provides three functions and one colour:
+
+- `bool rfhsstartradio()` sets the MAC address through `rfhsmacset()` and starts the radio, and returns false when any step is refused.
+- `bool rfhscheckradio()` prints every value read back from the stack, the device address first, with the helpers in `include/rfhsconfcheck.h`, and returns false when one differs from the conference header.
+- `void rfhsstopradio()` takes the radio off the air.
+- `RFHS_AWAKE_COLOR` is the colour the LED shows while the radio is on.
+
+```cpp
+#include <Arduino.h>
+#include "current_conf.h"
+#define RFHS_PROJECT "classic_discoverable"
+#include <rfhsfox.h>
+#include <rfhsclassicdiscoverable.h>
+
+void setup() {
+  rfhsboot("Bluetooth Classic");
+  rfhsled(RFHS_LED_AWAKE);
+  if (!rfhsstartradio()) {
+    rfhsfatal(RFHS_FATAL_RADIO);
+  }
+  RFHS_BANNER();
+  rfhsprintsleeptimers();
+  if (!rfhscheckradio()) {
+    rfhsfatal(RFHS_FATAL_READBACK);
+  }
+  rfhsawake(TIME_TO_WAKE);
+  rfhsstopradio();
+  rfhssleep(TIME_TO_SLEEP);
+}
+
+void loop() {
+  rfhsfatal(RFHS_FATAL_LOOP);
+}
+```
+
+The awake LED is set immediately before `rfhsstartradio()`, so the LED changing is the radio being switched on. The banner `Fox: <project> <DIFFICULTY> [<MODE>]` goes out once the radio is up, because a native USB board re-enumerates after deep sleep and the time the radio takes to start is what lets the host reopen the port first; the two timers and the readback lines follow it. A fox that fails before the banner prints it from `rfhsfatal()`, so `verify` reports a fox that halted rather than a device that is not a fox.
+
+### The LED
+
+| State | Atom, AtomS3, StampS3 (WS2812) and Nano ESP32 (RGB LED) | XIAO ESP32-C5 (one LED) | From | Until |
+|---|---|---|---|---|
+| boot | dark violet, `0x9400D3` | off | the first lines of `setup()` | `rfhsstartradio()` is called |
+| awake | the radio's colour: Bluetooth Classic deep blue `0x0000FF`, iBeacon light blue `0x60A0FF`, Wi-Fi AP green `0x00FF00`, Wi-Fi client orange `0xFF8C00`, Zigbee cyan `0x00FFFF` | on | immediately before `rfhsstartradio()` | `Going to sleep` |
+| asleep | red, `0xFF0000`, through deep sleep: the WS2812 keeps its last colour while it has power and the chip holds the Nano's three pins | off, the chip holds the pin | `Going to sleep` | the next boot |
+| fatal | red blinks, as many as the code, 250 ms on and 250 ms off, then 1.5 s dark, forever | the same blinks | `PANIC` | power off |
+
+Brightness is 20 on the WS2812 boards, M5Stack's limit for the cover over the LED. The fatal codes, each printed as `Fatal <code>: <reason>` before `PANIC`, after the radio has been stopped so a halted fox never transmits:
+
+| Code | Reason | What happened |
+|---|---|---|
+| 1 | `radio start failed` | `rfhsstartradio()` returned false: the MAC address set was refused, or the stack would not start (`SerialBT.begin()`, `softAP()` or `begin()`, the Wi-Fi country code or `setTxPower()`, `Zigbee.begin()` or the link status period) |
+| 2 | `readback mismatch` | `rfhscheckradio()` read back a value that differs from the conference header |
+| 3 | `deep sleep returned` | `esp_deep_sleep()` came back instead of resetting the chip |
+| 4 | `loop() reached` | `loop()` ran; `setup()` always ends in deep sleep |
+
+To watch each code on a board, build with the test hook, which halts with that code right after the banner and is otherwise compiled out:
+```
+cd bluetooth/classic_discoverable && PLATFORMIO_BUILD_FLAGS='-D RFHS_TEST_FATAL=2' pio run -e m5atom-hard -t upload
+```
+No `platformio.ini` sets it; `./qa/guard-test` builds one environment with it so the hook keeps compiling.
 
 ### Conferences and reports
 
-`./make_conference_full <name>` runs each project's `make_conference`, which copies `9999skel.h` to `<year><name>.h` with fresh identifiers (MAC addresses, iBeacon UUIDs, Zigbee PAN IDs) and, for every Wi-Fi block, a random WPA2 passphrase of 63 letters and digits, then points every `current_conf.h` at the new header and writes `<year><name>.txt`, the report handed to foxes and hunters. `./switch_conference <year><name>` repoints the symlinks later and `./create_report <year><name>` regenerates the report. Reports are gitignored because they hold the flags; don't commit one.
+`./make_conference_full <name>` runs each project's `make_conference`, which copies `9999skel.h` to `<year><name>.h` with fresh identifiers (MAC addresses, iBeacon UUIDs, Zigbee PAN IDs) and, for every Wi-Fi block, a random WPA2 passphrase of 63 letters and digits, points every `current_conf.h` at the new header and then runs `./create_report <year><name>`, which writes `<year><name>.txt`, the report handed to foxes and hunters. `./switch_conference <year><name>` repoints the symlinks later. Reports are gitignored because they hold the flags; don't commit one, and `./create_report` refuses to overwrite one that exists for the same reason, so remove the old report before making it again.
 
 The report is made by grepping the conference headers for `RFHS_CHALLENGE_NAME`, `FOX_KEYWORDS`, `NAME`, `UUID`, `MAC_ADDR`, `FSSID`, `CHANNEL` and `PAN_ID`. **Every line containing one of those words lands in the report, comments included.** Keep them out of comments in conference headers, apart from the intended `// RFHS_CHALLENGE_NAME` and `// FOX_KEYWORDS` lines. `./qa/report-format` catches a leak.
 
@@ -120,17 +185,17 @@ The flags come from `threewords`, which reads `/usr/share/dict/cracklib-words`. 
 ### Adding a tunable
 
 1. Define it in every difficulty block of `9999skel.h` and `9999demo.h`, with a comment giving the range, what any special value means, and what a hunter will see change.
-2. In the shared header for the challenge: refuse bad values at compile time with `#error` (numbers) or `static_assert` (strings and byte arrays, helpers in `include/rfhsconfcheck.h`), apply the value, then read it back in the check function and refuse to run on a mismatch so the fox shows the fatal LED instead of transmitting something other than what the report says. `CHANNEL` and `PAN_ID` in `include/rfhszigbee.h` show the pattern. The message names the variable and the permitted values, and the comment on the define in the conference header says the same thing.
+2. In the shared header for the challenge: refuse bad values at compile time with `#error` (numbers) or `static_assert` (strings and byte arrays, helpers in `include/rfhsconfcheck.h`), apply the value in `rfhsstartradio()`, then read it back in `rfhscheckradio()` with one of the readback helpers in `include/rfhsconfcheck.h` (`rfhscheckint`, `rfhscheckhex16`, `rfhscheckstr`, `rfhscheckbytes`; each prints `<label>: <value>` and, on a mismatch, `Requested <thing>: <value>` and `<label> != Requested <thing>`) and return false, so the fox halts on fatal code 2 instead of transmitting something other than what the report says. `CHANNEL` and `PAN_ID` in `include/rfhszigbee.h` show the pattern. The message names the variable and the permitted values, and the comment on the define in the conference header says the same thing.
 3. Add a case to `qa/guard-test` for each way the value can be wrong, and run it.
 4. If it should be different for every fox at every conference, give it a placeholder value in the skel and a `sed` in that project's `make_conference`. The randomizer must never produce a placeholder value, or a later `sed` replaces it again.
-5. If hunters need it, add it to the grep in `create_report` and `make_conference_full`, and a line pattern plus field name in `qa/verify-report`.
+5. If hunters need it, add it to the grep in `create_report`, and a line pattern plus field name in `qa/verify-report`.
 6. Give the readback line a regex in `foxverify/serial_fox.py`, add it to the transcripts under `foxverify/tests/fixtures/transcripts/`, and add its row to the project's run in `foxverify/run.py`, so `verify` checks it too.
 7. Build every environment of the project with `./qa/build-test <project>` and run `./qa/report-format` and `./qa/verify-test`.
 
 ### Adding a board
 
 - Add a board section to the project's `platformio.ini` with an explicit `platform = ${platform.<name>}` and name its environments `<board>-<difficulty>[-<mode>]`. CI builds its matrix from the `board` of every environment, so a new board gets its own job without touching the workflow.
-- Add the LED data pin to `include/rfhsledmacros.h`.
+- Add the LED data pin to `include/rfhsledmacros.h`; a board without one does not compile.
 - Add a row to the hardware table above.
 
 ### Platforms
