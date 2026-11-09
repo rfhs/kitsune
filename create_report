@@ -45,7 +45,13 @@ else
   printf "Please provide conference name\n"
   exit 1
 fi
+# The report holds the flags, so one that exists is never overwritten.
+if [ -f "${conf}.txt" ]; then
+  printf '%s.txt already exists, please remove it or pick a different name\n' "${conf}"
+  exit 1
+fi
 for challenge in bluetooth/iBeacon bluetooth/classic_discoverable wifi/wifi_ap_client zigbee/zigbee_coordinator non-kitsune-foxes/fm_fox; do
+  printf "Extracting %s for %s... " "${challenge}" "${conf}"
   # The stubs in non-kitsune-foxes have no conferences, just one header
   header="${challenge}/src/conferences/${conf}.h"
   if [ ! -d "${challenge}/src/conferences" ]; then

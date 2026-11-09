@@ -2,15 +2,6 @@
 set -e
 set -u
 
-threewords() {
-  if [ ! -r '/usr/share/dict/cracklib-words' ]; then
-    printf 'Unable to find /usr/share/dict/cracklib-words\n'
-    exit 1
-  fi
-  dictionary='/usr/share/dict/cracklib-words'
-  shuf -n3 "${dictionary}" | tr '[:lower:]' '[:upper:]' | paste -sd ' ' | dos2unix
-}
-
 # Ensure we have a conference name
 if [ -n "${1:-}" ]; then
   requested_conf="${1}"
@@ -32,6 +23,9 @@ if [ -f "${conf}.txt" ]; then
   exit 1
 fi
 
+# The non-kitsune foxes are in this loop on purpose: a stub that grows a
+# make_conference is rolled like the others, and create_report gives every
+# entry fresh flags either way.
 for challenge in bluetooth/iBeacon bluetooth/classic_discoverable wifi/wifi_ap_client zigbee/zigbee_coordinator non-kitsune-foxes/fm_fox; do
   printf "Rolling %s for %s... " "${challenge}" "${conf}"
   if [ -x "${challenge}/make_conference" ]; then
@@ -42,35 +36,8 @@ for challenge in bluetooth/iBeacon bluetooth/classic_discoverable wifi/wifi_ap_c
     fi
     ln -snf "conferences/${conf}.h" "${challenge}/src/current_conf.h"
   fi
-  # PAN_ID keeps its 0x so it matches what Kismet shows.
-  # EXT_PAN_ID is usually defined as MAC_ADDR. sed keeps the last MAC_ADDR
-  # line in its hold space and prints that in place of the literal text.
-  grep -e 'RFHS_CHALLENGE_NAME\|FOX_KEYWORDS\|NAME\|UUID\|MAC_ADDR\|FSSID\|CHANNEL\|PAN_ID' "${challenge}/src/current_conf.h" | \
-    sed -e 's#{##' -e 's#}##' -e '/^#define PAN_ID /!s#0x##g' -e 's#, #:#g' -e 's#// ##' -e "s/#define //" \
-      -e '/^MAC_ADDR /h' -e '/^EXT_PAN_ID MAC_ADDR$/{g; s/^MAC_ADDR/EXT_PAN_ID/;}' >> "${conf}.txt"
   printf "complete\n"
 done
-printf "Formatting with conference name for %s... " "${conf}"
-sed -i \
-  -e "/RFHS_CHALLENGE_NAME/{h; s/.*/printf -- '-\\n----------------------------------------------------------------\\nConference: %s\\n' \"${conf}\"/e; G;}" \
-  "${conf}.txt"
-printf "complete\n"
 
-printf "Adding instructions..."
-sed -i -e "/FOX_KEYWORDS/{h; s/.*/printf -- '\n%s\n\n' \"\$(cat foxhunt_instructions.txt)\"/e; G;}" "${conf}.txt"
-printf "complete\n"
-
-printf "Seeding keys for %s... " "${conf}"
-# Put a three word flag where the instructions say FOXFLAG
-while IFS= read -r line; do
-  case "${line}" in
-    *FOXFLAG*) printf '%s\n' "${line%%FOXFLAG*}$(threewords)${line#*FOXFLAG}" ;;
-    *) printf '%s\n' "${line}" ;;
-  esac
-done < "${conf}.txt" > "${conf}.txt.seeded"
-mv "${conf}.txt.seeded" "${conf}.txt"
-printf "complete\n"
-
-sed -i '1iSet font to "Roboto Mono"' "${conf}.txt"
-
-printf "Generation Complete\n"
+# The report is made from the headers just rolled, the fm_fox stub included.
+./create_report "${conf}"

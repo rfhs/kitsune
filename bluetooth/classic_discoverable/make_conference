@@ -31,10 +31,6 @@ get_mac() {
   done
 }
 
-get_uuid() {
-  uuidgen | tr '[:lower:]' '[:upper:]'
-}
-
 sed -e "s#{0x00, 0x01, 0x02, 0x03, 0x04, 0x05}#$(get_mac)#" \
   -e "s#{0x00, 0x06, 0x07, 0x08, 0x09, 0x0a}#$(get_mac)#" \
   src/conferences/9999skel.h > "src/conferences/$(date +"%Y")${1}.h"
