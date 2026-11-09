@@ -13,16 +13,20 @@ bridge (the M5 Atom) and for the USB-Serial-JTAG peripheral (M5 AtomS3 and
 StampS3, Seeed XIAO ESP32-C5), nothing for the Arduino Nano ESP32, whose
 TinyUSB stack has no way to restart the application; ``read_fox`` then says
 so and waits for the fox's own wake as with ``reset=False``. Opening a port
-never resets a running fox on any stack. After the reset a native USB device
+never resets a running fox on any stack, and on a USB-Serial-JTAG port it
+never arms the bootloader either: the port rests with both lines asserted
+and is only ever written by the reset. After the reset a native USB device
 may re-enumerate; ``SerialSource.read`` raises ``PortGone`` and ``read_fox``
-reopens the same by-id path. The wall clock moment the reset was released is
-kept in ``Readback.reset_time`` for the first transmission figure.
+reopens the same by-id path, which lands on the same resting state. The wall
+clock moment the reset was released is kept in ``Readback.reset_time`` for
+the first transmission figure.
 
 A reset that lands the chip in the ROM's download mode, which the ROM
 announces with a ``boot:`` line naming ``DOWNLOAD`` and then ``waiting for
-download``, is answered once by another reset; a second download banner ends
-the run with the reset-button hint, since the ROM never leaves download mode
-on its own.
+download``, is answered once by another reset, which boots the application
+once the ROM has consumed a download flag another program armed; a second
+download banner ends the run with the reset-button hint, since the ROM never
+leaves download mode on its own.
 
 ``Follower`` reads the port after the readback while the sniffer listens
 through the fox's sleeps. It watches for ``Going to sleep``, the exact end of
@@ -309,7 +313,7 @@ class SerialSource:
         port.port = self.path
         port.baudrate = self.baud
         port.timeout = 0
-        usbstack.open_port(port, self.stack)
+        usbstack.open_port(port)
         self.serial = port
         self._decoder.reset()
 

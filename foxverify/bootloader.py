@@ -18,9 +18,11 @@ to; the bootloader entries are esptool's, chosen by the port's USB id:
 - A UART bridge (Silicon Labs CP210x, WCH CH910x, FTDI) gets ``ClassicReset``.
   EN low wakes the chip from deep sleep too.
 - The USB-Serial-JTAG peripheral (``303A:1001``: M5 AtomS3 and StampS3, Seeed
-  XIAO ESP32-C5) gets ``USBJTAGSerialReset``. The device stays enumerated
-  under the same path and the ROM prints its boot log through it, or drops
-  off the bus for a moment and is opened again under the same by-id path.
+  XIAO ESP32-C5) gets ``USBJTAGSerialReset``. The ROM brings the USB device
+  up again after the reset, so the device can leave the bus and come back
+  under the same by-id path; the entry reports that, the dead port is
+  closed, and the confirmation opens the path again before it reads. A
+  device that stays enumerated is read on as it is.
 - The Arduino Nano ESP32 (``2341:0070``) runs TinyUSB, and ``pio run -t
   upload`` flashes it with dfu-util through a DFU interface that its
   application provides, writing the new image into the next OTA partition
@@ -29,12 +31,14 @@ to; the bootloader entries are esptool's, chosen by the port's USB id:
   it running.
 - Any other port is left alone with a line saying why.
 
-Opening the port does not reset the chip on any stack (``usbstack.open_port``).
-Both entry sequences end with DTR and RTS released, the state esptool leaves
-with ``--after no_reset``, and the kernel's hang-up on close releases lines
-that are already released, so closing does not reset it either. ``release``
-is the hard reset ``verify`` uses, ``serial_fox.SerialSource.reset``, which
-is ``usbstack.hard_reset`` for the stack ``enter`` recorded in the ``Hold``.
+Opening the port does not reset or arm the chip on any stack
+(``usbstack.open_port``). Both entry sequences end with DTR and RTS released,
+the state esptool leaves with ``--after no_reset``, and the kernel's hang-up
+on close lowers both lines in one request, so closing does not reset it
+either. ``release`` is the hard reset ``verify`` uses,
+``serial_fox.SerialSource.reset``, which is ``usbstack.hard_reset`` for the
+stack ``enter`` recorded in the ``Hold``, from whichever of its two resting
+states the port is in.
 """
 from __future__ import annotations
 
@@ -50,8 +54,8 @@ from .serial_fox import PortGone, SerialSource
 CONFIRM_SECONDS = 3.0
 READ_SECONDS = 0.2
 # How often a port that is not ready yet is tried again, and how many times a
-# sequence that lost the device halfway is sent again after RETRY_SECONDS, as
-# esptool's ResetStrategy does.
+# sequence whose device was gone before its reset is sent again after
+# RETRY_SECONDS, as esptool's ResetStrategy does.
 RETRY_SECONDS = 0.5
 ATTEMPTS = 3
 WAITING_FOR_DOWNLOAD = "waiting for download"
@@ -93,8 +97,8 @@ def _open(path: str, port: Optional[devices.Port], deadline: Deadline,
 
 def _confirm(source: SerialSource, deadline: Deadline) -> bool:
     """True when the ROM's ``waiting for download`` line arrives before the
-    deadline. A device that drops off the bus during the reset is opened
-    again under the same path and read on."""
+    deadline. A device that left the bus with the reset, or leaves it while
+    it is read, is opened again under the same by-id path and read on."""
     seen = ""
     while not deadline.expired():
         try:
@@ -136,14 +140,18 @@ def enter(fox: devices.Device, say: Callable[[str], None],
         held = True
         try:
             try:
-                usbstack.enter_bootloader(source.serial, stack, sleep)
+                dropped = usbstack.enter_bootloader(source.serial, stack, sleep)
             except OSError:
-                # The device dropped off the bus halfway; esptool opens it
-                # again and sends the whole sequence again.
+                # The device was gone before the reset reached it; esptool
+                # opens it again and sends the whole sequence again.
                 if attempt + 1 < ATTEMPTS and not deadline.expired():
                     sleep(min(RETRY_SECONDS, deadline.remaining()))
                     continue
                 break
+            if dropped:
+                # The chip reset into the ROM and left the bus; the port is
+                # dead, so the confirmation's first read opens the path again.
+                source.close()
             confirmed = _confirm(source, deadline)
             break
         finally:

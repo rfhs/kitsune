@@ -36,28 +36,33 @@ ROM_ESP32S3 = (b"ESP-ROM:esp32s3-20210327\r\nBuild:Mar 27 2021\r\nrst:0x1 (POWER
 ROM_APP = b"ESP-ROM:esp32s3-20210327\r\nBuild:Mar 27 2021\r\nrst:0x1 (POWERON),boot:0x8 (SPI_FAST_FLASH_BOOT)\r\n"
 # esptool's sequences as a port sees them, from esptool/reset.py: every DTR and
 # RTS write in order, with the DTR rewrite after each RTS write, and the sleeps
-# between them. A UART bridge's port is open with both lines asserted when they
-# start; a USB-Serial-JTAG port's open releases DTR after the kernel asserted
-# both, so its sessions begin with that write and the lines released.
-JTAG_OPEN = [("dtr", False)]
+# between them. Every port is open with both lines asserted when a sequence
+# starts, the state the kernel puts them in, so a session's writes are the
+# sequence's own. The USB-Serial-JTAG hard reset from that state is one DTR
+# release, the hold, one RTS release and the settle.
 CLASSIC_RESET = [("dtr", False), ("rts", True), ("dtr", False), ("sleep", 0.1),
                  ("dtr", True), ("rts", False), ("dtr", True), ("sleep", 0.05),
                  ("dtr", False)]
-USB_JTAG_RESET = [("rts", False), ("dtr", False), ("dtr", False), ("sleep", 0.1),
+USB_JTAG_RESET = [("rts", False), ("dtr", True), ("dtr", False), ("sleep", 0.1),
                   ("dtr", True), ("rts", False), ("dtr", True), ("sleep", 0.1),
                   ("rts", True), ("dtr", True), ("dtr", False), ("rts", True), ("dtr", False), ("sleep", 0.1),
                   ("dtr", False), ("rts", False), ("dtr", False)]
+# The write of USB_JTAG_RESET that resets the chip, DTR released with RTS
+# asserted, counted from the sequence's start. A chip whose USB device leaves
+# the bus with the reset takes the port with it after this write.
+USB_JTAG_RESET_FIRES = USB_JTAG_RESET.index(("dtr", False), 9) + 1
 HARD_RESET = [("dtr", False), ("rts", True), ("sleep", RESET_PULSE_SECONDS), ("rts", False),
               ("sleep", RESET_PULSE_SECONDS), ("dtr", True), ("rts", True)]
-USB_HARD_RESET = [("rts", True), ("dtr", False), ("sleep", USB_HOLD_SECONDS),
-                  ("rts", False), ("dtr", False), ("sleep", USB_SETTLE_SECONDS)]
+USB_HARD_RESET = [("dtr", False), ("sleep", USB_HOLD_SECONDS), ("rts", False), ("sleep", USB_SETTLE_SECONDS)]
 
 
 class FakeSerial:
     """What ``serial.Serial`` gives the bootloader entry and the hard reset: a
     port that records every line-state write, open and close in the machine's
     ``lines`` log, answers reads with the ROM output the test canned and moves
-    the clock on when there is none."""
+    the clock on when there is none. On a machine whose fox re-enumerates,
+    the device leaves the bus when it sees DTR released with RTS asserted,
+    the reset, and the port raises from then on."""
 
     machine = None
 
@@ -65,10 +70,20 @@ class FakeSerial:
         self.port = None
         self.baudrate = None
         self.timeout = None
-        self._dtr = None
-        self._rts = None
+        # pyserial's defaults: both lines asserted.
+        self._dtr = True
+        self._rts = True
+        self.gone = False
         self.data = b""
         self.fail_read = False
+
+    def _write(self, line, value):
+        if self.gone:
+            raise OSError(5, "Input/output error")
+        setattr(self, "_" + line, value)
+        self.machine.lines.append((line, value))
+        if self.machine.reenumerates and (self._dtr, self._rts) == (False, True):
+            self.gone = True
 
     @property
     def dtr(self):
@@ -76,8 +91,7 @@ class FakeSerial:
 
     @dtr.setter
     def dtr(self, value):
-        self._dtr = value
-        self.machine.lines.append(("dtr", value))
+        self._write("dtr", value)
 
     @property
     def rts(self):
@@ -85,8 +99,7 @@ class FakeSerial:
 
     @rts.setter
     def rts(self, value):
-        self._rts = value
-        self.machine.lines.append(("rts", value))
+        self._write("rts", value)
 
     def open(self):
         machine = self.machine
@@ -106,7 +119,7 @@ class FakeSerial:
         return len(self.data)
 
     def read(self, size=1):
-        if self.fail_read:
+        if self.gone or self.fail_read:
             self.fail_read = False
             raise serial.SerialException("device reports readiness to read but returned no data")
         if not self.data:
@@ -137,7 +150,8 @@ class Machine:
 
     def __init__(self, ports=(), tools=ALL_TOOLS, euid=1000, capabilities=0,
                  pio_output=PIO_OUTPUT, pio_status=0, sudo_status=0, verify_status=0,
-                 interfaces=(), after_flash=None, rom=ROM_ESP32, unopenable=(), read_fails_once=False):
+                 interfaces=(), after_flash=None, rom=ROM_ESP32, unopenable=(), read_fails_once=False,
+                 reenumerates=False):
         self.dev = tempfile.mkdtemp(prefix="foxverify-flash-")
         self.ports = [self.port(*spec) for spec in ports]
         self.tools = set(tools)
@@ -152,6 +166,7 @@ class Machine:
         self.rom = rom
         self.unopenable = set(unopenable)
         self.read_fails_once = read_fails_once
+        self.reenumerates = reenumerates
         self.events = []
         self.timeline = []
         self.lines = []
@@ -551,7 +566,8 @@ class BootloaderTest(FlashTestCase):
         fox = machine.ports[0].device
         code, out, err = self.run_flash("iBeacon", ["m5atoms3-easy", "--serial-only"], machine)
         self.assertEqual(code, 0, err)
-        self.assertEqual(machine.sessions(), [JTAG_OPEN + USB_JTAG_RESET])
+        self.assertEqual(machine.sessions(), [USB_JTAG_RESET])
+        self.assertEqual(machine.lines[:3], [("dtr", True), ("rts", True), ("open", fox)])
         self.assertIn(bootloader.IN_BOOTLOADER % fox + "\n", out)
         self.assertEqual(machine.commands("popen")[0][-1], fox)
 
@@ -562,7 +578,7 @@ class BootloaderTest(FlashTestCase):
         self.assertIn(bootloader.NOT_CONFIRMED + "\n", out)
         self.assertNotIn("in the bootloader", out)
         self.assertEqual(len(machine.commands("popen")), 1)
-        self.assertEqual(machine.sessions()[0], JTAG_OPEN + USB_JTAG_RESET)
+        self.assertEqual(machine.sessions()[0], USB_JTAG_RESET)
         self.assertGreaterEqual(machine.now, 1000.0 + bootloader.CONFIRM_SECONDS)
 
     def test_fox_that_drops_off_the_bus_is_opened_again_and_read_on(self):
@@ -574,7 +590,24 @@ class BootloaderTest(FlashTestCase):
         self.assertEqual(code, 0, err)
         self.assertIn(bootloader.IN_BOOTLOADER % fox + "\n", out)
         self.assertEqual(machine.opens, 2)
-        self.assertEqual(machine.sessions(), [JTAG_OPEN + USB_JTAG_RESET, JTAG_OPEN])
+        self.assertEqual(machine.sessions(), [USB_JTAG_RESET, []])
+
+    def test_c5_that_leaves_the_bus_with_the_reset_is_opened_again_and_confirmed(self):
+        """The ESP32-C5's USB device goes with the chip when the entry resets
+        it, so the writes that release the lines fail; the sequence is not
+        sent again, the dead port is closed, and the confirmation reads the
+        ROM's line on the path opened again."""
+        machine = self.machine(ports=[("ttyACM0",) + ESP], rom=ROM_ESP32S3, reenumerates=True)
+        fox = machine.ports[0].device
+        with open(fox, "w"):
+            pass
+        code, out, err = self.run_flash("iBeacon", ["m5atoms3-easy", "--serial-only"], machine)
+        self.assertEqual(code, 0, err)
+        self.assertIn(bootloader.IN_BOOTLOADER % fox + "\n", out)
+        self.assertNotIn(bootloader.NOT_CONFIRMED, out)
+        self.assertEqual(machine.opens, 2)
+        self.assertEqual(machine.sessions(), [USB_JTAG_RESET[:USB_JTAG_RESET_FIRES], []])
+        self.assertEqual(machine.commands("popen")[0][-1], fox)
 
     def test_port_that_cannot_be_opened_falls_back_and_is_not_held(self):
         machine = self.machine(ports=[("ttyUSB0",) + CP210X], pio_status=1)
@@ -631,7 +664,7 @@ class BootloaderTest(FlashTestCase):
         code, out, err = self.run_flash("iBeacon", ["m5atoms3-easy", "--serial-only"], machine)
         self.assertEqual(code, 130)
         self.assertEqual(err.strip(), "interrupted")
-        self.assertEqual(machine.sessions(), [JTAG_OPEN + USB_JTAG_RESET, JTAG_OPEN + USB_HARD_RESET])
+        self.assertEqual(machine.sessions(), [USB_JTAG_RESET, USB_HARD_RESET])
         self.assertIn(bootloader.RELEASED % fox + "\n", out)
 
     def test_fox_gone_at_the_reset_is_said(self):

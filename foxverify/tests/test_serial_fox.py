@@ -857,25 +857,35 @@ class TranscriptSourceTest(unittest.TestCase):
 
 
 class FakeSerial:
-    """Records the order of line-state changes the way a port would see them,
-    with the fake clock's time of each when one is given."""
+    """A port as pyserial presents it. ``events`` records every line write,
+    open included, in order; ``states`` records the (DTR, RTS) states the
+    device behind the port sees, as the kernel's cdc-acm sends them: both
+    asserted in one request when the port opens, then the values written
+    before the open applied DTR first, then a later write only when it
+    changes a line. Each event carries the fake clock's time when one is set.
+    A ``JtagChip`` on the class answers the states; a port whose device has
+    left the bus raises on every write and read."""
 
     instances = []
     clock = None
+    chip = None
 
     def __init__(self):
         self.events = []
+        self.states = []
         self.port = None
         self.baudrate = None
         self.timeout = None
-        self._dtr = None
-        self._rts = None
+        # pyserial's defaults: both lines asserted.
+        self._dtr = True
+        self._rts = True
         self.opened = False
         self.closed = False
+        self.gone = False
         self.data = b""
         self.fail_read = None
-        # Raise on the RTS write once this many events were recorded.
-        self.fail_rts_after = None
+        # Raise on a line write once this many events were recorded.
+        self.fail_after = None
         # Every event with the fake clock's time, when one is set.
         self.timed = []
         FakeSerial.instances.append(self)
@@ -885,14 +895,30 @@ class FakeSerial:
         if FakeSerial.clock is not None:
             self.timed.append((FakeSerial.clock(),) + event)
 
+    def _write(self, line, value):
+        if self.gone or (self.fail_after is not None and len(self.events) >= self.fail_after):
+            raise OSError(5, "Input/output error")
+        setattr(self, "_" + line, value)
+        self._record((line, value))
+        if self.opened:
+            self._seen()
+
+    def _seen(self):
+        """The device sees the lines when a request changes them."""
+        state = (self._dtr, self._rts)
+        if self.states and self.states[-1] == state:
+            return
+        self.states.append(state)
+        if FakeSerial.chip is not None:
+            FakeSerial.chip.lines(self, *state)
+
     @property
     def dtr(self):
         return self._dtr
 
     @dtr.setter
     def dtr(self, value):
-        self._dtr = value
-        self._record(("dtr", value))
+        self._write("dtr", value)
 
     @property
     def rts(self):
@@ -900,14 +926,22 @@ class FakeSerial:
 
     @rts.setter
     def rts(self, value):
-        if self.fail_rts_after is not None and len(self.events) >= self.fail_rts_after:
-            raise OSError(5, "Input/output error")
-        self._rts = value
-        self._record(("rts", value))
+        self._write("rts", value)
 
     def open(self):
         self.opened = True
         self._record(("open",))
+        # The kernel asserts both lines in one request; pyserial then applies
+        # the values written before the open, DTR before RTS.
+        dtr, rts = self._dtr, self._rts
+        self._dtr = self._rts = True
+        self._seen()
+        self._dtr = dtr
+        self._seen()
+        self._rts = rts
+        self._seen()
+        if FakeSerial.chip is not None:
+            FakeSerial.chip.attach(self)
 
     def close(self):
         self.closed = True
@@ -917,34 +951,86 @@ class FakeSerial:
         return len(self.data)
 
     def read(self, size=1):
+        if self.gone:
+            raise OSError(5, "Input/output error")
         if self.fail_read:
             raise self.fail_read
+        if not self.data and FakeSerial.clock is not None:
+            # A real read blocks for the timeout when nothing arrives.
+            FakeSerial.clock.advance(self.timeout)
         chunk, self.data = self.data[:size], self.data[size:]
         return chunk
 
 
-def line_states(events, dtr=None, rts=None):
-    """The (DTR, RTS) pairs a port passes through for a list of writes, from
-    the given starting state."""
-    states = []
-    for event in events:
-        if event[0] == "dtr":
-            dtr = event[1]
-        elif event[0] == "rts":
-            rts = event[1]
-        else:
-            continue
-        states.append((dtr, rts))
-    return states
+ARMED = (True, False)
+ROM_DOWNLOAD_BYTES = (ROM_DOWNLOAD_S3 + "waiting for download\r\n").encode()
+
+
+class JtagChip:
+    """A USB-Serial-JTAG chip behind ``FakeSerial``, on the fake clock: DTR
+    asserted alone arms its download-boot register, RTS asserted alone resets
+    it, and the boot that follows consumes the register, printing the ROM's
+    download-mode lines when it was armed and ``app`` when it was not. With
+    ``away`` the chip's USB device leaves the bus at every reset, taking the
+    device path with it and raising on the open port, and is back ``away``
+    seconds later with the boot's output waiting for the next open; with
+    ``away`` 0 the device stays enumerated and prints on the open port.
+    ``sleep`` is the sleep a ``SerialSource`` over this chip has to use, so
+    that the device path comes back as the clock moves."""
+
+    def __init__(self, path, clock, app, armed=False, away=0.5):
+        self.path = path
+        self.clock = clock
+        self.app = app
+        self.armed = armed
+        self.away = away
+        self.boots = []
+        self.back_at = None
+        self.pending = b""
+        with open(path, "w"):
+            pass
+
+    def lines(self, port, dtr, rts):
+        if (dtr, rts) == ARMED:
+            self.armed = True
+        elif rts and not dtr:
+            self.reset(port)
+
+    def reset(self, port):
+        boot = "download" if self.armed else "app"
+        self.armed = False
+        self.boots.append(boot)
+        output = ROM_DOWNLOAD_BYTES if boot == "download" else self.app
+        if not self.away:
+            port.data += output
+            return
+        port.gone = True
+        os.remove(self.path)
+        self.back_at = self.clock() + self.away
+        self.pending = output
+
+    def sleep(self, seconds):
+        self.clock.advance(seconds)
+        if self.back_at is not None and self.clock() >= self.back_at:
+            with open(self.path, "w"):
+                pass
+            self.back_at = None
+
+    def attach(self, port):
+        port.data, self.pending = self.pending, b""
 
 
 BRIDGE = devices.Port("/dev/ttyUSB0", *CP210X)
 JTAG = devices.Port("/dev/ttyACM0", *ESP)
 NANO_PORT = devices.Port("/dev/ttyACM1", *NANO)
-# The hard resets as the fake port records them: esptool's RTS pulse with the
-# DTR rewrite for the USB-Serial-JTAG peripheral, the bridge pulse ending with
-# both lines asserted again.
-USB_HARD_RESET = [("rts", True), ("dtr", False), ("rts", False), ("dtr", False)]
+# The line writes of each open and hard reset as the fake port records them.
+# Every open presets both lines asserted, which the kernel has already done.
+# The USB-Serial-JTAG reset makes RTS the only asserted line, from both
+# asserted by releasing DTR and from both released by asserting RTS, then
+# releases RTS; the bridge pulse ends with both lines asserted again.
+OPEN = [("dtr", True), ("rts", True), ("open",)]
+USB_HARD_RESET = [("dtr", False), ("rts", False)]
+USB_HARD_RESET_FROM_RELEASED = [("rts", True), ("rts", False)]
 BRIDGE_HARD_RESET = [("dtr", False), ("rts", True), ("rts", False), ("dtr", True), ("rts", True)]
 
 
@@ -954,6 +1040,7 @@ class SerialSourceTest(unittest.TestCase):
     def setUp(self):
         FakeSerial.instances = []
         FakeSerial.clock = None
+        FakeSerial.chip = None
         patcher = mock.patch("serial.Serial", FakeSerial)
         patcher.start()
         self.addCleanup(patcher.stop)
@@ -973,12 +1060,21 @@ class SerialSourceTest(unittest.TestCase):
 
         return self.source(port, sleep), clock
 
+    def assert_never_armed(self, port, allowed=()):
+        """The device behind ``port`` never saw DTR asserted alone, except at
+        an index inside one of the ``(start, end)`` ranges in ``allowed``."""
+        for index, state in enumerate(port.states):
+            if state == ARMED:
+                self.assertTrue(any(start <= index < end for start, end in allowed),
+                                "DTR asserted alone at %d in %r" % (index, port.states))
+
     def test_bridge_open_asserts_dtr_then_rts_before_opening(self):
         source = self.source()
         port = FakeSerial.instances[0]
         self.assertEqual(port.port, "/dev/ttyUSB0")
         self.assertEqual(port.baudrate, 115200)
-        self.assertEqual(port.events, [("dtr", True), ("rts", True), ("open",)])
+        self.assertEqual(port.events, OPEN)
+        self.assertEqual(port.states, [(True, True)])
         self.assertIs(source.serial, port)
         self.assertEqual(source.stack, usbstack.UART_BRIDGE)
 
@@ -997,39 +1093,47 @@ class SerialSourceTest(unittest.TestCase):
         source = self.source()
         port = FakeSerial.instances[0]
         port.events = [("start",)]
-        port.fail_rts_after = 2
+        port.fail_after = 2
         self.assertIsNotNone(source.reset())
         self.assertEqual(port.events, [("start",), ("dtr", False)])
         self.assertTrue(port.closed)
         self.assertIsNone(source.serial)
 
-    def test_usb_serial_jtag_open_never_asserts_rts_and_ends_with_both_lines_released(self):
+    def test_usb_serial_jtag_open_writes_nothing_the_kernel_has_not_set(self):
+        """The open presets both lines asserted, the state the kernel puts
+        them in, so the device sees that one state and the port rests there."""
         source = self.source(JTAG)
         port = FakeSerial.instances[0]
         self.assertEqual(source.stack, usbstack.USB_SERIAL_JTAG)
-        self.assertEqual(port.events, [("dtr", True), ("rts", False), ("open",), ("dtr", False)])
-        self.assertNotIn(("rts", True), port.events)
-        # RTS is released before DTR, so the lines never pass through RTS
-        # asserted alone, the peripheral's reset.
-        self.assertNotIn((False, True), line_states(port.events, dtr=True, rts=True))
-        self.assertEqual((port.dtr, port.rts), (False, False))
+        self.assertEqual(port.events, OPEN)
+        self.assertEqual(port.states, [(True, True)])
+        self.assertEqual((port.dtr, port.rts), (True, True))
 
-    def test_usb_serial_jtag_reset_is_esptool_s_usb_hard_reset(self):
+    def test_usb_serial_jtag_reset_releases_dtr_from_both_asserted_and_asserts_rts_from_both_released(self):
+        """From the open's both asserted the reset is one DTR release, which
+        leaves RTS the only asserted line; RTS is released after the hold.
+        From the both released that leaves, the reset asserts RTS. The device
+        sees the same two states either way and never DTR asserted alone."""
         source, clock = self.timed_source(JTAG)
         port = FakeSerial.instances[0]
         del port.events[:]
         released = source.reset(clock)
         self.assertEqual(port.events, USB_HARD_RESET)
+        self.assertEqual(port.states, [(True, True), (False, True), (False, False)])
         self.assertEqual(self.slept, [usbstack.USB_HOLD_SECONDS, usbstack.USB_SETTLE_SECONDS])
-        # DTR stays released throughout and RTS is never released while DTR
-        # is asserted.
-        self.assertEqual([value for name, value in port.events if name == "dtr"], [False, False])
-        self.assertNotIn((True, False), line_states(port.events, dtr=False, rts=False))
         # Stamped when RTS is released, 0.2 s in, before the 0.2 s settle.
         self.assertEqual(released, usbstack.USB_HOLD_SECONDS)
         self.assertEqual(clock.now, usbstack.USB_HOLD_SECONDS + usbstack.USB_SETTLE_SECONDS)
-        self.assertEqual(port.timed[-2][0], usbstack.USB_HOLD_SECONDS)
+        self.assertEqual(port.timed[-1][0], usbstack.USB_HOLD_SECONDS)
         self.assertEqual((port.dtr, port.rts), (False, False))
+        del port.events[:]
+        del self.slept[:]
+        released = source.reset(clock)
+        self.assertEqual(port.events, USB_HARD_RESET_FROM_RELEASED)
+        self.assertEqual(port.states[-2:], [(False, True), (False, False)])
+        self.assertEqual(self.slept, [usbstack.USB_HOLD_SECONDS, usbstack.USB_SETTLE_SECONDS])
+        self.assertEqual(released, 3 * usbstack.USB_HOLD_SECONDS)
+        self.assert_never_armed(port)
 
     def test_usb_serial_jtag_dropping_off_the_bus_during_the_hold_goes_to_reopen(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -1039,9 +1143,9 @@ class SerialSourceTest(unittest.TestCase):
             source, clock = self.timed_source(devices.Port(path, *ESP))
             port = FakeSerial.instances[0]
             del port.events[:]
-            port.fail_rts_after = 2
+            port.fail_after = 1
             released = source.reset(clock)
-            self.assertEqual(port.events, [("rts", True), ("dtr", False)])
+            self.assertEqual(port.events, [("dtr", False)])
             self.assertEqual(self.slept, [usbstack.USB_HOLD_SECONDS])
             # The chip restarted when reset was asserted, which is the stamp.
             self.assertEqual(released, 0.0)
@@ -1051,22 +1155,119 @@ class SerialSourceTest(unittest.TestCase):
                 source.read(0.0)
             source.reopen(Deadline(1.0, clock))
             self.assertEqual(len(FakeSerial.instances), 2)
-            self.assertEqual(FakeSerial.instances[-1].events, [("dtr", True), ("rts", False), ("open",), ("dtr", False)])
+            self.assertEqual(FakeSerial.instances[-1].events, OPEN)
+            self.assertEqual(FakeSerial.instances[-1].states, [(True, True)])
 
     def test_usb_serial_jtag_gone_before_the_first_write_is_port_gone_too(self):
         source = self.source(JTAG)
         port = FakeSerial.instances[0]
         del port.events[:]
-        port.fail_rts_after = 0
+        port.fail_after = 0
         self.assertIsNotNone(source.reset())
         self.assertEqual(port.events, [])
         self.assertIsNone(source.serial)
+
+    def test_usb_serial_jtag_port_never_sees_dtr_asserted_alone_outside_the_bootloader_entry(self):
+        """Every path over a USB-Serial-JTAG port, as the device sees the
+        lines: the open, the hard reset from both asserted and from both
+        released, a reopen, the bootloader entry and the release after it,
+        and ``bootloader.release`` on a fresh port. Each path ends at both
+        asserted or both released, and DTR asserted alone occurs only inside
+        ``usb_jtag_reset``."""
+        from foxverify import bootloader
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "ttyACM0")
+            with open(path, "w"):
+                pass
+            jtag = devices.Port(path, *ESP)
+            source, clock = self.timed_source(jtag)
+            opened = FakeSerial.instances[0]
+            self.assertEqual(opened.states, [(True, True)])
+            source.reset(clock)
+            source.reset(clock)
+            self.assertEqual(opened.states, [(True, True), (False, True), (False, False), (False, True), (False, False)])
+            source.reopen(Deadline(1.0, clock))
+            reopened = FakeSerial.instances[-1]
+            self.assertEqual(reopened.states, [(True, True)])
+            start = len(reopened.states)
+            self.assertFalse(usbstack.usb_jtag_reset(reopened, source.sleep))
+            end = len(reopened.states)
+            self.assertIn(ARMED, reopened.states[start:end])
+            self.assertEqual(reopened.states[start:end], [ARMED, (False, False), ARMED, (True, True), (False, True), (False, False)])
+            source.reset(clock)
+            self.assertEqual(reopened.states[end:], [(False, True), (False, False)])
+            FakeSerial.instances = []
+            bootloader.release(bootloader.Hold(True, path, jtag), lambda text: None, source.sleep)
+            released = FakeSerial.instances[0]
+            self.assertEqual(released.states, [(True, True), (False, True), (False, False)])
+            for port, allowed in ((opened, ()), (reopened, ((start, end),)), (released, ())):
+                self.assert_never_armed(port, allowed)
+                self.assertIn(port.states[-1], ((True, True), (False, False)))
+
+    def chip(self, directory, clock, armed, away=0.5, app=None):
+        """A ``JtagChip`` on ``clock`` behind the path in ``directory`` and a
+        ``SerialSource`` over it; ``app`` is the zigbee_easy transcript."""
+        path = os.path.join(directory, "ttyACM0")
+        if app is None:
+            app = transcript("zigbee_easy").replace("\n", "\r\n").encode()
+        chip = JtagChip(path, clock, app, armed=armed, away=away)
+        FakeSerial.chip = chip
+        FakeSerial.clock = clock
+        source = serial_fox.SerialSource(path, sleep=chip.sleep, port=devices.Port(path, *ESP))
+        return chip, source
+
+    def test_running_fox_is_reset_into_its_application_on_the_first_try(self):
+        """A chip that is not armed boots its application from the one reset,
+        whether or not its device leaves the bus."""
+        for away in (0.5, 0.0):
+            with tempfile.TemporaryDirectory() as directory:
+                FakeSerial.instances = []
+                clock = serial_fox.FakeClock()
+                chip, source = self.chip(directory, clock, armed=False, away=away)
+                said = []
+                readback = serial_fox.read_fox(source, Deadline(60, clock), say=said.append, wall=clock)
+                self.assertEqual(chip.boots, ["app"], away)
+                self.assertEqual(said, ["Fox: zigbee_coordinator EASY"], away)
+                self.assertTrue(readback.complete(), away)
+                self.assertEqual(readback.get("pan_id"), "0x1337")
+                self.assertEqual(len(FakeSerial.instances), 2 if away else 1)
+                for port in FakeSerial.instances:
+                    self.assert_never_armed(port)
+
+    def test_flag_armed_by_another_program_is_consumed_by_the_first_reset_and_the_second_boots_the_app(self):
+        """The recovery end to end on a chip someone else armed: the first
+        reset boots the ROM, whose lines are read on the reopened port, the
+        reopen does not arm the chip again, and the second reset boots the
+        application. The same when the device stays enumerated."""
+        for away in (0.5, 0.0):
+            with tempfile.TemporaryDirectory() as directory:
+                FakeSerial.instances = []
+                clock = serial_fox.FakeClock()
+                chip, source = self.chip(directory, clock, armed=True, away=away)
+                said = []
+                readback = serial_fox.read_fox(source, Deadline(60, clock), say=said.append, wall=clock)
+                self.assertEqual(chip.boots, ["download", "app"], away)
+                self.assertFalse(chip.armed)
+                self.assertEqual(said, [serial_fox.IN_BOOTLOADER, "Fox: zigbee_coordinator EASY"], away)
+                self.assertTrue(readback.complete(), away)
+                self.assertIn(ROM_DOWNLOAD_S3.strip(), readback.unmatched)
+                self.assertEqual(len(FakeSerial.instances), 3 if away else 1)
+                # A port whose device left the bus last saw the reset that
+                # took it; every other port rests at both asserted or both
+                # released.
+                for port in FakeSerial.instances:
+                    self.assert_never_armed(port)
+                    resting = ((False, True),) if port.gone else ((True, True), (False, False))
+                    self.assertIn(port.states[-1], resting)
+                # The stamp is the second reset's release.
+                self.assertGreater(readback.reset_time, 1000.0 + usbstack.USB_HOLD_SECONDS)
+                self.assertLess(readback.reset_time, readback.banner_time)
 
     def test_nano_is_opened_with_both_lines_asserted_and_never_reset(self):
         source = self.source(NANO_PORT)
         port = FakeSerial.instances[0]
         self.assertEqual(source.stack, usbstack.TINYUSB)
-        self.assertEqual(port.events, [("dtr", True), ("rts", True), ("open",)])
+        self.assertEqual(port.events, OPEN)
         del port.events[:]
         self.assertIsNone(source.reset())
         self.assertEqual(port.events, [])
@@ -1082,7 +1283,7 @@ class SerialSourceTest(unittest.TestCase):
                 source = serial_fox.SerialSource(path, sleep=self.slept.append, port=port)
             fake = FakeSerial.instances[0]
             self.assertIsNone(source.stack, port)
-            self.assertEqual(fake.events, [("dtr", True), ("rts", True), ("open",)], port)
+            self.assertEqual(fake.events, OPEN, port)
             del fake.events[:]
             source.reset()
             self.assertEqual(fake.events, BRIDGE_HARD_RESET, port)
@@ -1093,7 +1294,7 @@ class SerialSourceTest(unittest.TestCase):
             source = serial_fox.SerialSource("/dev/ttyACM0", sleep=self.slept.append)
         self.assertEqual(source.port, listed[1])
         self.assertEqual(source.stack, usbstack.USB_SERIAL_JTAG)
-        self.assertEqual(FakeSerial.instances[0].events, [("dtr", True), ("rts", False), ("open",), ("dtr", False)])
+        self.assertEqual(FakeSerial.instances[0].events, OPEN)
 
     def test_release_and_reset_write_the_same_lines_for_the_same_stack(self):
         from foxverify import bootloader
@@ -1143,7 +1344,7 @@ class SerialSourceTest(unittest.TestCase):
                 pass
             source.reopen(Deadline(1.0, clock))
             self.assertIsNotNone(source.serial)
-            self.assertEqual(FakeSerial.instances[-1].events, [("dtr", True), ("rts", True), ("open",)])
+            self.assertEqual(FakeSerial.instances[-1].events, OPEN)
 
 
 class DownloadModeTest(unittest.TestCase):

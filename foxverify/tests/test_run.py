@@ -12,7 +12,7 @@ from unittest import mock
 
 from foxverify import run, serial_fox
 from foxverify.report import EXIT_FAIL, EXIT_NO_RUN, EXIT_OK
-from foxverify.tests import REPO, fixture, frozen_header, frozen_text
+from foxverify.tests import REPO, fixture, frozen_header, frozen_text, read_fixture
 
 PROJECT_DIRS = serial_fox.PROJECT_DIRS
 
@@ -180,6 +180,49 @@ class SerialOnlyRunTest(unittest.TestCase):
         self.assertIn("unverified: --serial-only", result.out)
         self.assertIn("serial: Fox: zigbee_coordinator EASY", result.out)
         self.assertTrue(result.summary.endswith("s of 30 s"), result.summary)
+
+    def test_usb_serial_jtag_fox_armed_by_another_program_passes_after_one_more_reset(self):
+        """A run over a fake USB-Serial-JTAG port whose chip another program
+        left armed for the bootloader: the first reset boots the ROM, whose
+        lines are read on the reopened port, the second boots the fox, and
+        the run passes with exit 0. The device never sees DTR asserted alone."""
+        from foxverify import devices
+        from foxverify.tests.test_devices import ESP
+        from foxverify.tests.test_serial_fox import ARMED, FakeSerial, JtagChip
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "ttyACM0")
+            out = io.StringIO()
+            one = run.RUNS["zigbee_coordinator"]("zigbee_coordinator", run.parse_args(
+                "zigbee_coordinator", ["--transcript", fixture("transcripts", "zigbee_easy.log"),
+                                       "--header", frozen_header("zigbee_coordinator")]), out)
+            app = read_fixture("transcripts", "zigbee_easy.log").replace("\n", "\r\n").encode()
+            chip = JtagChip(path, one.clock, app, armed=True, away=0.5)
+            FakeSerial.instances = []
+            FakeSerial.clock = one.clock
+            FakeSerial.chip = chip
+            self.addCleanup(setattr, FakeSerial, "chip", None)
+            self.addCleanup(setattr, FakeSerial, "clock", None)
+
+            def read_fox(selection):
+                one.source = serial_fox.SerialSource(path, sleep=chip.sleep, port=devices.Port(path, *ESP))
+                return serial_fox.read_fox(one.source, one.deadline, say=one.report.say,
+                                           debug=one.report.debug, wall=one.wall)
+
+            one.read_fox = read_fox
+            with mock.patch("serial.Serial", FakeSerial):
+                code = one.run()
+        result = Result(code, out.getvalue(), "")
+        self.assertEqual(result.code, EXIT_OK, result.out)
+        self.assertEqual(chip.boots, ["download", "app"])
+        self.assertIn(serial_fox.IN_BOOTLOADER + "\n", result.out)
+        self.assertEqual(result.verdicts, RUNS["zigbee_easy"][1])
+        self.assertEqual(len(FakeSerial.instances), 3)
+        for port in FakeSerial.instances:
+            self.assertNotIn(ARMED, port.states)
+        # The two ports whose device left the bus last saw the reset that took
+        # it; the port that read the fox rests where the open left it.
+        self.assertEqual([port.states[-1] for port in FakeSerial.instances],
+                         [(False, True), (False, True), (True, True)])
 
 
 class NotAFoxTest(unittest.TestCase):
