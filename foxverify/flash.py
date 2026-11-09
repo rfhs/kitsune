@@ -14,19 +14,27 @@ flash, so anything ``verify`` accepts works here. The steps:
 3. Resolve the fox's serial port once, with the rules of ``devices``: an
    explicit serial argument that is not the nRF sniffer, else the one ESP32
    serial device, waiting ``--wait-for-fox`` seconds for it to appear.
-4. Run the tool checks ``verify`` would run for this project and these
+4. Put the fox into the ROM bootloader at once and confirm it
+   (``bootloader.enter``), so a fox that is awake for a few seconds between
+   deep sleeps is held from the moment its port appears, through the tool
+   checks, the ``sudo`` prompt and the build, instead of sleeping again
+   before esptool runs. A fox that cannot be held is flashed the old way.
+   From here until the upload has succeeded, every exit resets a held fox
+   back into its application first, so a failed check, a failed build or a
+   Ctrl-C leaves it running its old firmware.
+5. Run the tool checks ``verify`` would run for this project and these
    devices, so a missing ``tshark`` fails before a one-minute build, and
    learn whether ``verify`` needs root. When it does, ``sudo -v`` runs now,
    so the password prompt comes before the build and not after it.
-5. Print the project, the environment, the conference ``src/current_conf.h``
+6. Print the project, the environment, the conference ``src/current_conf.h``
    points at and the port, then build and upload with ``pio run``, output
    shown as it arrives.
-6. Work out the device the fox came back on. A fox the user named is passed
+7. Work out the device the fox came back on. A fox the user named is passed
    on as given. An autodetected fox is passed on by its pre-flash path when
    that still exists; when it is gone, because a native USB board
    re-enumerates after a flash and can come back under another name, the
    autodetection runs again with the same wait.
-7. Run ``verify``, through ``sudo`` when it needs root, and exit with its
+8. Run ``verify``, through ``sudo`` when it needs root, and exit with its
    exit code.
 """
 from __future__ import annotations
@@ -41,7 +49,7 @@ import sys
 import time
 from typing import Callable, Iterable, List, Optional, Sequence, TextIO, Tuple
 
-from . import devices, privileges
+from . import bootloader, devices, privileges
 from .report import RunError
 from .run import INTERRUPTED, RUNS, parse_args as parse_verify_args
 from .serial_fox import PROJECT_DIRS
@@ -210,22 +218,31 @@ class Flash:
                                        exists=self.exists)
         fox = selection.fox
         given = self.fox_given(options.devices, ports)
-        # A serial-only verify leaves every radio alone and needs no tool.
-        what = None if run.serial_only else run.check_tools(selection, self.which)
-        needs_root = what is not None and not privileges.has_net_admin(self.euid, self.capabilities)
-        sudo = None
-        if needs_root:
-            sudo = self.which("sudo")
-            if sudo is None:
-                raise RunError(NO_SUDO % what)
-        self.say("project %s, environment %s, conference %s" % (
-            os.path.relpath(self.project_dir, REPO), self.env, conference(self.project_dir)))
-        self.say("fox on %s%s" % (fox.path, "; verify runs through sudo for %s" % what if needs_root else ""))
-        if needs_root and self.call([sudo, "-v"]) != 0:
-            raise RunError(SUDO_FAILED % what)
-        status, tail = stream(pio_argv(pio, self.project_dir, self.env, fox.path), self.out, self.popen)
-        if status != 0:
-            raise RunError(PIO_FAILED % (status, "\n  ".join(tail)))
+        hold = bootloader.enter(fox, self.say, self.sleep, self.clock)
+        uploaded = False
+        try:
+            # A serial-only verify leaves every radio alone and needs no tool.
+            what = None if run.serial_only else run.check_tools(selection, self.which)
+            needs_root = what is not None and not privileges.has_net_admin(self.euid, self.capabilities)
+            sudo = None
+            if needs_root:
+                sudo = self.which("sudo")
+                if sudo is None:
+                    raise RunError(NO_SUDO % what)
+            self.say("project %s, environment %s, conference %s" % (
+                os.path.relpath(self.project_dir, REPO), self.env, conference(self.project_dir)))
+            self.say("fox on %s%s" % (fox.path, "; verify runs through sudo for %s" % what if needs_root else ""))
+            if needs_root and self.call([sudo, "-v"]) != 0:
+                raise RunError(SUDO_FAILED % what)
+            status, tail = stream(pio_argv(pio, self.project_dir, self.env, fox.path), self.out, self.popen)
+            if status != 0:
+                raise RunError(PIO_FAILED % (status, "\n  ".join(tail)))
+            uploaded = True
+        finally:
+            # Whatever ends the run before the upload, the fox must not be left
+            # in the bootloader.
+            if hold.held and not uploaded:
+                bootloader.release(hold, self.say, self.sleep)
         added = None if given else self.fox_after_flash(fox.path, options.wait_for_fox)
         command = ([sudo] if needs_root else []) + [os.path.join(self.project_dir, "verify")]
         command += verify_argv(self.verify_args, options.devices, added)

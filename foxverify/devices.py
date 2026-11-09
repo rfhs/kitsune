@@ -8,8 +8,8 @@ A positional DEVICE argument is a plain name and is classified by what it is:
   802.15.4 sniffer.
 - any other serial port: the fox.
 
-When no fox is given, the serial ports with an Espressif, Silicon Labs CP210x,
-WCH or FTDI vendor id are the candidates. Exactly one is used. None means the
+When no fox is given, the serial ports with an Espressif, Arduino, Silicon
+Labs CP210x, WCH or FTDI vendor id are the candidates. Exactly one is used. None means the
 script waits up to ``--wait-for-fox`` seconds for one to appear, because a
 native USB board in deep sleep has no serial device, then gives up with "no
 ESP32 serial device found". Several are listed with path, VID:PID, product and
@@ -43,10 +43,12 @@ FOX = "fox"
 # releases and as 1915:154B from 0.8.0; both speak the same serial protocol.
 NRF_SNIFFER_IDS = {(0x1915, 0x154A), (0x1915, 0x154B)}
 # Vendor ids of the USB serial bridges and native USB stacks the foxes use:
-# Espressif (native USB, also the Arduino Nano ESP32 in TinyUSB mode), Silicon
-# Labs CP210x, WCH CH910x and FTDI.
+# Espressif (the USB-Serial-JTAG peripheral of the M5 AtomS3, StampS3 and Seeed
+# XIAO ESP32-C5), Arduino (the Nano ESP32's TinyUSB stack enumerates as
+# 2341:0070), Silicon Labs CP210x, WCH CH910x and FTDI.
 FOX_VENDOR_IDS = {
     0x303A: "Espressif",
+    0x2341: "Arduino",
     0x10C4: "Silicon Labs",
     0x1A86: "WCH",
     0x0403: "FTDI",

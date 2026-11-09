@@ -65,6 +65,7 @@ ESP = (0x303A, 0x1001, "USB JTAG/serial debug unit", "F4:12:FA:00:11:22")
 CP210X = (0x10C4, 0xEA60, "CP2104 USB to UART Bridge Controller", "0123ABCD")
 CH9102 = (0x1A86, 0x55D4, "USB Single Serial", "5698001234")
 FTDI = (0x0403, 0x6001, "FT232R USB UART", "A50285BI")
+NANO = (0x2341, 0x0070, "Arduino Nano ESP32", "DC:DA:0C:21:5E:E8")
 NRF = (0x1915, 0x154A, "nRF Sniffer for 802.15.4", "F1D2E3C4B5A6")
 NRF_080 = (0x1915, 0x154B, "nRF Sniffer for 802.15.4", "A6B5C4D3E2F1")
 NORDIC_OTHER = (0x1915, 0x520F, "nRF52 USB CDC", "C0FFEE")
@@ -144,6 +145,16 @@ class ClassifyTest(DevicesTestCase):
         self.assertEqual(by_name.port, by_link.port)
         self.assertEqual(by_name.port.device, fox.device)
 
+    def test_arduino_nano_esp32_is_a_fox_candidate(self):
+        """The Nano's TinyUSB stack enumerates with Arduino's vendor id, not Espressif's."""
+        nano = self.tree.port("ttyACM0", *NANO, link="usb-Arduino_NanoESP32_DC:DA:0C:21:5E:E8-if00")
+        device = self.classify(nano.device, [nano])
+        self.assertEqual(device.kind, devices.FOX)
+        self.assertEqual(device.path, os.path.join(self.tree.by_id, "usb-Arduino_NanoESP32_DC:DA:0C:21:5E:E8-if00"))
+        self.assertTrue(devices.Port(nano.device, *NANO).is_fox_candidate())
+        self.assertFalse(devices.Port(nano.device, *NANO).is_sniffer())
+        self.assertEqual(devices.FOX_VENDOR_IDS[0x2341], "Arduino")
+
     def test_serial_port_without_usb_info_is_the_fox(self):
         path = os.path.join(self.tree.dev, "ttyS0")
         with open(path, "w"):
@@ -196,15 +207,27 @@ class AutodetectTest(DevicesTestCase):
             self.autodetect([], wait=30, deadline=deadline)
         self.assertEqual(self.clock.now, 1012.0)
 
+    def test_lone_nano_is_autodetected(self):
+        nano = self.tree.port("ttyACM0", *NANO, link="usb-Arduino_NanoESP32_DC:DA:0C:21:5E:E8-if00")
+        other = self.tree.port("ttyUSB9", *OTHER)
+        device = self.autodetect([other, nano])
+        self.assertEqual(device.kind, devices.FOX)
+        self.assertEqual(device.port.vid, 0x2341)
+        self.assertEqual(device.path, os.path.join(self.tree.by_id, "usb-Arduino_NanoESP32_DC:DA:0C:21:5E:E8-if00"))
+        self.assertEqual(self.clock.now, 1000.0)
+
     def test_several_candidates_are_listed(self):
         a = self.tree.port("ttyUSB0", *CP210X, link="usb-Silicon_Labs_CP2104_0123ABCD-if00-port0")
         b = self.tree.port("ttyACM0", *ESP)
         c = self.tree.port("ttyUSB1", *FTDI)
         d = self.tree.port("ttyACM1", *CH9102)
+        e = self.tree.port("ttyACM2", *NANO)
         with self.assertRaises(RunError) as caught:
-            self.autodetect([a, b, c, d])
+            self.autodetect([a, b, c, d, e])
         text = str(caught.exception)
-        self.assertIn("4 ESP32 serial devices found", text)
+        self.assertIn("5 ESP32 serial devices found", text)
+        self.assertIn("2341:0070", text)
+        self.assertIn("Arduino Nano ESP32", text)
         self.assertIn(os.path.join(self.tree.by_id, "usb-Silicon_Labs_CP2104_0123ABCD-if00-port0"), text)
         self.assertIn("10C4:EA60", text)
         self.assertIn("CP2104 USB to UART Bridge Controller", text)
