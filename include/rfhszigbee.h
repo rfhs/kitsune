@@ -118,6 +118,14 @@ bool rfhsstartradio() {
   // 802.15.4 has only channels 11-26 at 2.4 GHz.
   set_channel = 11 + (esp_random() % 16);
 #endif
+  // The channel goes out before the radio starts, so a sniffer that reads
+  // it over serial can be on the channel for the network formation. The
+  // flush moves the line out of the USB FIFO before the start. The host may
+  // not have the port open this early, so the Operating channel readback
+  // after the start remains the record. The PAN ID has no such line: for a
+  // random PAN_ID the stack picks it during formation.
+  Serial.printf("Starting on channel %d\r\n", set_channel);
+  Serial.flush();
   Zigbee.addEndpoint(&zbCoordinator);
   Zigbee.setPrimaryChannelMask(1 << set_channel);
   // The true erases the network saved before sleep, so the stack forms a

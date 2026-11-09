@@ -155,6 +155,13 @@ bool rfhsstartradio() {
   set_channel++;
 #endif
 #endif
+  // The channel goes out before the radio starts, so a sniffer that reads
+  // it over serial can be on the channel for the first beacon. The flush
+  // moves the line out of the UART or the USB FIFO before the start. On a
+  // native USB board the host may not have the port open this early, so the
+  // Operating channel readback after the start remains the record.
+  Serial.printf("Starting on channel %d\r\n", set_channel);
+  Serial.flush();
   WiFi.mode(WIFI_AP);
   if (!WiFi.softAP(FSSID, PSK, set_channel, SSID_HIDDEN, MAX_CLIENTS)) {
     return false;
