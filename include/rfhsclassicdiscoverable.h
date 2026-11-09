@@ -24,9 +24,7 @@ static_assert(sizeof(NAME) - 1 >= 1 && sizeof(NAME) - 1 <= 32, "NAME must be 1-3
 // A general inquiry takes 10.24 seconds and the fox answers about 2 seconds
 // after it boots, so a shorter wake can end before an inquiry that started
 // as the fox woke has reached it. rfhssleeptimers.h checks the upper bound.
-#if !defined(TIME_TO_WAKE) || !defined(TIME_TO_SLEEP)
-#error "TIME_TO_WAKE and TIME_TO_SLEEP must be defined in the conference header, in seconds"
-#elif TIME_TO_WAKE < 15
+#if TIME_TO_WAKE < 15
 #error "TIME_TO_WAKE must be at least 15 seconds: a Bluetooth inquiry takes 10.24 seconds and the fox needs about 2 seconds after boot to answer one"
 #endif
 

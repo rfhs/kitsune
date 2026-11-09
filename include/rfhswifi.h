@@ -50,10 +50,6 @@ static_assert(TXPOWER == WIFI_POWER_19_5dBm || TXPOWER == WIFI_POWER_19dBm || TX
            || TXPOWER == WIFI_POWER_5dBm || TXPOWER == WIFI_POWER_2dBm || TXPOWER == WIFI_POWER_MINUS_1dBm,
     "TXPOWER must be between WIFI_POWER_19_5dBm and WIFI_POWER_MINUS_1dBm");
 
-#if !defined(TIME_TO_WAKE) || !defined(TIME_TO_SLEEP)
-#error "TIME_TO_WAKE and TIME_TO_SLEEP must be defined in the conference header, in seconds"
-#endif
-
 #if defined(AP)
 // CHANNEL: 0 picks a random channel every wake. The firmware sets country
 // US, so a fixed 2.4 GHz channel is 1-11. A fixed 5 GHz channel is one of

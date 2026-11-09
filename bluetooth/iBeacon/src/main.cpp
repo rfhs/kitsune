@@ -18,6 +18,7 @@ void setup() {
   rfhsstartibeacon();
   // The radio is up, so the host has had time to open the port; see rfhsbanner.h.
   RFHS_BANNER("iBeacon");
+  rfhsprintsleeptimers();
   if (!rfhscheckibeacon()) {
     Serial.flush();
     pAdvertising->stop();
@@ -25,24 +26,20 @@ void setup() {
   }
   ledcolor(0x0000FF); // BLUE
   Serial.println("iBeacon advertising!");
-  #ifdef DEEP_SLEEP
-  delay(ADVERTISING_DURATION * 1000);
+  delay(TIME_TO_WAKE * mS_TO_S);
 
   ledcolor(0x880000);  // HALF RED
   pAdvertising->stop();
   Serial.println("entering deep sleep");
   ledcolor(0xff0000);  // RED
   delay(50);
-  esp_deep_sleep(1000000LL * GPIO_DEEP_SLEEP_DURATION);
+  esp_deep_sleep(1000000LL * TIME_TO_SLEEP);
   // This line should never run so it's a canary for sleep failed
   rfhsledfatal();
-  #endif
 }
 
 void loop() {
-  #ifdef DEEP_SLEEP
   // setup should sleep then restart so this should also never run.
   Serial.println("Entered loop, we are broken");
   rfhsledfatal();
-  #endif
 }

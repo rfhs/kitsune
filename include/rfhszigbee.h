@@ -14,9 +14,6 @@
 #if (defined(EASY) + defined(HARD)) != 1
 #error "Build with exactly one of -D EASY or -D HARD"
 #endif
-#if !defined(TIME_TO_WAKE) || !defined(TIME_TO_SLEEP)
-#error "TIME_TO_WAKE and TIME_TO_SLEEP must be defined in the conference header, in seconds"
-#endif
 // CHANNEL: 802.15.4 has channels 11-26 at 2.4 GHz. 0 picks one at random
 // every wake.
 #ifndef CHANNEL

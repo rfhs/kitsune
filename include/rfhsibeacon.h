@@ -6,6 +6,7 @@
 #include <BLEUtils.h>
 #include <BLE2902.h>
 #include <BLEBeacon.h>
+#include <type_traits>
 #include <rfhsbt.h>
 
 // Exactly one difficulty, so exactly one block of the conference header
@@ -54,63 +55,32 @@ static_assert(sizeof(BEACON_UUID) == 37 && rfhs_uuid_ok(BEACON_UUID),
 #endif
 // Byte swapped to 0x4C00, the form the library wants.
 #define MANUFACTURER_ID 0x4C00
-
-#if defined(EASY)
+// TIME_TO_WAKE is the seconds the beacon is on the air per wake. An active
+// scan needs to hear the beacon and then get its name from a scan response,
+// so a shorter window lets a scan miss the fox or see it without the name.
+// rfhssleeptimers.h checks the upper bound and TIME_TO_SLEEP.
+#if TIME_TO_WAKE < 5
+#error "TIME_TO_WAKE must be at least 5 seconds so an active scan can hear the beacon and read its name"
+#endif
+// TXPOWER is one of the ESP_PWR_LVL_* names. Only the eight levels both
+// supported cores define are allowed, ESP_PWR_LVL_N12 to ESP_PWR_LVL_P9 in
+// 3 dBm steps, and only under those names: the ESP32-S3 core has lower and
+// higher names the ESP32 core lacks, and the ESP32 core has aliases such as
+// ESP_PWR_LVL_N14 that stand for another level, which the controller would
+// report under that level's name. An alias has the same number as the level
+// it stands for, so the text of the value is compared, not its number.
+#ifndef TXPOWER
+#error "TXPOWER must be defined in the conference header, an ESP_PWR_LVL_* name from ESP_PWR_LVL_N12 to ESP_PWR_LVL_P9"
+#endif
+static_assert(std::is_same<decltype(TXPOWER), esp_power_level_t>::value, "TXPOWER must be an ESP_PWR_LVL_* name, not a number");
+static_assert(rfhs_str_eq(RFHS_STR(TXPOWER), "ESP_PWR_LVL_N12") || rfhs_str_eq(RFHS_STR(TXPOWER), "ESP_PWR_LVL_N9")
+           || rfhs_str_eq(RFHS_STR(TXPOWER), "ESP_PWR_LVL_N6") || rfhs_str_eq(RFHS_STR(TXPOWER), "ESP_PWR_LVL_N3")
+           || rfhs_str_eq(RFHS_STR(TXPOWER), "ESP_PWR_LVL_N0") || rfhs_str_eq(RFHS_STR(TXPOWER), "ESP_PWR_LVL_P3")
+           || rfhs_str_eq(RFHS_STR(TXPOWER), "ESP_PWR_LVL_P6") || rfhs_str_eq(RFHS_STR(TXPOWER), "ESP_PWR_LVL_P9"),
+    "TXPOWER must be one of ESP_PWR_LVL_N12, ESP_PWR_LVL_N9, ESP_PWR_LVL_N6, ESP_PWR_LVL_N3, ESP_PWR_LVL_N0, ESP_PWR_LVL_P3, ESP_PWR_LVL_P6 or ESP_PWR_LVL_P9");
 
 #define ADV_MIN_INTERVAL    32
 #define ADV_MAX_INTERVAL    64
-#define ADV_TX_POWER        ESP_PWR_LVL_P9
-
-#elif defined(MEDIUM)
-
-#define DEEP_SLEEP
-#define ADV_MIN_INTERVAL    32
-#define ADV_MAX_INTERVAL    64
-#define ADV_TX_POWER        ESP_PWR_LVL_N0
-// Seconds on air per wake and seconds asleep between wakes. Both can be
-// overridden with a -D build flag.
-#ifndef ADVERTISING_DURATION
-#define ADVERTISING_DURATION     5
-#endif
-#ifndef GPIO_DEEP_SLEEP_DURATION
-#define GPIO_DEEP_SLEEP_DURATION 5
-#endif
-
-#elif defined(HARD)
-
-#define DEEP_SLEEP
-#define ADV_MIN_INTERVAL    32
-#define ADV_MAX_INTERVAL    64
-#define ADV_TX_POWER        ESP_PWR_LVL_N12
-// Seconds on air per wake and seconds asleep between wakes. Both can be
-// overridden with a -D build flag.
-#ifndef ADVERTISING_DURATION
-#define ADVERTISING_DURATION     10
-#endif
-#ifndef GPIO_DEEP_SLEEP_DURATION
-#define GPIO_DEEP_SLEEP_DURATION 30
-#endif
-
-#endif
-// A sleeping fox is only on air for ADVERTISING_DURATION seconds per wake.
-// An active scan needs the beacon to be heard and then answer a scan
-// request with its name, so a shorter window lets a scan miss the fox or
-// see it without the name.
-#ifdef DEEP_SLEEP
-#if ADVERTISING_DURATION < 5
-#error "ADVERTISING_DURATION must be at least 5 seconds when DEEP_SLEEP is defined, so an active scan can hear the beacon and read its name"
-#endif
-#endif
-// ADV_TX_POWER   Power level for advertisements
-// ---------------------------------------------
-// ESP_PWR_LVL_N12 = 0 | Corresponding to -12dbm
-// ESP_PWR_LVL_N9 = 1  | Corresponding to -9dbm
-// ESP_PWR_LVL_N6 = 2  | Corresponding to -6dbm
-// ESP_PWR_LVL_N3 = 3  | Corresponding to -3dbm
-// ESP_PWR_LVL_N0 = 4  | Corresponding to  0dbm
-// ESP_PWR_LVL_P3 = 5  | Corresponding to +3dbm
-// ESP_PWR_LVL_P6 = 6  | Corresponding to +6dbm
-// ESP_PWR_LVL_P9 = 7  | Corresponding to +9dbm
 
 // ADV_TYPE
 // For non-connectable advertisements without device name, set to: ADV_TYPE_NONCONN_IND 
@@ -147,11 +117,11 @@ void rfhsstartibeacon() {
   rfhssetbtmac();
   BLEDevice::init(DEVICE_NAME);
  
-  BLEDevice::setPower(ADV_TX_POWER);
+  BLEDevice::setPower(TXPOWER);
   // The advertising power type is set on its own as well, so the readback
   // of that type in rfhscheckibeacon() asks the controller for a value it
   // was given.
-  BLEDevice::setPower(ADV_TX_POWER, ESP_BLE_PWR_TYPE_ADV);
+  BLEDevice::setPower(TXPOWER, ESP_BLE_PWR_TYPE_ADV);
 
   pAdvertising = BLEDevice::getAdvertising();
   pAdvertising->setAdvertisementType(ADV_TYPE);
@@ -172,8 +142,21 @@ void rfhsstartibeacon() {
 // back from the manufacturer data handed to it, which has the iBeacon
 // layout: company id, type, length, 16 byte UUID, major, minor and signal
 // power, the 16 bit fields most significant byte first. The address and
-// the advertising power are read back from the controller. Power levels
-// are 3 dBm apart around ESP_PWR_LVL_N0 on the ESP32 and the ESP32-S3.
+// the transmit power are read back from the controller.
+//
+// The ESP_PWR_LVL_* names spell out a level's dBm, 3 dBm per step around
+// ESP_PWR_LVL_N0 on the ESP32 and the ESP32-S3, so the name of any level the
+// controller reports is built from that number.
+static int rfhsbledbm(esp_power_level_t level) {
+  return 3 * ((int)level - (int)ESP_PWR_LVL_N0);
+}
+
+static const char *rfhsblepowername(esp_power_level_t level, char *name, size_t size) {
+  int dbm = rfhsbledbm(level);
+  snprintf(name, size, "ESP_PWR_LVL_%c%d", dbm > 0 ? 'P' : 'N', dbm < 0 ? -dbm : dbm);
+  return name;
+}
+
 bool rfhscheckibeacon() {
   Serial.println("Device name: " DEVICE_NAME);
   std::string data = myBeacon.getData();
@@ -219,12 +202,13 @@ bool rfhscheckibeacon() {
     return false;
   }
   esp_power_level_t level = esp_ble_tx_power_get(ESP_BLE_PWR_TYPE_ADV);
-  Serial.printf("Advertising power: %d dBm (level %d)\r\n",
-      3 * ((int)level - (int)ESP_PWR_LVL_N0), (int)level);
-  if (level != ADV_TX_POWER) {
-    Serial.printf("Requested advertising power: %d dBm (level %d)\r\n",
-        3 * ((int)ADV_TX_POWER - (int)ESP_PWR_LVL_N0), (int)ADV_TX_POWER);
-    Serial.println("Advertising power != Requested advertising power");
+  char name[24];
+  Serial.printf("Tx power: %s (%d dBm)\r\n",
+      rfhsblepowername(level, name, sizeof(name)), rfhsbledbm(level));
+  if (level != TXPOWER) {
+    Serial.printf("Requested tx power: %s (%d dBm)\r\n",
+        rfhsblepowername(TXPOWER, name, sizeof(name)), rfhsbledbm(TXPOWER));
+    Serial.println("Tx power != Requested tx power");
     return false;
   }
   return true;
