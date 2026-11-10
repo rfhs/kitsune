@@ -268,12 +268,12 @@ class AutodetectTest(DevicesTestCase):
         self.assertEqual(sniffer.path, a.device)
         self.assertIsNone(devices.autodetect_sniffer(devices.list_ports(self.comports()), self.tree.by_id))
 
-    def test_hci_only_when_exactly_one_adapter(self):
+    def test_hci_picks_the_first_of_several(self):
         self.assertIsNone(devices.autodetect_hci(self.tree.bluetooth))
         self.tree.adapter("hci0")
         self.assertEqual(devices.autodetect_hci(self.tree.bluetooth).path, "hci0")
         self.tree.adapter("hci1")
-        self.assertIsNone(devices.autodetect_hci(self.tree.bluetooth))
+        self.assertEqual(devices.autodetect_hci(self.tree.bluetooth).path, "hci0")
         self.assertEqual(devices.hci_adapters(self.tree.bluetooth), ["hci0", "hci1"])
         self.assertEqual(devices.hci_adapters(os.path.join(self.tree.root, "missing")), [])
 

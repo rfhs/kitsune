@@ -107,7 +107,7 @@ DEVICE is a plain name: a network interface (wlan1), a Bluetooth adapter
 (hci0) or a serial port (/dev/ttyACM1). A serial port with the nRF52840
 sniffer's USB id is the 802.15.4 sniffer, any other serial port is the fox.
 Without a fox the one ESP32 serial device is used; without a sniffer an
-nRF sniffer or the only hciN adapter is used. A Wi-Fi interface is never
+nRF sniffer or an hciN adapter is used. A Wi-Fi interface is never
 guessed. Exit 0 when nothing FAILed, 1 on any FAIL, 2 when the run could
 not happen."""
 
@@ -479,7 +479,7 @@ class ClassicRun(Run):
     def start_air(self, selection, candidates):
         from . import btclassic
         if selection.hci is None:
-            self.no_sniffer("no Bluetooth adapter given and not exactly one found")
+            self.no_sniffer("no Bluetooth adapter found (plug one in or name it, for example hci0)")
             return None
         self.check_privileges(selection)
         btmgmt = shutil.which("btmgmt")
@@ -528,7 +528,7 @@ class IBeaconRun(Run):
     def start_air(self, selection, candidates):
         from . import ble
         if selection.hci is None:
-            self.no_sniffer("no Bluetooth adapter given and not exactly one found")
+            self.no_sniffer("no Bluetooth adapter found (plug one in or name it, for example hci0)")
             return None
         self.check_privileges(selection)
         self.report.debug("active scan on %s for %s" % (selection.hci.path, ", ".join(candidates)))

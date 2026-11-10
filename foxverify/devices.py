@@ -14,9 +14,10 @@ script waits up to ``--wait-for-fox`` seconds for one to appear, because a
 native USB board in deep sleep has no serial device, then gives up with "no
 ESP32 serial device found". Several are listed with path, VID:PID, product and
 serial number and the user is asked to name one. A sniffer is autodetected by
-kind: an nRF by its USB id, the first by port path when several are plugged in;
-``hciN`` when there is exactly one adapter. A Wi-Fi interface is never guessed,
-because putting the wrong card into monitor mode takes the laptop offline.
+kind, taking the first when several of a kind are present since any one of a
+kind serves: an nRF by its USB id, an ``hciN`` adapter by name. A Wi-Fi
+interface is never guessed, because putting the wrong card into monitor mode
+takes the laptop offline.
 
 Serial devices are always referred to by their ``/dev/serial/by-id/`` path when
 one exists: a native USB board re-enumerates after deep sleep and its raw
@@ -215,9 +216,10 @@ def hci_adapters(bluetooth_dir: str = BLUETOOTH_DIR) -> List[str]:
 
 
 def autodetect_hci(bluetooth_dir: str = BLUETOOTH_DIR) -> Optional[Device]:
-    """The Bluetooth adapter when exactly one exists."""
+    """The Bluetooth adapter; the first by name when several exist, since any
+    one scans the same. None when there is none."""
     adapters = hci_adapters(bluetooth_dir)
-    if len(adapters) != 1:
+    if not adapters:
         return None
     return Device(HCI, adapters[0], None)
 
