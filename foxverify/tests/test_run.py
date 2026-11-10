@@ -1308,7 +1308,7 @@ class AirRunTest(unittest.TestCase):
         self.assertIn("TIME_TO_WAKE and TIME_TO_SLEEP serial only (--timeout 60 is under the 605 s needed to "
                       "measure the cycle time: two cycles of 300 s plus the 5 s boot allowance)\n", out.getvalue())
         self.assertNotIn("note:", out.getvalue())
-        self.assertIn("hopping 11 channels at 3 s each, a 33 s sweep; a client scans every channel for its "
+        self.assertIn("hopping 11 channels at 0.2 s each, a 2.2 s sweep; a client scans every channel for its "
                       "network about every 1 s\n", out.getvalue())
         self.assertTrue(out.getvalue().endswith("run with --timeout 605 to measure the cycle time\n"), out.getvalue())
 

@@ -109,7 +109,7 @@ run with --timeout 125 to measure the cycle time
 What each fox needs on the air, and the privilege for it:
 - Bluetooth Classic: `btmgmt` (bluez) runs an inquiry on `hci0`; needs root or `CAP_NET_ADMIN`.
 - iBeacon: an active BLE scan with [bleak](https://github.com/hbldh/bleak) on `hci0`; no root needed.
-- Wi-Fi: `tshark`, `iw` and `ip` put the named card into monitor mode and read beacons (AP) or probe requests (client); needs root. The card's type and state are put back when the script ends, including on Ctrl-C. A client has no fixed channel, so the card hops 1-11 at 3 s each (a 33 s sweep) while the fox probes every channel for its network about once a second; `verify` prints the hop and probe-sweep timing when it starts to listen.
+- Wi-Fi: `tshark`, `iw` and `ip` put the named card into monitor mode and read beacons (AP) or probe requests (client); needs root. The card's type and state are put back when the script ends, including on Ctrl-C. A client has no fixed channel, so the card hops 1-11 at 0.2 s each (a 2.2 s sweep) while the fox probes every channel for its network about once a second; `verify` prints the hop and probe-sweep timing when it starts to listen.
 - Zigbee: an nRF52840 dongle running Nordic's 802.15.4 sniffer firmware (the one Kismet uses) and `tshark`; no root needed, only access to the dongle's serial port. `PACKET_INTERVAL` needs two Link Status frames, so an interval above about 20 seconds cannot be confirmed within the 60 second limit and is reported `unverified`. The dongle only receives, which is why `EXT_PAN_ID` is `serial only: unable to trigger`.
 
 The `verify` scripts never call `sudo` themselves; run them under it when the check above needs root, or use `flash_verify` below, which does. Packages:
