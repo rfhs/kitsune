@@ -59,8 +59,12 @@ CIPHER_CCMP = 4
 WPA2_PSK_CCMP = "WPA2-PSK/CCMP"
 # Channels a 2.4 GHz client fox is listened for when the header has none.
 CLIENT_CHANNELS = tuple(range(1, 12))
+# Rough seconds an ESP32 client takes to probe every 2.4 GHz channel once while
+# it scans for its network. An estimate, to tell the user what to expect and to
+# size PROBE_DWELL, not a measured value.
+PROBE_SWEEP_SECONDS = 1.0
 # Seconds the card stays on one channel while listening for a client's probes:
-# longer than one scan of the station across all channels.
+# longer than one PROBE_SWEEP_SECONDS so a dwell overlaps a whole scan.
 PROBE_DWELL = 3.0
 # Seconds between checks of the tshark output while hopping.
 HOP_POLL = 0.25

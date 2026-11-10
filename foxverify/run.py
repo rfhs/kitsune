@@ -620,6 +620,11 @@ class WifiRun(Run):
             self.report.say("listening for probe requests from %s on channel%s %s with %s%s" % (
                 mac, "s" if len(channels) > 1 else "", ",".join(str(c) for c in channels), interface,
                 self.through()))
+            if len(channels) > 1:
+                self.report.say("hopping %d channels at %g s each, a %g s sweep; a client scans every "
+                                "channel for its network about every %g s" % (
+                                    len(channels), wifi.PROBE_DWELL, len(channels) * wifi.PROBE_DWELL,
+                                    wifi.PROBE_SWEEP_SECONDS))
             with wifi.monitor_mode(interface):
                 probes = wifi.observe_client(interface, mac, block.string("FSSID"), channels,
                                              self.deadline, self.tshark, debug=self.report.debug,
