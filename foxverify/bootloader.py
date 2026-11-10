@@ -6,11 +6,12 @@ chip's own USB peripheral the port is gone for the whole sleep, so esptool
 finds nothing when the build is done. The ROM bootloader in download mode has
 no timeout and never sleeps. ``enter`` puts the chip there the moment its port
 appears and confirms it with the ROM's ``waiting for download`` line; the
-build runs after that, and esptool's own reset at the start of the upload
-restarts a chip that is already in download mode into download mode again.
-``release`` resets a held chip back into its application when the upload did
-not happen, so a failed build or a Ctrl-C leaves the fox running its old
-firmware.
+build runs after that, and the upload of a confirmed chip runs without
+esptool's resets (``flash.py``, ``pio_held_upload``), so esptool syncs with
+the ROM it finds and leaves the chip in the bootloader when it is done.
+``restart`` then resets the chip into the new firmware. ``release`` resets a
+held chip back into its application when the upload did not happen, so a
+failed build or a Ctrl-C leaves the fox running its old firmware.
 
 The DTR/RTS sequences live in ``usbstack`` with the USB stacks they belong
 to; the bootloader entries are esptool's, chosen by the port's USB id:
@@ -35,7 +36,7 @@ Opening the port does not reset or arm the chip on any stack
 (``usbstack.open_port``). Both entry sequences end with DTR and RTS released,
 the state esptool leaves with ``--after no_reset``, and the kernel's hang-up
 on close lowers both lines in one request, so closing does not reset it
-either. ``release`` is the hard reset ``verify`` uses,
+either. ``release`` and ``restart`` are the hard reset ``verify`` uses,
 ``serial_fox.SerialSource.reset``, which is ``usbstack.hard_reset`` for the
 stack ``enter`` recorded in the ``Hold``, from whichever of its two resting
 states the port is in.
@@ -66,6 +67,7 @@ NANO_SKIPPED = ("fox on %s: the Arduino Nano ESP32 is flashed by dfu-util throug
                 "application, which the ROM bootloader does not have; flashing the old way")
 UNKNOWN_SKIPPED = "fox on %s: %s; not a USB bridge the script knows, flashing the old way"
 RELEASED = "fox on %s: reset back into its application"
+RESTARTED = "fox on %s: upload done; resetting the fox into the new firmware"
 NOT_RELEASED = "fox on %s: could not reset it; press its reset button"
 
 
@@ -73,12 +75,19 @@ class Hold(NamedTuple):
     """What ``enter`` did. ``held`` is true once a reset sequence has started
     reaching the fox, whether or not the bootloader was confirmed, so
     ``release`` puts the fox back into its application when the upload does
-    not happen. ``port`` is the fox's serial port record, which picks the
-    sequences."""
+    not happen. ``confirmed`` is true when the ROM's ``waiting for download``
+    line was read, so the fox is known to be in the bootloader and is flashed
+    without esptool's resets. ``port`` is the fox's serial port record, which
+    picks the sequences; ``stack`` is its USB stack."""
 
     held: bool
+    confirmed: bool
     path: str
     port: Optional[devices.Port]
+
+    @property
+    def stack(self) -> Optional[str]:
+        return usbstack.usb_stack(self.port)
 
 
 def _open(path: str, port: Optional[devices.Port], deadline: Deadline,
@@ -126,10 +135,10 @@ def enter(fox: devices.Device, say: Callable[[str], None],
     if stack is None:
         usb_id = fox.port.usb_id() if fox.port is not None else "no USB id"
         say(UNKNOWN_SKIPPED % (fox.path, usb_id if usb_id == "no USB id" else "USB id " + usb_id))
-        return Hold(False, fox.path, fox.port)
+        return Hold(False, False, fox.path, fox.port)
     if stack == usbstack.TINYUSB:
         say(NANO_SKIPPED % fox.path)
-        return Hold(False, fox.path, fox.port)
+        return Hold(False, False, fox.path, fox.port)
     deadline = Deadline(CONFIRM_SECONDS, clock)
     held = False
     confirmed = False
@@ -157,20 +166,37 @@ def enter(fox: devices.Device, say: Callable[[str], None],
         finally:
             source.close()
     say(IN_BOOTLOADER % fox.path if confirmed else NOT_CONFIRMED)
-    return Hold(held, fox.path, fox.port)
+    return Hold(held, confirmed, fox.path, fox.port)
+
+
+def _reset(hold: Hold, say: Callable[[str], None], sleep: Callable[[float], None]) -> bool:
+    """The hard reset ``verify`` uses, on the held fox's port; False, said,
+    when the port cannot be opened."""
+    try:
+        source = SerialSource(hold.path, sleep=sleep, port=hold.port)
+    except OSError:
+        say(NOT_RELEASED % hold.path)
+        return False
+    try:
+        source.reset()
+    finally:
+        source.close()
+    return True
 
 
 def release(hold: Hold, say: Callable[[str], None],
             sleep: Callable[[float], None] = time.sleep) -> None:
     """Reset a held fox back into its application with the hard reset
     ``verify`` uses, and say so; a fox that cannot be reached is said too."""
-    try:
-        source = SerialSource(hold.path, sleep=sleep, port=hold.port)
-    except OSError:
-        say(NOT_RELEASED % hold.path)
-        return
-    try:
-        source.reset()
-    finally:
-        source.close()
-    say(RELEASED % hold.path)
+    if _reset(hold, say, sleep):
+        say(RELEASED % hold.path)
+
+
+def restart(hold: Hold, say: Callable[[str], None], verbose: bool,
+            sleep: Callable[[float], None] = time.sleep) -> None:
+    """Reset a fox that esptool flashed and left in the bootloader into the
+    new firmware, with the same hard reset; said with ``verbose``, and a fox
+    that cannot be reached is said regardless."""
+    if verbose:
+        say(RESTARTED % hold.path)
+    _reset(hold, say, sleep)

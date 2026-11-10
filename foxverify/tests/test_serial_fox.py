@@ -1325,7 +1325,7 @@ class SerialSourceTest(unittest.TestCase):
             source.reset(clock)
             self.assertEqual(reopened.states[end:], [(False, True), (False, False)])
             FakeSerial.instances = []
-            bootloader.release(bootloader.Hold(True, path, jtag), lambda text: None, source.sleep)
+            bootloader.release(bootloader.Hold(True, True, path, jtag), lambda text: None, source.sleep)
             released = FakeSerial.instances[0]
             self.assertEqual(released.states, [(True, True), (False, True), (False, False)])
             for port, allowed in ((opened, ()), (reopened, ((start, end),)), (released, ())):
@@ -1429,7 +1429,7 @@ class SerialSourceTest(unittest.TestCase):
         for port, expected in ((BRIDGE, BRIDGE_HARD_RESET), (JTAG, USB_HARD_RESET)):
             FakeSerial.instances = []
             said = []
-            bootloader.release(bootloader.Hold(True, port.device, port), said.append, self.slept.append)
+            bootloader.release(bootloader.Hold(True, True, port.device, port), said.append, self.slept.append)
             released = FakeSerial.instances[0]
             self.assertEqual(said, [bootloader.RELEASED % port.device])
             self.assertTrue(released.closed)

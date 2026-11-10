@@ -28,7 +28,14 @@ flash, so anything ``verify`` accepts works here. The steps:
    so the password prompt comes before the build and not after it.
 6. Print the project, the environment, the conference ``src/current_conf.h``
    points at and the port, then build and upload with ``pio run``, output
-   shown as it arrives.
+   shown as it arrives. A fox confirmed in the bootloader is uploaded
+   without esptool's resets, and on a USB-Serial-JTAG port without esptool's
+   stub flasher, through the post extra script ``pio_held_upload`` named in
+   the ``PLATFORMIO_EXTRA_SCRIPTS`` environment variable of that one ``pio``
+   run; ``--disable-auto-clean`` keeps PlatformIO from treating the extra
+   script as a changed configuration and rebuilding everything. esptool then
+   leaves the fox in the bootloader and ``bootloader.restart`` resets it into
+   the new firmware.
 7. Work out the device the fox came back on. A fox the user named is passed
    on as given. An autodetected fox is passed on by its pre-flash path when
    that still exists; when it is gone, because a native USB board
@@ -47,9 +54,9 @@ import shutil
 import subprocess
 import sys
 import time
-from typing import Callable, Iterable, List, Optional, Sequence, TextIO, Tuple
+from typing import Callable, Dict, Iterable, List, Mapping, Optional, Sequence, TextIO, Tuple
 
-from . import bootloader, devices, privileges
+from . import bootloader, devices, pio_held_upload, privileges
 from .report import RunError
 from .run import INTERRUPTED, RUNS, parse_args as parse_verify_args
 from .serial_fox import PROJECT_DIRS
@@ -73,6 +80,11 @@ TAIL_CHARS = 4000
 # board that re-enumerates after the flash takes a moment to drop its old
 # device node, and a look before that would trust a path about to vanish.
 SETTLE_SECONDS = 1.0
+# The post extra script that takes esptool's resets, and the stub flasher on a
+# USB-Serial-JTAG port, out of the upload of a held fox, and the environment
+# variable PlatformIO reads extra scripts from.
+HELD_UPLOAD_SCRIPT = os.path.abspath(pio_held_upload.__file__)
+EXTRA_SCRIPTS = "PLATFORMIO_EXTRA_SCRIPTS"
 
 _ENV = re.compile(r"^\[env:([^\]]+)\]\s*$")
 
@@ -126,8 +138,32 @@ def conference(project_dir: str) -> str:
         return os.path.relpath(path, project_dir)
 
 
-def pio_argv(pio: str, project_dir: str, env: str, port: str) -> List[str]:
-    return [pio, "run", "--project-dir", project_dir, "-e", env, "-t", "upload", "--upload-port", port]
+def pio_argv(pio: str, project_dir: str, env: str, port: str, held: bool = False) -> List[str]:
+    """The upload command. For a held fox the extra script in the environment
+    makes PlatformIO see a changed project configuration, which would wipe
+    the build directory and rebuild every environment; ``--disable-auto-clean``
+    leaves the build directory to SCons's own dependency tracking."""
+    argv = [pio, "run", "--project-dir", project_dir, "-e", env]
+    if held:
+        argv.append("--disable-auto-clean")
+    return argv + ["-t", "upload", "--upload-port", port]
+
+
+def held_environment(environ: Mapping[str, str], stack: Optional[str]) -> Dict[str, str]:
+    """The ``pio`` process's environment for the upload of a held fox: the
+    caller's, with ``pio_held_upload`` first among the extra scripts and the
+    fox's USB stack (empty when unknown) in the variable the script reads. An
+    extra-scripts value the user already has is kept behind ours, joined the
+    way PlatformIO splits the variable: on newlines when it has one, else on
+    commas."""
+    env = dict(environ)
+    ours = "post:" + HELD_UPLOAD_SCRIPT
+    existing = env.get(EXTRA_SCRIPTS)
+    if existing:
+        ours += ("\n" if "\n" in existing else ", ") + existing
+    env[EXTRA_SCRIPTS] = ours
+    env[pio_held_upload.STACK_VARIABLE] = stack or ""
+    return env
 
 
 def verify_argv(verify_args: Sequence[str], given: Sequence[str], fox: Optional[str]) -> List[str]:
@@ -146,13 +182,15 @@ def verify_argv(verify_args: Sequence[str], given: Sequence[str], fox: Optional[
 
 
 def stream(argv: Sequence[str], out: TextIO,
-           popen: Callable[..., subprocess.Popen] = subprocess.Popen) -> Tuple[int, List[str]]:
+           popen: Callable[..., subprocess.Popen] = subprocess.Popen,
+           env: Optional[Mapping[str, str]] = None) -> Tuple[int, List[str]]:
     """Run a command, copying its output to ``out`` as it arrives. Returns
     the exit status and the last ``TAIL_LINES`` non-empty lines of the
-    output, for the message when the command fails."""
+    output, for the message when the command fails. ``env`` is the command's
+    environment, this process's when None."""
     decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
     tail = ""
-    process = popen(list(argv), stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    process = popen(list(argv), stdout=subprocess.PIPE, stderr=subprocess.STDOUT, env=env)
     try:
         with process.stdout as pipe:
             for chunk in iter(lambda: pipe.read1(4096), b""):
@@ -182,7 +220,8 @@ class Flash:
                  call: Callable[[List[str]], int] = subprocess.call,
                  popen: Callable[..., subprocess.Popen] = subprocess.Popen,
                  sleep: Callable[[float], None] = time.sleep,
-                 clock: Callable[[], float] = time.monotonic):
+                 clock: Callable[[], float] = time.monotonic,
+                 environ: Mapping[str, str] = os.environ):
         self.project = project
         self.env = args.env
         self.verify_args = list(args.verify_args)
@@ -196,6 +235,7 @@ class Flash:
         self.popen = popen
         self.sleep = sleep
         self.clock = clock
+        self.environ = environ
         self.project_dir = os.path.join(REPO, PROJECT_DIRS[project])
 
     def say(self, text: str) -> None:
@@ -234,7 +274,11 @@ class Flash:
             self.say("fox on %s%s" % (fox.path, "; verify runs through sudo for %s" % what if needs_root else ""))
             if needs_root and self.call([sudo, "-v"]) != 0:
                 raise RunError(SUDO_FAILED % what)
-            status, tail = stream(pio_argv(pio, self.project_dir, self.env, fox.path), self.out, self.popen)
+            # A fox confirmed in the bootloader is flashed without esptool
+            # resetting it; esptool leaves it in the bootloader afterwards.
+            environment = held_environment(self.environ, hold.stack) if hold.confirmed else None
+            status, tail = stream(pio_argv(pio, self.project_dir, self.env, fox.path, hold.confirmed),
+                                  self.out, self.popen, environment)
             if status != 0:
                 raise RunError(PIO_FAILED % (status, "\n  ".join(tail)))
             uploaded = True
@@ -243,6 +287,8 @@ class Flash:
             # in the bootloader.
             if hold.held and not uploaded:
                 bootloader.release(hold, self.say, self.sleep)
+        if hold.confirmed:
+            bootloader.restart(hold, self.say, options.verbose, self.sleep)
         added = None if given else self.fox_after_flash(fox.path, options.wait_for_fox)
         command = ([sudo] if needs_root else []) + [os.path.join(self.project_dir, "verify")]
         command += verify_argv(self.verify_args, options.devices, added)
