@@ -5,6 +5,9 @@
 #define MINOR               88
 #define SIGNAL_POWER        0xc5
 #define MAC_ADDR            {0xF2, 0xD7, 0x6B, 0xB2, 0x39, 0x42}
+#define TIME_TO_WAKE        300
+#define TIME_TO_SLEEP       0
+#define TXPOWER             ESP_PWR_LVL_P9
 
 #elif defined(MEDIUM)
 #define DEVICE_NAME         "Rocky BLE Medium Fox"
@@ -13,6 +16,9 @@
 #define MINOR               88
 #define SIGNAL_POWER        0xc5
 #define MAC_ADDR            {0xF2, 0x8B, 0x54, 0xEF, 0x9E, 0x0B}
+#define TIME_TO_WAKE        5
+#define TIME_TO_SLEEP       5
+#define TXPOWER             ESP_PWR_LVL_N0
 
 #elif defined(HARD)
 #define DEVICE_NAME         "Rubble BLE Hard Fox"
@@ -21,5 +27,8 @@
 #define MINOR               88
 #define SIGNAL_POWER        0xc5
 #define MAC_ADDR            {0xF2, 0xCC, 0xF3, 0x81, 0x27, 0xFA}
+#define TIME_TO_WAKE        10
+#define TIME_TO_SLEEP       30
+#define TXPOWER             ESP_PWR_LVL_N12
 
 #endif

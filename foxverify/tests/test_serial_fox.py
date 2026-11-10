@@ -3,9 +3,10 @@ import tempfile
 import unittest
 from unittest import mock
 
-from foxverify import serial_fox
+from foxverify import devices, serial_fox, usbstack
 from foxverify.report import Deadline, RunError
 from foxverify.tests import fixture, frozen_text, read_fixture
+from foxverify.tests.test_devices import CP210X, ESP, NANO, OTHER
 
 PROJECT_DIRS = {
     "classic_discoverable": "bluetooth/classic_discoverable",
@@ -14,27 +15,24 @@ PROJECT_DIRS = {
     "zigbee_coordinator": "zigbee/zigbee_coordinator",
 }
 
-TIMERS = {"time_to_wake": "TIME_TO_WAKE", "time_to_sleep": "TIME_TO_SLEEP"}
-WIFI_COMMON = dict(TIMERS, mac="MAC_ADDR", ssid="FSSID", psk="PSK", tx_power="TXPOWER")
+# The fields every fox prints: the device address first, the timers after
+# the banner.
+COMMON = {"address": "MAC_ADDR", "time_to_wake": "TIME_TO_WAKE", "time_to_sleep": "TIME_TO_SLEEP"}
+CLASSIC = dict(COMMON, name="NAME")
+WIFI_COMMON = dict(COMMON, ssid="FSSID", psk="PSK", tx_power="TXPOWER")
 WIFI_AP = dict(WIFI_COMMON, ssid_hidden="SSID_HIDDEN", max_clients="MAX_CLIENTS")
-ZIGBEE = dict(TIMERS, mac="MAC_ADDR", channel="CHANNEL", pan_id="PAN_ID", ext_pan_id="EXT_PAN_ID",
+ZIGBEE = dict(COMMON, channel="CHANNEL", pan_id="PAN_ID", ext_pan_id="EXT_PAN_ID",
               packet_interval="PACKET_INTERVAL", tx_power="TXPOWER")
+IBEACON = dict(COMMON, name="DEVICE_NAME", uuid="BEACON_UUID", major="MAJOR", minor="MINOR",
+               tx_power="TXPOWER")
 
 # transcript -> (project, difficulty, mode, serial field -> header macro)
 TRANSCRIPTS = {
-    "classic_easy": ("classic_discoverable", "EASY", None,
-                     dict(TIMERS, name="NAME", address="MAC_ADDR")),
-    "classic_hard": ("classic_discoverable", "HARD", None,
-                     dict(TIMERS, name="NAME", address="MAC_ADDR")),
-    "ibeacon_easy": ("iBeacon", "EASY", None,
-                     {"name": "DEVICE_NAME", "uuid": "BEACON_UUID", "major": "MAJOR",
-                      "minor": "MINOR", "address": "MAC_ADDR"}),
-    "ibeacon_medium": ("iBeacon", "MEDIUM", None,
-                       {"name": "DEVICE_NAME", "uuid": "BEACON_UUID", "major": "MAJOR",
-                        "minor": "MINOR", "address": "MAC_ADDR"}),
-    "ibeacon_hard": ("iBeacon", "HARD", None,
-                     {"name": "DEVICE_NAME", "uuid": "BEACON_UUID", "major": "MAJOR",
-                      "minor": "MINOR", "address": "MAC_ADDR"}),
+    "classic_easy": ("classic_discoverable", "EASY", None, CLASSIC),
+    "classic_hard": ("classic_discoverable", "HARD", None, CLASSIC),
+    "ibeacon_easy": ("iBeacon", "EASY", None, IBEACON),
+    "ibeacon_medium": ("iBeacon", "MEDIUM", None, IBEACON),
+    "ibeacon_hard": ("iBeacon", "HARD", None, IBEACON),
     "wifi_easy_ap": ("wifi_ap_client", "EASY", "AP", dict(WIFI_AP, channel="CHANNEL")),
     "wifi_hard_ap": ("wifi_ap_client", "HARD", "AP", WIFI_AP),
     "wifi_fiveeasy_ap": ("wifi_ap_client", "FIVEEASY", "AP", dict(WIFI_AP, channel="CHANNEL")),
@@ -48,6 +46,12 @@ TRANSCRIPTS = {
 
 def transcript(name):
     return read_fixture("transcripts", name + ".log")
+
+
+# The ROM's boot-mode line after a reset into download mode, from an ESP32-S3
+# through its USB-Serial-JTAG port and from an ESP32 behind a UART bridge.
+ROM_DOWNLOAD_S3 = "rst:0x1 (POWERON),boot:0x0 (DOWNLOAD(USB/UART0))\r\n"
+ROM_DOWNLOAD_ESP32 = "rst:0x1 (POWERON_RESET),boot:0x3 (DOWNLOAD_BOOT(UART0/UART1/SDIO_REI_REO_V2))\r\n"
 
 
 def timed(text, first=1.0, step=0.05):
@@ -66,13 +70,19 @@ class Run:
         self.source = serial_fox.TranscriptSource(items, self.clock)
         self.said = []
         self.debugged = []
+        # (field, the lines fed so far, the clock) for every field as it arrived.
+        self.fields = []
         self.readback = None
         self.error = None
         try:
             self.readback = serial_fox.read_fox(self.source, self.deadline, reset,
-                                                self.said.append, self.debugged.append)
+                                                self.said.append, self.debugged.append,
+                                                on_field=self.on_field)
         except RunError as error:
             self.error = error
+
+    def on_field(self, field, readback):
+        self.fields.append((field, len(readback.lines), self.clock.now))
 
     def elapsed(self):
         return self.clock.now - self.deadline.started
@@ -110,6 +120,12 @@ class TranscriptTest(unittest.TestCase):
             self.assertEqual(readback.get("initializing"), "Initializing...", name)
             self.assertIsNotNone(readback.integer("boot_count"), name)
             self.assertIn("since cold boot", readback.get("sleep_stats"), name)
+            self.assertEqual(readback.get("mac_set"), "successfully", name)
+            self.assertEqual(readback.get("awake"), "Awake and screaming", name)
+            # Every line from the firmware's first one on has a regex; only
+            # the ROM's boot text before it is unmatched.
+            firmware = readback.lines[readback.lines.index("Initializing..."):]
+            self.assertEqual([line for line in firmware if line in readback.unmatched], [], name)
             block = serial_fox.block_for(readback, project, frozen_text(project))
             for field, macro in fields.items():
                 value = readback.get(field)
@@ -119,7 +135,7 @@ class TranscriptTest(unittest.TestCase):
                     self.assertEqual(value, block.string(macro), "%s: %s" % (name, field))
                 elif text.startswith("{") or macro == "EXT_PAN_ID":
                     self.assertTrue(serial_fox.same_mac(block.mac(macro), value), "%s: %s" % (name, field))
-                elif text.startswith("WIFI_POWER_"):
+                elif text.startswith(("WIFI_POWER_", "ESP_PWR_LVL_")):
                     self.assertEqual(value, block.identifier(macro), "%s: %s" % (name, field))
                 else:
                     self.assertEqual(readback.integer(field), block.integer(macro), "%s: %s" % (name, field))
@@ -139,9 +155,9 @@ class TranscriptTest(unittest.TestCase):
 
     def test_wifi_fields(self):
         readback = serial_fox.parse_transcript(transcript("wifi_easy_ap"))
-        self.assertEqual(readback.get("setting_up"), "AP (Access Point)")
+        self.assertEqual(readback.get("setting_up"), "WiFi AP")
         self.assertEqual(readback.get("tx_power_status"), "ok")
-        self.assertEqual(readback.get("mac"), "F2:F4:90:22:0D:0F")
+        self.assertEqual(readback.get("address"), "F2:F4:90:22:0D:0F")
         self.assertEqual(readback.integer("channel"), 1)
         self.assertEqual(readback.get("ssid"), "Demo Hiro WiFi AP Easy Fox")
         self.assertEqual(readback.get("psk"), "0123456789")
@@ -150,58 +166,159 @@ class TranscriptTest(unittest.TestCase):
         self.assertEqual(readback.get("tx_power"), "WIFI_POWER_17dBm")
         self.assertEqual(readback.integer("time_to_wake"), 15)
         self.assertEqual(readback.integer("time_to_sleep"), 5)
+        self.assertEqual(readback.get("last_cycle"), "20.0s, target 20s")
+        self.assertEqual(readback.integer("starting_channel"), 1)
         client = serial_fox.parse_transcript(transcript("wifi_hard_client"))
         self.assertEqual(client.get("setting_up"), "WiFi Client")
-        self.assertEqual(client.get("mac"), "F2:83:27:31:80:C7")
+        self.assertEqual(client.get("tx_power_status"), "ok")
+        self.assertEqual(client.get("address"), "F2:83:27:31:80:C7")
         self.assertIsNone(client.get("channel"))
+        self.assertIsNone(client.get("starting_channel"))
         self.assertEqual(client.get("ssid"), "Demo Mr Lee WiFi Client Hard Fox")
         self.assertEqual(client.get("psk"), "0123456789")
         self.assertIsNone(client.get("ssid_hidden"))
         self.assertIsNone(client.get("max_clients"))
+        self.assertEqual(client.integer("time_to_sleep"), 0)
+        self.assertEqual(client.get("last_cycle"), "301.4s, target 300s")
+
+    def test_cycle_lines(self):
+        """The informational lines of the exact cycle: "Last cycle" on a timer
+        wake-up and "Cycle behind" after "Going to sleep" when the fox could
+        not honour a non-zero TIME_TO_SLEEP."""
+        behind = serial_fox.parse_transcript(transcript("wifi_fiveeasy_ap"))
+        self.assertEqual(behind.get("last_cycle"), "21.3s, target 20s")
+        self.assertEqual(behind.get("sleeping"), "Going to sleep")
+        self.assertEqual(behind.get("cycle_behind"), "1.3")
+        self.assertEqual(behind.lines[-2:], ["Going to sleep", "Cycle behind by 1.3s, rebooting at once"])
+        self.assertFalse(behind.halted())
+        self.assertTrue(behind.complete())
+        for name in ("classic_easy", "ibeacon_easy", "wifi_easy_client", "zigbee_easy"):
+            readback = serial_fox.parse_transcript(transcript(name))
+            self.assertEqual(readback.integer("boot_count"), 0, name)
+            self.assertIsNone(readback.get("last_cycle"), name)
+            self.assertIsNone(readback.get("cycle_behind"), name)
+        for name in ("classic_hard", "ibeacon_medium", "ibeacon_hard", "zigbee_hard"):
+            readback = serial_fox.parse_transcript(transcript(name))
+            self.assertGreater(readback.integer("boot_count"), 0, name)
+            self.assertRegex(readback.get("last_cycle"), r"^\d+\.\ds, target \d+s$", name)
+            self.assertIsNone(readback.get("cycle_behind"), name)
+
+    def test_starting_channel_line(self):
+        """The line a Wi-Fi AP or Zigbee fox prints before its radio starts:
+        caught as starting_channel, after the MAC set and before the banner in
+        every such transcript, absent from the client, iBeacon and Classic
+        ones; channel_line() prefers it to the readback and channel_mismatch()
+        shows both when they differ."""
+        for name, (project, difficulty, mode, fields) in TRANSCRIPTS.items():
+            readback = serial_fox.parse_transcript(transcript(name))
+            early = project == "zigbee_coordinator" or mode == "AP"
+            if not early:
+                self.assertIsNone(readback.get("starting_channel"), name)
+                self.assertIsNone(readback.channel_line(), name)
+                continue
+            self.assertEqual(readback.integer("starting_channel"), readback.integer("channel"), name)
+            self.assertEqual(readback.channel_line(), (readback.integer("channel"), "Starting on channel"), name)
+            self.assertIsNone(readback.channel_mismatch(), name)
+            lines = readback.lines
+            self.assertEqual(lines.index("Starting on channel %d" % readback.integer("channel")),
+                             lines.index("MAC address set successfully") + 1, name)
+            self.assertLess(lines.index("Starting on channel %d" % readback.integer("channel")),
+                            lines.index(readback.banner.text()), name)
+        for name in ("zigbee_easy_mismatch", "zigbee_start_failed"):
+            readback = serial_fox.parse_transcript(transcript(name))
+            self.assertEqual(readback.integer("starting_channel"), 15, name)
+            self.assertNotIn("Starting on channel 15", readback.unmatched, name)
+        readback = serial_fox.parse_transcript("Starting on channel 149\n")
+        self.assertEqual(readback.channel_line(), (149, "Starting on channel"))
+        self.assertIsNone(readback.channel_mismatch())
+        readback = serial_fox.parse_transcript("Operating channel: 7\n")
+        self.assertEqual(readback.channel_line(), (7, "Operating channel"))
+        self.assertIsNone(readback.channel_mismatch())
+        readback = serial_fox.parse_transcript("Starting on channel 9\nOperating channel: 7\n")
+        self.assertEqual(readback.channel_line(), (9, "Starting on channel"))
+        self.assertEqual(readback.channel_mismatch(), "7 (Starting on channel 9)")
+        for text in ("Starting on channel\n", "Starting on channel: 7\n", "starting on channel 7\n"):
+            readback = serial_fox.parse_transcript(text)
+            self.assertIsNone(readback.get("starting_channel"), text)
+            self.assertEqual(readback.unmatched, [text.strip()], text)
+        self.assertEqual(serial_fox.STARTING_CHANNEL, "Starting on channel")
+        self.assertEqual(serial_fox.OPERATING_CHANNEL, "Operating channel")
 
     def test_zigbee_and_classic_power_and_timers(self):
         zigbee = serial_fox.parse_transcript(transcript("zigbee_hard"))
+        self.assertEqual(zigbee.get("setting_up"), "Zigbee Coordinator")
+        self.assertEqual(zigbee.integer("starting_channel"), 11)
+        self.assertEqual(zigbee.get("address"), "F2:A7:19:62:C3:08:BE:35")
         self.assertEqual(zigbee.get("tx_power"), "20")
         self.assertEqual(zigbee.integer("tx_power"), 20)
         self.assertEqual(zigbee.integer("time_to_wake"), 300)
-        self.assertEqual(zigbee.integer("time_to_sleep"), 1)
+        self.assertEqual(zigbee.integer("time_to_sleep"), 0)
+        self.assertEqual(zigbee.get("last_cycle"), "304.2s, target 300s")
         negative = serial_fox.parse_transcript("Tx power: -15 dBm\n")
         self.assertEqual(negative.integer("tx_power"), -15)
         classic = serial_fox.parse_transcript(transcript("classic_hard"))
+        self.assertEqual(classic.get("setting_up"), "Bluetooth Classic")
         self.assertEqual(classic.integer("time_to_wake"), 30)
         self.assertEqual(classic.integer("time_to_sleep"), 30)
+        self.assertEqual(classic.get("last_cycle"), "60.0s, target 60s")
         self.assertIsNone(classic.get("tx_power"))
+
+    def test_address_is_six_or_eight_bytes(self):
+        for text, expected in [("Device address: F2:81:5A:C1:A3:26", "F2:81:5A:C1:A3:26"),
+                               ("Device address: f2:5a:3c:91:0e:7b:44:d8", "f2:5a:3c:91:0e:7b:44:d8")]:
+            self.assertEqual(serial_fox.parse_transcript(text + "\n").get("address"), expected, text)
+        for text in ("Device address: F2:81:5A:C1:A3", "Device address: F2:81:5A:C1:A3:26:27",
+                     "Device address: F2:81:5A:C1:A3:26:27:28:29", "Device address: F2-81-5A-C1-A3-26"):
+            readback = serial_fox.parse_transcript(text + "\n")
+            self.assertIsNone(readback.get("address"), text)
+            self.assertEqual(readback.unmatched, [text], text)
 
     def test_ibeacon_fields(self):
         readback = serial_fox.parse_transcript(transcript("ibeacon_hard"))
+        self.assertEqual(readback.get("setting_up"), "iBeacon")
+        self.assertEqual(readback.get("address"), "F2:AC:87:05:0A:C7")
         self.assertEqual(readback.get("name"), "Demo 3Jane BLE Hard Fox")
         self.assertEqual(readback.upper("uuid"), "DB6A0ED0-1DC3-4348-BD78-E997A0C082A3")
         self.assertEqual(readback.integer("major"), 5)
         self.assertEqual(readback.integer("minor"), 88)
         self.assertEqual(readback.integer("signal_power"), -59)
-        self.assertEqual(readback.get("address"), "F2:AC:87:05:0A:C7")
-        self.assertEqual(readback.integer("adv_power"), -12)
-        self.assertEqual(readback.integer("adv_power_level"), 0)
-        self.assertEqual(readback.get("advertising"), "iBeacon advertising!")
-        self.assertEqual(readback.get("sleeping"), "entering deep sleep")
+        self.assertEqual(readback.get("tx_power"), "ESP_PWR_LVL_N12")
+        self.assertEqual(readback.integer("time_to_wake"), 10)
+        self.assertEqual(readback.integer("time_to_sleep"), 30)
+        self.assertEqual(readback.get("awake"), "Awake and screaming")
+        self.assertEqual(readback.get("sleeping"), "Going to sleep")
         easy = serial_fox.parse_transcript(transcript("ibeacon_easy"))
-        self.assertEqual(easy.integer("adv_power"), 9)
-        self.assertEqual(easy.integer("adv_power_level"), 7)
+        self.assertEqual(easy.get("tx_power"), "ESP_PWR_LVL_P9")
+        self.assertEqual(easy.integer("time_to_wake"), 300)
+        self.assertEqual(easy.integer("time_to_sleep"), 0)
         self.assertIsNone(easy.get("sleeping"))
+        mismatch = serial_fox.parse_transcript("Tx power: ESP_PWR_LVL_P3 (3 dBm)\n"
+                                               "Requested tx power: ESP_PWR_LVL_N0 (0 dBm)\n"
+                                               "Tx power != Requested tx power\n"
+                                               "Fatal 2: readback mismatch\nPANIC\n")
+        self.assertEqual(mismatch.get("tx_power"), "ESP_PWR_LVL_P3")
+        self.assertEqual(mismatch.get("requested:tx power"), "ESP_PWR_LVL_N0 (0 dBm)")
+        self.assertEqual(mismatch.problems, ["Tx power != Requested tx power", "Fatal 2: readback mismatch", "PANIC"])
 
     def test_classic_fields(self):
         readback = serial_fox.parse_transcript(transcript("classic_hard"))
-        self.assertEqual(readback.get("name"), "Demo Case BTC Hard Fox")
         self.assertEqual(readback.get("address"), "F2:F6:6D:BC:2A:80")
+        self.assertEqual(readback.get("name"), "Demo Case BTC Hard Fox")
+        self.assertEqual(readback.get("awake"), "Awake and screaming")
         self.assertEqual(readback.get("sleeping"), "Going to sleep")
         self.assertEqual(readback.integer("boot_count"), 4)
-        self.assertTrue(any(line.startswith("rst:0x1") for line in readback.unmatched))
+        self.assertTrue(any(line.startswith("rst:0x5") for line in readback.unmatched))
+        easy = serial_fox.parse_transcript(transcript("classic_easy"))
+        self.assertIsNone(easy.get("sleeping"))
+        self.assertTrue(any(line.startswith("rst:0x1") for line in easy.unmatched))
 
     def test_mismatch_transcripts_halt(self):
         zigbee = serial_fox.parse_transcript(transcript("zigbee_easy_mismatch"))
         self.assertTrue(zigbee.halted())
         self.assertTrue(zigbee.complete())
-        self.assertEqual(zigbee.problems, ["Operating PAN ID != Requested PAN ID", "PANIC"])
+        self.assertEqual(zigbee.problems, ["Operating PAN ID != Requested PAN ID",
+                                           "Fatal 2: readback mismatch", "PANIC"])
+        self.assertEqual(zigbee.get("address"), "F2:5A:3C:91:0E:7B:44:D8")
         self.assertEqual(zigbee.get("pan_id"), "0x1234")
         self.assertEqual(zigbee.get("requested:pan id"), "0x1337")
         self.assertIsNone(zigbee.get("awake"))
@@ -209,16 +326,40 @@ class TranscriptTest(unittest.TestCase):
         self.assertTrue(classic.halted())
         self.assertEqual(classic.get("address"), "F2:81:5A:C1:A3:28")
         self.assertEqual(classic.get("requested:address"), "F2:81:5A:C1:A3:26")
-        self.assertIn("Device address != Requested address", classic.problems)
+        self.assertIsNone(classic.get("name"))
+        self.assertEqual(classic.problems, ["Device address != Requested address",
+                                            "Fatal 2: readback mismatch", "PANIC"])
+
+    def test_start_failure_transcript_halts_with_the_banner(self):
+        """A radio start failure is printed before the banner, which
+        rfhsfatal() prints on its own; the readback is a halted fox."""
+        readback = serial_fox.parse_transcript(transcript("zigbee_start_failed"))
+        self.assertEqual(readback.banner, serial_fox.Banner("zigbee_coordinator", "EASY", None))
+        self.assertTrue(readback.halted())
+        self.assertTrue(readback.complete())
+        self.assertEqual(readback.problems, ["Error starting Zigbee", "Fatal 1: radio start failed", "PANIC"])
+        self.assertEqual(readback.get("mac_set"), "successfully")
+        self.assertIsNone(readback.get("address"))
+        self.assertIsNone(readback.get("time_to_wake"))
+        self.assertEqual(readback.lines.index("Error starting Zigbee") + 1,
+                         readback.lines.index("Fox: zigbee_coordinator EASY"))
 
     def test_other_problem_lines(self):
         for line in ("Error starting Zigbee", "Error setting MAC address",
                      "Error setting packet interval: ESP_ERR_INVALID_ARG",
+                     "Error setting country code: ESP_ERR_INVALID_ARG",
                      "Device address: unavailable, the Bluetooth stack is not enabled",
-                     "Beacon data is 0 bytes, not 25", "Entered loop, we are broken",
-                     "Read MAC Address != Requested Mac Address", "Short address != 0x0000"):
+                     "Beacon data is 0 bytes, not 25",
+                     "Fatal 1: radio start failed", "Fatal 2: readback mismatch",
+                     "Fatal 3: deep sleep returned", "Fatal 4: loop() reached",
+                     "Operating channel != Requested channel", "Extended PAN ID != Requested extended PAN ID",
+                     "Short address != Requested short address"):
             readback = serial_fox.parse_transcript(line + "\n")
             self.assertEqual(readback.problems, [line], line)
+        for line in ("Fatal: no code", "Fatality 2: readback mismatch", "PANIC!"):
+            readback = serial_fox.parse_transcript(line + "\n")
+            self.assertEqual(readback.problems, [], line)
+            self.assertEqual(readback.unmatched, [line], line)
 
     def test_rom_boot_and_empty_have_no_banner(self):
         rom = serial_fox.parse_transcript(transcript("rom_boot_only"))
@@ -304,6 +445,41 @@ class ReadFoxTest(unittest.TestCase):
             self.assertTrue(run.readback.complete(), name)
             self.assertLess(run.elapsed(), 4.0, name)
 
+    def test_on_field_sees_every_matched_line_as_it_arrives(self):
+        """The hook gets each field the moment its line is read, with the
+        readback as it stands then: the Starting on channel line comes before
+        the banner and the Operating channel readback, so a caller can tune on
+        it while the rest is still arriving. The banner, the ROM text and
+        problem lines are not fields."""
+        run = Run(timed(transcript("wifi_hard_ap"), first=1.0, step=0.1))
+        self.assertIsNone(run.error)
+        names = [field for field, _, _ in run.fields]
+        self.assertEqual(names[:7], ["initializing", "boot_count", "sleep_stats", "setting_up", "mac_set",
+                                     "starting_channel", "tx_power_status"])
+        self.assertNotIn("banner", names)
+        self.assertIn("channel", names)
+        self.assertEqual(names[-1], "awake")
+        starting = [(seen, when) for field, seen, when in run.fields if field == "starting_channel"][0]
+        channel = [(seen, when) for field, seen, when in run.fields if field == "channel"][0]
+        # Six lines had been fed when the early line came; the banner is the
+        # eighth, so a caller acting on the hook is ahead of it.
+        self.assertEqual(starting[0], 6)
+        self.assertLess(starting[1], channel[1])
+        self.assertLess(starting[0], run.readback.lines.index("Fox: wifi_ap_client HARD AP") + 1)
+        self.assertAlmostEqual(starting[1], 1000.0 + 1.0 + 0.5, delta=0.01)
+        # A halted fox: the hook runs for its fields up to the problem line
+        # and not for the problem lines themselves.
+        run = Run(timed(transcript("zigbee_easy_mismatch")))
+        names = [field for field, _, _ in run.fields]
+        self.assertIn("starting_channel", names)
+        self.assertEqual(names[-1], "pan_id")
+        self.assertTrue(run.readback.halted())
+        # Without a hook nothing changes.
+        run = Run(timed(transcript("zigbee_easy")))
+        run.readback = serial_fox.read_fox(serial_fox.TranscriptSource(timed(transcript("zigbee_easy")), run.clock),
+                                           Deadline(60.0, run.clock))
+        self.assertTrue(run.readback.complete())
+
     def test_empty_transcript_is_no_output(self):
         run = Run(timed(transcript("empty")))
         self.assertEqual(str(run.error), serial_fox.NO_OUTPUT)
@@ -345,18 +521,42 @@ class ReadFoxTest(unittest.TestCase):
         self.assertEqual(run.readback.banner.project, "zigbee_coordinator")
 
     def test_quiet_after_the_banner_ends_the_read(self):
-        lines = ["Initializing...\n", "Fox: classic_discoverable EASY\n", "Device name: Demo Molly BTC Easy Fox\n"]
+        lines = ["Initializing...\n", "Fox: classic_discoverable EASY\n", "Device address: F2:81:5A:C1:A3:26\n"]
         run = Run(timed("".join(lines)))
         self.assertIsNone(run.error)
         self.assertFalse(run.readback.complete())
-        self.assertEqual(run.readback.get("name"), "Demo Molly BTC Easy Fox")
-        self.assertIsNone(run.readback.get("address"))
+        self.assertEqual(run.readback.get("address"), "F2:81:5A:C1:A3:26")
+        self.assertIsNone(run.readback.get("name"))
         self.assertAlmostEqual(run.elapsed(), 1.0 + 0.1 + serial_fox.QUIET_SECONDS, places=3)
+
+    def test_awake_line_ends_the_read_after_the_drain(self):
+        """The read stops DRAIN_SECONDS after "Awake and screaming", so a
+        line a fox prints later is not waited for."""
+        items = timed(transcript("classic_hard"))
+        awake = next(i for i, (_, line) in enumerate(items) if line.startswith("Awake"))
+        items[awake + 1] = (30.0, items[awake + 1][1])
+        run = Run(items)
+        self.assertIsNone(run.error)
+        self.assertTrue(run.readback.complete())
+        self.assertEqual(run.readback.get("awake"), "Awake and screaming")
+        self.assertIsNone(run.readback.get("sleeping"))
+        self.assertAlmostEqual(run.elapsed(), 1.0 + 0.05 * awake + serial_fox.DRAIN_SECONDS, places=3)
 
     def test_problem_line_ends_the_read(self):
         run = Run(timed(transcript("zigbee_easy_mismatch")))
         self.assertIsNone(run.error)
         self.assertTrue(run.readback.halted())
+        self.assertEqual(run.readback.problems, ["Operating PAN ID != Requested PAN ID"])
+        self.assertLess(run.elapsed(), 3.0)
+
+    def test_start_failure_is_read_up_to_the_banner(self):
+        run = Run(timed(transcript("zigbee_start_failed")))
+        self.assertIsNone(run.error)
+        self.assertEqual(run.said, ["Fox: zigbee_coordinator EASY"])
+        self.assertTrue(run.readback.halted())
+        self.assertTrue(run.readback.complete())
+        self.assertEqual(run.readback.problems, ["Error starting Zigbee"])
+        self.assertEqual(run.readback.lines[-1], "Fox: zigbee_coordinator EASY")
         self.assertLess(run.elapsed(), 3.0)
 
     def test_no_reset_waits_for_the_natural_wake(self):
@@ -400,7 +600,367 @@ class ReadFoxTest(unittest.TestCase):
         self.assertTrue(readback.complete())
 
 
+    def test_bootloader_banner_is_answered_with_one_more_reset(self):
+        """The ROM's download-mode lines after the reset mean the chip is in
+        the bootloader; it is reset once more and the fox read as usual, the
+        reset stamp being the second reset's."""
+        items = [(0.5, ROM_DOWNLOAD_S3), (0.0, "waiting for download\n")] + timed(transcript("zigbee_easy"))
+        run = Run(items)
+        self.assertIsNone(run.error)
+        self.assertEqual(run.source.resets, 2)
+        self.assertEqual(run.said, [serial_fox.IN_BOOTLOADER, "Fox: zigbee_coordinator EASY"])
+        self.assertTrue(run.readback.complete())
+        self.assertEqual(run.readback.get("pan_id"), "0x1337")
+        self.assertIn(ROM_DOWNLOAD_S3.strip(), run.readback.unmatched)
+        self.assertIn("waiting for download", run.readback.unmatched)
+        self.assertEqual(run.debugged.count("resetting the fox on transcript"), 1)
+        self.assertLess(run.elapsed(), 4.0)
+
+    def test_second_bootloader_banner_ends_the_run_with_the_hint(self):
+        items = [(0.5, ROM_DOWNLOAD_S3), (0.0, "waiting for download\n"), (0.4, ROM_DOWNLOAD_S3),
+                 (0.0, "waiting for download\n")] + timed(transcript("zigbee_easy"))
+        run = Run(items)
+        self.assertEqual(str(run.error), serial_fox.STILL_IN_BOOTLOADER)
+        self.assertEqual(run.error.exit_code, 2)
+        self.assertIn("press the board's reset button", str(run.error))
+        self.assertEqual(run.source.resets, 2)
+        self.assertEqual(run.said, [serial_fox.IN_BOOTLOADER])
+        self.assertLess(run.elapsed(), 2.0)
+        # The ESP32's bridge form of the lines is recognised too.
+        run = Run([(0.5, ROM_DOWNLOAD_ESP32), (0.3, ROM_DOWNLOAD_ESP32)])
+        self.assertEqual(str(run.error), serial_fox.STILL_IN_BOOTLOADER)
+
+    def test_waiting_line_alone_triggers_the_reset_and_a_late_one_is_ignored(self):
+        """Without the boot line only ``waiting for download`` is seen; one
+        arriving after the second reset is the first boot's, still in flight,
+        and does not count as a second failure."""
+        items = [(0.5, "waiting for download\n"), (0.3, "waiting for download\n")] + timed(transcript("ibeacon_easy"))
+        run = Run(items)
+        self.assertIsNone(run.error)
+        self.assertEqual(run.source.resets, 2)
+        self.assertEqual(run.said, [serial_fox.IN_BOOTLOADER, "Fox: iBeacon EASY"])
+        self.assertTrue(run.readback.complete())
+
+    def test_bootloader_lines_without_a_reset_are_just_not_a_fox(self):
+        run = Run([(0.5, ROM_DOWNLOAD_S3), (0.0, "waiting for download\n")], reset=False, timeout=20.0)
+        self.assertEqual(run.source.resets, 0)
+        self.assertEqual(run.said, [])
+        self.assertEqual(str(run.error), serial_fox.NO_BANNER_NO_RESET)
+        self.assertEqual(run.elapsed(), 20.0)
+
+    def test_bootloader_lines_after_the_banner_are_ordinary_lines(self):
+        items = timed(transcript("classic_easy")) + [(0.1, "waiting for download\n")]
+        run = Run(items)
+        self.assertIsNone(run.error)
+        self.assertEqual(run.source.resets, 1)
+
+    def test_source_without_a_reset_is_read_as_no_reset(self):
+        """A USB stack that cannot reset the fox (the Nano's TinyUSB) is said
+        and the read waits for the fox's own wake with no reset-button hint."""
+        class NoReset(serial_fox.TranscriptSource):
+            def reset(self, wall=None):
+                return None
+
+        clock = serial_fox.FakeClock()
+        source = NoReset(timed(transcript("ibeacon_medium"), first=25.0), clock)
+        said = []
+        readback = serial_fox.read_fox(source, Deadline(60, clock), say=said.append)
+        self.assertEqual(said, [serial_fox.NO_SERIAL_RESET, "Fox: iBeacon MEDIUM"])
+        self.assertIsNone(readback.reset_time)
+        self.assertIsNotNone(readback.banner_time)
+        self.assertTrue(readback.complete())
+        source = NoReset([], clock)
+        with self.assertRaises(RunError) as caught:
+            serial_fox.read_fox(source, Deadline(5, clock), say=said.append)
+        self.assertEqual(str(caught.exception), serial_fox.NO_OUTPUT_NO_RESET)
+
+    def test_reset_is_stamped_on_the_wall_clock(self):
+        wall = serial_fox.FakeClock(1730000000.0)
+        clock = serial_fox.FakeClock()
+        source = serial_fox.TranscriptSource(timed(transcript("classic_hard")), clock)
+        readback = serial_fox.read_fox(source, Deadline(60, clock), wall=wall)
+        self.assertEqual(readback.reset_time, 1730000000.0)
+        self.assertEqual(readback.banner_time, 1730000000.0)
+        # The stamp is what the source's reset returns: the moment reset
+        # was released, which a stamped source reports itself.
+        class Released(serial_fox.TranscriptSource):
+            def reset(self, wall=None):
+                self.resets += 1
+                return 42.5
+
+        source = Released(timed(transcript("classic_hard")), clock)
+        readback = serial_fox.read_fox(source, Deadline(60, clock), wall=wall)
+        self.assertEqual(readback.reset_time, 42.5)
+        source = serial_fox.TranscriptSource(timed(transcript("classic_hard")), clock)
+        readback = serial_fox.read_fox(source, Deadline(60, clock), reset=False, wall=wall)
+        self.assertIsNone(readback.reset_time)
+        self.assertEqual(readback.banner_time, 1730000000.0)
+        # On one clock the banner comes after the reset by the lines before it.
+        source = serial_fox.TranscriptSource(timed(transcript("classic_hard")), clock)
+        readback = serial_fox.read_fox(source, Deadline(60, clock), wall=clock)
+        banner = next(i for i, line in enumerate(transcript("classic_hard").splitlines()) if line.startswith("Fox:"))
+        self.assertAlmostEqual(readback.banner_time - readback.reset_time, 1.0 + 0.05 * banner, places=3)
+
+
+class Vanishing(serial_fox.TranscriptSource):
+    """A transcript source whose port goes away at a given clock time and is
+    back ``away`` seconds later, as a native USB board's does in deep sleep."""
+
+    def __init__(self, items, clock, gone_at, away):
+        serial_fox.TranscriptSource.__init__(self, items, clock)
+        self.gone_at = gone_at
+        self.back_at = gone_at + away
+        self.gone = False
+        self.vanished = False
+
+    def read(self, timeout):
+        if not self.vanished and self.clock() >= self.gone_at:
+            self.gone = self.vanished = True
+            raise serial_fox.PortGone("gone")
+        if self.gone:
+            raise serial_fox.PortGone("still gone")
+        return serial_fox.TranscriptSource.read(self, timeout)
+
+    def try_open(self):
+        if self.clock() < self.back_at:
+            return False
+        self.gone = False
+        self.reopens += 1
+        return True
+
+
+class FollowerTest(unittest.TestCase):
+    """The serial port read through the first sleep: the sleep line, the port
+    vanishing, the reopen for wake 2's channel."""
+
+    WAKE2 = ["Initializing...\n", "ESP32 boot count: 1\n", "Setting up WiFi AP...\n",
+             "Fox: wifi_ap_client HARD AP\n", "Device address: F2:72:C1:79:16:1B\n",
+             "Operating channel: 9\n", "Operating SSID: Demo YT WiFi AP Hard Fox\n"]
+
+    def test_going_to_sleep_is_the_boundary_and_later_lines_are_wake_2(self):
+        clock = serial_fox.FakeClock(0.0)
+        source = serial_fox.TranscriptSource([(30.0, "Going to sleep\n"), (40.0, "Initializing...\n"),
+                                              (1.0, "Operating channel: 9\n")], clock)
+        follower = serial_fox.Follower(source, clock)
+        follower.poll()
+        self.assertIsNone(follower.boundary())
+        clock.advance(29.9)
+        follower.poll()
+        self.assertIsNone(follower.boundary())
+        clock.advance(0.2)
+        follower.poll()
+        self.assertAlmostEqual(follower.boundary(), 30.1)
+        self.assertIsNone(follower.channel())
+        clock.advance(41.0)
+        follower.poll()
+        follower.poll()
+        self.assertEqual(follower.channel(), 9)
+        self.assertEqual(follower.wake2.get("initializing"), "Initializing...")
+        self.assertFalse(follower.gone)
+
+    def test_lines_before_the_sleep_are_not_wake_2(self):
+        clock = serial_fox.FakeClock(0.0)
+        source = serial_fox.TranscriptSource([(1.0, "Operating channel: 7\n"), (2.0, "Going to sleep\n")], clock)
+        follower = serial_fox.Follower(source, clock)
+        clock.advance(5.0)
+        follower.poll()
+        follower.poll()
+        self.assertIsNone(follower.channel())
+        self.assertEqual(follower.boundary(), 5.0)
+
+    def test_vanished_port_is_the_boundary_and_stays_closed_without_reopen(self):
+        clock = serial_fox.FakeClock(0.0)
+        source = Vanishing([(100.0, "never\n")], clock, gone_at=20.0, away=5.0)
+        follower = serial_fox.Follower(source, clock)
+        clock.advance(19.0)
+        follower.poll()
+        self.assertIsNone(follower.boundary())
+        clock.advance(1.5)
+        follower.poll()
+        self.assertEqual(follower.boundary(), 20.5)
+        self.assertTrue(follower.gone)
+        clock.advance(30.0)
+        follower.poll()
+        self.assertTrue(follower.gone)
+        self.assertEqual(source.reopens, 0)
+
+    def test_reopen_reads_wake_2_channel(self):
+        clock = serial_fox.FakeClock(0.0)
+        items = [(26.0, line) if i == 0 else (0.1, line) for i, line in enumerate(self.WAKE2)]
+        source = Vanishing(items, clock, gone_at=20.0, away=5.0)
+        follower = serial_fox.Follower(source, clock, reopen=True)
+        clock.advance(20.5)
+        follower.poll()
+        self.assertEqual(follower.boundary(), 20.5)
+        clock.advance(2.0)
+        follower.poll()
+        self.assertTrue(follower.gone)
+        self.assertEqual(source.reopens, 0)
+        clock.advance(3.0)
+        follower.poll()
+        self.assertFalse(follower.gone)
+        self.assertTrue(follower.reopened)
+        self.assertEqual(source.reopens, 1)
+        for _ in range(12):
+            clock.advance(0.1)
+            follower.poll()
+        self.assertEqual(follower.channel(), 9)
+        self.assertEqual(follower.wake2.banner.difficulty, "HARD")
+        self.assertEqual(follower.pan_id(), None)
+
+    def test_port_that_never_comes_back(self):
+        clock = serial_fox.FakeClock(0.0)
+        source = Vanishing([(100.0, "never\n")], clock, gone_at=20.0, away=1000.0)
+        follower = serial_fox.Follower(source, clock, reopen=True)
+        clock.advance(21.0)
+        for _ in range(10):
+            follower.poll()
+            clock.advance(5.0)
+        self.assertTrue(follower.gone)
+        self.assertIsNone(follower.channel())
+        self.assertEqual(follower.boundary(), 21.0)
+
+    def test_zigbee_wake_2_pan_id(self):
+        clock = serial_fox.FakeClock(0.0)
+        source = serial_fox.TranscriptSource([(1.0, "Going to sleep\n"), (2.0, "Operating channel: 22\n"),
+                                              (0.1, "Operating PAN ID: 0xBEEF\n")], clock)
+        follower = serial_fox.Follower(source, clock)
+        clock.advance(5.0)
+        for _ in range(4):
+            follower.poll()
+        self.assertEqual((follower.channel(), follower.pan_id()), (22, 0xBEEF))
+        self.assertEqual(follower.pan_ids(), [0xBEEF])
+        self.assertEqual(follower.channel_label(), "Operating channel")
+
+    def test_wake_2_channel_comes_from_the_early_line_when_the_host_caught_it(self):
+        """Wake 2 names its channel on Starting on channel before its banner
+        and again on Operating channel after it: the follower answers from
+        the early line as soon as it is in, and keeps answering the same once
+        the readback follows; a wake whose early line was missed answers from
+        the readback."""
+        clock = serial_fox.FakeClock(0.0)
+        source = serial_fox.TranscriptSource([(10.0, "Going to sleep\n"), (5.0, "Initializing...\n"),
+                                              (0.5, "Starting on channel 9\n"), (0.3, "Fox: wifi_ap_client HARD AP\n"),
+                                              (0.2, "Operating channel: 9\n"), (10.0, "Going to sleep\n"),
+                                              (5.0, "Initializing...\n"), (0.5, "Fox: wifi_ap_client HARD AP\n"),
+                                              (0.2, "Operating channel: 4\n")], clock)
+        follower = serial_fox.Follower(source, clock)
+        clock.advance(10.0)
+        follower.poll()
+        self.assertEqual(follower.boundaries(), [10.0])
+        clock.advance(5.2)
+        for _ in range(2):
+            follower.poll()
+        self.assertIsNone(follower.channel(2))
+        self.assertIsNone(follower.channel_label(2))
+        clock.advance(0.3)
+        follower.poll()
+        self.assertEqual((follower.channel(2), follower.channel_label(2)), (9, "Starting on channel"))
+        self.assertIsNone(follower.readback(2).integer("channel"))
+        clock.advance(0.5)
+        for _ in range(2):
+            follower.poll()
+        self.assertEqual(follower.readback(2).integer("channel"), 9)
+        self.assertEqual((follower.channel(2), follower.channel_label(2)), (9, "Starting on channel"))
+        self.assertIsNone(follower.readback(2).channel_mismatch())
+        clock.advance(10.0)
+        follower.poll()
+        clock.advance(5.7)
+        for _ in range(3):
+            follower.poll()
+        self.assertEqual(follower.boundaries(), [10.0, 26.0])
+        self.assertEqual((follower.channel(3), follower.channel_label(3)), (4, "Operating channel"))
+        self.assertEqual((follower.channel(2), follower.channel_label(2)), (9, "Starting on channel"))
+        self.assertIsNone(follower.channel(4))
+        self.assertIsNone(follower.channel_label(4))
+
+    def test_two_sleeps_give_two_boundaries_and_wake_3_lines(self):
+        """A UART bridge port through two sleeps: each Going to sleep line is
+        a boundary, the Cycle behind line printed on the way to sleep stays
+        with the ending wake, and wake 3's lines answer for wake 3."""
+        clock = serial_fox.FakeClock(0.0)
+        source = serial_fox.TranscriptSource([
+            (10.0, "Going to sleep\n"), (0.1, "Cycle behind by 1.3s, rebooting at once\n"),
+            (5.0, "Initializing...\n"), (0.1, "Last cycle: 16.4s, target 15s\n"), (0.1, "Operating channel: 9\n"),
+            (0.1, "Operating PAN ID: 0xBEEF\n"), (0.1, "Awake and screaming\n"),
+            (10.0, "Going to sleep\n"),
+            (5.0, "Initializing...\n"), (0.1, "Last cycle: 15.5s, target 15s\n"), (0.1, "Operating channel: 4\n"),
+            (0.1, "Operating PAN ID: 0xCAFE\n")], clock)
+        follower = serial_fox.Follower(source, clock)
+        clock.advance(10.05)
+        follower.poll()
+        self.assertEqual(follower.boundaries(), [10.05])
+        clock.advance(0.1)
+        follower.poll()
+        self.assertEqual(follower.boundaries(), [10.05])
+        self.assertEqual(follower.wakes, [])
+        clock.advance(5.5)
+        for _ in range(6):
+            follower.poll()
+        self.assertEqual(follower.boundaries(), [10.05])
+        self.assertEqual(len(follower.wakes), 1)
+        self.assertEqual(follower.channel(2), 9)
+        self.assertIsNone(follower.channel(3))
+        self.assertEqual(follower.last_cycle(2), 16.4)
+        clock.advance(10.0)
+        follower.poll()
+        self.assertEqual(follower.boundaries(), [10.05, 25.65])
+        self.assertAlmostEqual(follower.boundary(), 10.05)
+        clock.advance(5.5)
+        for _ in range(5):
+            follower.poll()
+        self.assertEqual(len(follower.wakes), 2)
+        self.assertEqual(follower.channel(3), 4)
+        self.assertEqual(follower.channel(2), 9)
+        self.assertEqual(follower.pan_ids(), [0xBEEF, 0xCAFE])
+        self.assertEqual(follower.last_cycle(3), 15.5)
+        self.assertIsNone(follower.last_cycle(4))
+        self.assertEqual(follower.wake2.integer("channel"), 9)
+
+    def test_native_usb_port_vanishing_twice_with_reopens(self):
+        """A native USB board through two sleeps: the port vanishes at each
+        sleep, once per wake even after the sleep line, and comes back for the
+        next wake's lines."""
+        clock = serial_fox.FakeClock(0.0)
+        items = [(26.0, "Initializing...\n"), (0.1, "Last cycle: 20.3s, target 20s\n"), (0.1, "Operating channel: 9\n"),
+                 (0.1, "Going to sleep\n"), (40.0, "Operating channel: 4\n")]
+        source = Vanishing(items, clock, gone_at=20.0, away=5.0)
+        follower = serial_fox.Follower(source, clock, reopen=True)
+        clock.advance(20.5)
+        follower.poll()
+        self.assertEqual(follower.boundaries(), [20.5])
+        clock.advance(6.0)
+        for _ in range(6):
+            follower.poll()
+        self.assertEqual(follower.channel(2), 9)
+        self.assertEqual(follower.last_cycle(2), 20.3)
+        self.assertEqual(follower.boundaries(), [20.5, 26.5])
+        # The port vanishes again after the sleep line: no third boundary.
+        source.vanished = False
+        source.gone_at = 27.0
+        source.back_at = 30.0
+        clock.advance(1.0)
+        follower.poll()
+        self.assertTrue(follower.gone)
+        self.assertEqual(follower.boundaries(), [20.5, 26.5])
+        clock.advance(40.0)
+        for _ in range(3):
+            follower.poll()
+        self.assertEqual(source.reopens, 2)
+        self.assertEqual(follower.channel(3), 4)
+
+
 class TranscriptSourceTest(unittest.TestCase):
+    def test_elapsed_clock_time_counts_against_the_next_delay(self):
+        clock = serial_fox.FakeClock(0.0)
+        source = serial_fox.TranscriptSource([(3.0, "late\n")], clock)
+        self.assertIsNone(source.read(0.0))
+        clock.advance(2.0)
+        self.assertIsNone(source.read(0.0))
+        clock.advance(1.0)
+        self.assertEqual(source.read(0.0), "late\n")
+        self.assertEqual(clock.now, 3.0)
+
     def test_from_file_and_delays(self):
         clock = serial_fox.FakeClock()
         source = serial_fox.TranscriptSource.from_file(fixture("transcripts", "classic_easy.log"), clock=clock)
@@ -425,22 +985,60 @@ class TranscriptSourceTest(unittest.TestCase):
 
 
 class FakeSerial:
-    """Records the order of line-state changes the way a port would see them."""
+    """A port as pyserial presents it. ``events`` records every line write,
+    open included, in order; ``states`` records the (DTR, RTS) states the
+    device behind the port sees, as the kernel's cdc-acm sends them: both
+    asserted in one request when the port opens, then the values written
+    before the open applied DTR first, then a later write only when it
+    changes a line. Each event carries the fake clock's time when one is set.
+    A ``JtagChip`` on the class answers the states; a port whose device has
+    left the bus raises on every write and read."""
 
     instances = []
+    clock = None
+    chip = None
 
     def __init__(self):
         self.events = []
+        self.states = []
         self.port = None
         self.baudrate = None
         self.timeout = None
-        self._dtr = None
-        self._rts = None
+        # pyserial's defaults: both lines asserted.
+        self._dtr = True
+        self._rts = True
         self.opened = False
         self.closed = False
+        self.gone = False
         self.data = b""
         self.fail_read = None
+        # Raise on a line write once this many events were recorded.
+        self.fail_after = None
+        # Every event with the fake clock's time, when one is set.
+        self.timed = []
         FakeSerial.instances.append(self)
+
+    def _record(self, event):
+        self.events.append(event)
+        if FakeSerial.clock is not None:
+            self.timed.append((FakeSerial.clock(),) + event)
+
+    def _write(self, line, value):
+        if self.gone or (self.fail_after is not None and len(self.events) >= self.fail_after):
+            raise OSError(5, "Input/output error")
+        setattr(self, "_" + line, value)
+        self._record((line, value))
+        if self.opened:
+            self._seen()
+
+    def _seen(self):
+        """The device sees the lines when a request changes them."""
+        state = (self._dtr, self._rts)
+        if self.states and self.states[-1] == state:
+            return
+        self.states.append(state)
+        if FakeSerial.chip is not None:
+            FakeSerial.chip.lines(self, *state)
 
     @property
     def dtr(self):
@@ -448,8 +1046,7 @@ class FakeSerial:
 
     @dtr.setter
     def dtr(self, value):
-        self._dtr = value
-        self.events.append(("dtr", value))
+        self._write("dtr", value)
 
     @property
     def rts(self):
@@ -457,12 +1054,22 @@ class FakeSerial:
 
     @rts.setter
     def rts(self, value):
-        self._rts = value
-        self.events.append(("rts", value))
+        self._write("rts", value)
 
     def open(self):
         self.opened = True
-        self.events.append(("open",))
+        self._record(("open",))
+        # The kernel asserts both lines in one request; pyserial then applies
+        # the values written before the open, DTR before RTS.
+        dtr, rts = self._dtr, self._rts
+        self._dtr = self._rts = True
+        self._seen()
+        self._dtr = dtr
+        self._seen()
+        self._rts = rts
+        self._seen()
+        if FakeSerial.chip is not None:
+            FakeSerial.chip.attach(self)
 
     def close(self):
         self.closed = True
@@ -472,54 +1079,366 @@ class FakeSerial:
         return len(self.data)
 
     def read(self, size=1):
+        if self.gone:
+            raise OSError(5, "Input/output error")
         if self.fail_read:
             raise self.fail_read
+        if not self.data and FakeSerial.clock is not None:
+            # A real read blocks for the timeout when nothing arrives.
+            FakeSerial.clock.advance(self.timeout)
         chunk, self.data = self.data[:size], self.data[size:]
         return chunk
 
 
+ARMED = (True, False)
+ROM_DOWNLOAD_BYTES = (ROM_DOWNLOAD_S3 + "waiting for download\r\n").encode()
+
+
+class JtagChip:
+    """A USB-Serial-JTAG chip behind ``FakeSerial``, on the fake clock: DTR
+    asserted alone arms its download-boot register, RTS asserted alone resets
+    it, and the boot that follows consumes the register, printing the ROM's
+    download-mode lines when it was armed and ``app`` when it was not. With
+    ``away`` the chip's USB device leaves the bus at every reset, taking the
+    device path with it and raising on the open port, and is back ``away``
+    seconds later with the boot's output waiting for the next open; with
+    ``away`` 0 the device stays enumerated and prints on the open port.
+    ``sleep`` is the sleep a ``SerialSource`` over this chip has to use, so
+    that the device path comes back as the clock moves."""
+
+    def __init__(self, path, clock, app, armed=False, away=0.5):
+        self.path = path
+        self.clock = clock
+        self.app = app
+        self.armed = armed
+        self.away = away
+        self.boots = []
+        self.back_at = None
+        self.pending = b""
+        with open(path, "w"):
+            pass
+
+    def lines(self, port, dtr, rts):
+        if (dtr, rts) == ARMED:
+            self.armed = True
+        elif rts and not dtr:
+            self.reset(port)
+
+    def reset(self, port):
+        boot = "download" if self.armed else "app"
+        self.armed = False
+        self.boots.append(boot)
+        output = ROM_DOWNLOAD_BYTES if boot == "download" else self.app
+        if not self.away:
+            port.data += output
+            return
+        port.gone = True
+        os.remove(self.path)
+        self.back_at = self.clock() + self.away
+        self.pending = output
+
+    def sleep(self, seconds):
+        self.clock.advance(seconds)
+        if self.back_at is not None and self.clock() >= self.back_at:
+            with open(self.path, "w"):
+                pass
+            self.back_at = None
+
+    def attach(self, port):
+        port.data, self.pending = self.pending, b""
+
+
+BRIDGE = devices.Port("/dev/ttyUSB0", *CP210X)
+JTAG = devices.Port("/dev/ttyACM0", *ESP)
+NANO_PORT = devices.Port("/dev/ttyACM1", *NANO)
+# The line writes of each open and hard reset as the fake port records them.
+# Every open presets both lines asserted, which the kernel has already done.
+# The USB-Serial-JTAG reset makes RTS the only asserted line, from both
+# asserted by releasing DTR and from both released by asserting RTS, then
+# releases RTS; the bridge pulse ends with both lines asserted again.
+OPEN = [("dtr", True), ("rts", True), ("open",)]
+USB_HARD_RESET = [("dtr", False), ("rts", False)]
+USB_HARD_RESET_FROM_RELEASED = [("rts", True), ("rts", False)]
+BRIDGE_HARD_RESET = [("dtr", False), ("rts", True), ("rts", False), ("dtr", True), ("rts", True)]
+
+
 class SerialSourceTest(unittest.TestCase):
+    """The port is opened and reset with the sequences of its USB stack."""
+
     def setUp(self):
         FakeSerial.instances = []
+        FakeSerial.clock = None
+        FakeSerial.chip = None
         patcher = mock.patch("serial.Serial", FakeSerial)
         patcher.start()
         self.addCleanup(patcher.stop)
         self.slept = []
 
-    def source(self, path="/dev/ttyUSB0"):
-        return serial_fox.SerialSource(path, sleep=self.slept.append)
+    def source(self, port=BRIDGE, sleep=None):
+        return serial_fox.SerialSource(port.device, sleep=sleep or self.slept.append, port=port)
 
-    def test_open_asserts_dtr_then_rts_before_opening(self):
+    def timed_source(self, port):
+        """A source whose sleeps move a fake clock that stamps every write."""
+        clock = serial_fox.FakeClock(0.0)
+        FakeSerial.clock = clock
+
+        def sleep(seconds):
+            self.slept.append(seconds)
+            clock.advance(seconds)
+
+        return self.source(port, sleep), clock
+
+    def assert_never_armed(self, port, allowed=()):
+        """The device behind ``port`` never saw DTR asserted alone, except at
+        an index inside one of the ``(start, end)`` ranges in ``allowed``."""
+        for index, state in enumerate(port.states):
+            if state == ARMED:
+                self.assertTrue(any(start <= index < end for start, end in allowed),
+                                "DTR asserted alone at %d in %r" % (index, port.states))
+
+    def test_bridge_open_asserts_dtr_then_rts_before_opening(self):
         source = self.source()
         port = FakeSerial.instances[0]
         self.assertEqual(port.port, "/dev/ttyUSB0")
         self.assertEqual(port.baudrate, 115200)
-        self.assertEqual(port.events, [("dtr", True), ("rts", True), ("open",)])
+        self.assertEqual(port.events, OPEN)
+        self.assertEqual(port.states, [(True, True)])
         self.assertIs(source.serial, port)
+        self.assertEqual(source.stack, usbstack.UART_BRIDGE)
 
-    def test_reset_is_esptool_hard_reset_then_lines_asserted_again(self):
-        source = self.source()
+    def test_bridge_reset_is_esptool_hard_reset_then_lines_asserted_again(self):
+        source, clock = self.timed_source(BRIDGE)
         port = FakeSerial.instances[0]
         del port.events[:]
-        source.reset()
-        self.assertEqual(port.events, [("dtr", False), ("rts", True), ("rts", False), ("dtr", True), ("rts", True)])
-        self.assertEqual(self.slept, [serial_fox.RESET_PULSE_SECONDS, serial_fox.RESET_PULSE_SECONDS])
+        released = source.reset(clock)
+        self.assertEqual(port.events, BRIDGE_HARD_RESET)
+        self.assertEqual(self.slept, [usbstack.RESET_PULSE_SECONDS, usbstack.RESET_PULSE_SECONDS])
+        # Stamped when EN rises, after the first pulse and before the second.
+        self.assertEqual(released, usbstack.RESET_PULSE_SECONDS)
+        self.assertEqual(clock.now, 2 * usbstack.RESET_PULSE_SECONDS)
 
-    def test_reset_survives_the_device_dropping_off_the_bus(self):
+    def test_bridge_reset_survives_the_device_dropping_off_the_bus(self):
         source = self.source()
         port = FakeSerial.instances[0]
-
-        class Dropping(FakeSerial):
-            pass
-
-        def failing_rts(self, value):
-            raise OSError(5, "Input/output error")
-
-        Dropping.rts = property(FakeSerial.rts.fget, failing_rts)
-        port.__class__ = Dropping
         port.events = [("start",)]
-        source.reset()
+        port.fail_after = 2
+        self.assertIsNotNone(source.reset())
         self.assertEqual(port.events, [("start",), ("dtr", False)])
+        self.assertTrue(port.closed)
+        self.assertIsNone(source.serial)
+
+    def test_usb_serial_jtag_open_writes_nothing_the_kernel_has_not_set(self):
+        """The open presets both lines asserted, the state the kernel puts
+        them in, so the device sees that one state and the port rests there."""
+        source = self.source(JTAG)
+        port = FakeSerial.instances[0]
+        self.assertEqual(source.stack, usbstack.USB_SERIAL_JTAG)
+        self.assertEqual(port.events, OPEN)
+        self.assertEqual(port.states, [(True, True)])
+        self.assertEqual((port.dtr, port.rts), (True, True))
+
+    def test_usb_serial_jtag_reset_releases_dtr_from_both_asserted_and_asserts_rts_from_both_released(self):
+        """From the open's both asserted the reset is one DTR release, which
+        leaves RTS the only asserted line; RTS is released after the hold.
+        From the both released that leaves, the reset asserts RTS. The device
+        sees the same two states either way and never DTR asserted alone."""
+        source, clock = self.timed_source(JTAG)
+        port = FakeSerial.instances[0]
+        del port.events[:]
+        released = source.reset(clock)
+        self.assertEqual(port.events, USB_HARD_RESET)
+        self.assertEqual(port.states, [(True, True), (False, True), (False, False)])
+        self.assertEqual(self.slept, [usbstack.USB_HOLD_SECONDS, usbstack.USB_SETTLE_SECONDS])
+        # Stamped when RTS is released, 0.2 s in, before the 0.2 s settle.
+        self.assertEqual(released, usbstack.USB_HOLD_SECONDS)
+        self.assertEqual(clock.now, usbstack.USB_HOLD_SECONDS + usbstack.USB_SETTLE_SECONDS)
+        self.assertEqual(port.timed[-1][0], usbstack.USB_HOLD_SECONDS)
+        self.assertEqual((port.dtr, port.rts), (False, False))
+        del port.events[:]
+        del self.slept[:]
+        released = source.reset(clock)
+        self.assertEqual(port.events, USB_HARD_RESET_FROM_RELEASED)
+        self.assertEqual(port.states[-2:], [(False, True), (False, False)])
+        self.assertEqual(self.slept, [usbstack.USB_HOLD_SECONDS, usbstack.USB_SETTLE_SECONDS])
+        self.assertEqual(released, 3 * usbstack.USB_HOLD_SECONDS)
+        self.assert_never_armed(port)
+
+    def test_usb_serial_jtag_dropping_off_the_bus_during_the_hold_goes_to_reopen(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "ttyACM0")
+            with open(path, "w"):
+                pass
+            source, clock = self.timed_source(devices.Port(path, *ESP))
+            port = FakeSerial.instances[0]
+            del port.events[:]
+            port.fail_after = 1
+            released = source.reset(clock)
+            self.assertEqual(port.events, [("dtr", False)])
+            self.assertEqual(self.slept, [usbstack.USB_HOLD_SECONDS])
+            # The chip restarted when reset was asserted, which is the stamp.
+            self.assertEqual(released, 0.0)
+            self.assertTrue(port.closed)
+            self.assertIsNone(source.serial)
+            with self.assertRaises(serial_fox.PortGone):
+                source.read(0.0)
+            source.reopen(Deadline(1.0, clock))
+            self.assertEqual(len(FakeSerial.instances), 2)
+            self.assertEqual(FakeSerial.instances[-1].events, OPEN)
+            self.assertEqual(FakeSerial.instances[-1].states, [(True, True)])
+
+    def test_usb_serial_jtag_gone_before_the_first_write_is_port_gone_too(self):
+        source = self.source(JTAG)
+        port = FakeSerial.instances[0]
+        del port.events[:]
+        port.fail_after = 0
+        self.assertIsNotNone(source.reset())
+        self.assertEqual(port.events, [])
+        self.assertIsNone(source.serial)
+
+    def test_usb_serial_jtag_port_never_sees_dtr_asserted_alone_outside_the_bootloader_entry(self):
+        """Every path over a USB-Serial-JTAG port, as the device sees the
+        lines: the open, the hard reset from both asserted and from both
+        released, a reopen, the bootloader entry and the release after it,
+        and ``bootloader.release`` on a fresh port. Each path ends at both
+        asserted or both released, and DTR asserted alone occurs only inside
+        ``usb_jtag_reset``."""
+        from foxverify import bootloader
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "ttyACM0")
+            with open(path, "w"):
+                pass
+            jtag = devices.Port(path, *ESP)
+            source, clock = self.timed_source(jtag)
+            opened = FakeSerial.instances[0]
+            self.assertEqual(opened.states, [(True, True)])
+            source.reset(clock)
+            source.reset(clock)
+            self.assertEqual(opened.states, [(True, True), (False, True), (False, False), (False, True), (False, False)])
+            source.reopen(Deadline(1.0, clock))
+            reopened = FakeSerial.instances[-1]
+            self.assertEqual(reopened.states, [(True, True)])
+            start = len(reopened.states)
+            self.assertFalse(usbstack.usb_jtag_reset(reopened, source.sleep))
+            end = len(reopened.states)
+            self.assertIn(ARMED, reopened.states[start:end])
+            self.assertEqual(reopened.states[start:end], [ARMED, (False, False), ARMED, (True, True), (False, True), (False, False)])
+            source.reset(clock)
+            self.assertEqual(reopened.states[end:], [(False, True), (False, False)])
+            FakeSerial.instances = []
+            bootloader.release(bootloader.Hold(True, True, path, jtag), lambda text: None, source.sleep)
+            released = FakeSerial.instances[0]
+            self.assertEqual(released.states, [(True, True), (False, True), (False, False)])
+            for port, allowed in ((opened, ()), (reopened, ((start, end),)), (released, ())):
+                self.assert_never_armed(port, allowed)
+                self.assertIn(port.states[-1], ((True, True), (False, False)))
+
+    def chip(self, directory, clock, armed, away=0.5, app=None):
+        """A ``JtagChip`` on ``clock`` behind the path in ``directory`` and a
+        ``SerialSource`` over it; ``app`` is the zigbee_easy transcript."""
+        path = os.path.join(directory, "ttyACM0")
+        if app is None:
+            app = transcript("zigbee_easy").replace("\n", "\r\n").encode()
+        chip = JtagChip(path, clock, app, armed=armed, away=away)
+        FakeSerial.chip = chip
+        FakeSerial.clock = clock
+        source = serial_fox.SerialSource(path, sleep=chip.sleep, port=devices.Port(path, *ESP))
+        return chip, source
+
+    def test_running_fox_is_reset_into_its_application_on_the_first_try(self):
+        """A chip that is not armed boots its application from the one reset,
+        whether or not its device leaves the bus."""
+        for away in (0.5, 0.0):
+            with tempfile.TemporaryDirectory() as directory:
+                FakeSerial.instances = []
+                clock = serial_fox.FakeClock()
+                chip, source = self.chip(directory, clock, armed=False, away=away)
+                said = []
+                readback = serial_fox.read_fox(source, Deadline(60, clock), say=said.append, wall=clock)
+                self.assertEqual(chip.boots, ["app"], away)
+                self.assertEqual(said, ["Fox: zigbee_coordinator EASY"], away)
+                self.assertTrue(readback.complete(), away)
+                self.assertEqual(readback.get("pan_id"), "0x1337")
+                self.assertEqual(len(FakeSerial.instances), 2 if away else 1)
+                for port in FakeSerial.instances:
+                    self.assert_never_armed(port)
+
+    def test_flag_armed_by_another_program_is_consumed_by_the_first_reset_and_the_second_boots_the_app(self):
+        """The recovery end to end on a chip someone else armed: the first
+        reset boots the ROM, whose lines are read on the reopened port, the
+        reopen does not arm the chip again, and the second reset boots the
+        application. The same when the device stays enumerated."""
+        for away in (0.5, 0.0):
+            with tempfile.TemporaryDirectory() as directory:
+                FakeSerial.instances = []
+                clock = serial_fox.FakeClock()
+                chip, source = self.chip(directory, clock, armed=True, away=away)
+                said = []
+                readback = serial_fox.read_fox(source, Deadline(60, clock), say=said.append, wall=clock)
+                self.assertEqual(chip.boots, ["download", "app"], away)
+                self.assertFalse(chip.armed)
+                self.assertEqual(said, [serial_fox.IN_BOOTLOADER, "Fox: zigbee_coordinator EASY"], away)
+                self.assertTrue(readback.complete(), away)
+                self.assertIn(ROM_DOWNLOAD_S3.strip(), readback.unmatched)
+                self.assertEqual(len(FakeSerial.instances), 3 if away else 1)
+                # A port whose device left the bus last saw the reset that
+                # took it; every other port rests at both asserted or both
+                # released.
+                for port in FakeSerial.instances:
+                    self.assert_never_armed(port)
+                    resting = ((False, True),) if port.gone else ((True, True), (False, False))
+                    self.assertIn(port.states[-1], resting)
+                # The stamp is the second reset's release.
+                self.assertGreater(readback.reset_time, 1000.0 + usbstack.USB_HOLD_SECONDS)
+                self.assertLess(readback.reset_time, readback.banner_time)
+
+    def test_nano_is_opened_with_both_lines_asserted_and_never_reset(self):
+        source = self.source(NANO_PORT)
+        port = FakeSerial.instances[0]
+        self.assertEqual(source.stack, usbstack.TINYUSB)
+        self.assertEqual(port.events, OPEN)
+        del port.events[:]
+        self.assertIsNone(source.reset())
+        self.assertEqual(port.events, [])
+        self.assertEqual(self.slept, [])
+        self.assertIs(source.serial, port)
+
+    def test_unknown_id_and_no_id_get_the_bridge_sequences(self):
+        for port in (devices.Port("/dev/ttyUSB1", *OTHER), devices.Port("/dev/ttyS0", None, None, None, None), None):
+            FakeSerial.instances = []
+            self.slept = []
+            path = port.device if port is not None else "/dev/ttyS1"
+            with mock.patch.object(devices, "list_ports", return_value=[]):
+                source = serial_fox.SerialSource(path, sleep=self.slept.append, port=port)
+            fake = FakeSerial.instances[0]
+            self.assertIsNone(source.stack, port)
+            self.assertEqual(fake.events, OPEN, port)
+            del fake.events[:]
+            source.reset()
+            self.assertEqual(fake.events, BRIDGE_HARD_RESET, port)
+
+    def test_port_is_looked_up_by_path_when_not_given(self):
+        listed = [devices.Port("/dev/ttyUSB0", *CP210X), devices.Port("/dev/ttyACM0", *ESP)]
+        with mock.patch.object(devices, "list_ports", return_value=listed):
+            source = serial_fox.SerialSource("/dev/ttyACM0", sleep=self.slept.append)
+        self.assertEqual(source.port, listed[1])
+        self.assertEqual(source.stack, usbstack.USB_SERIAL_JTAG)
+        self.assertEqual(FakeSerial.instances[0].events, OPEN)
+
+    def test_release_and_reset_write_the_same_lines_for_the_same_stack(self):
+        from foxverify import bootloader
+        for port, expected in ((BRIDGE, BRIDGE_HARD_RESET), (JTAG, USB_HARD_RESET)):
+            FakeSerial.instances = []
+            said = []
+            bootloader.release(bootloader.Hold(True, True, port.device, port), said.append, self.slept.append)
+            released = FakeSerial.instances[0]
+            self.assertEqual(said, [bootloader.RELEASED % port.device])
+            self.assertTrue(released.closed)
+            FakeSerial.instances = []
+            source = self.source(port)
+            source.reset()
+            reset = FakeSerial.instances[0]
+            self.assertEqual(released.events, reset.events, port)
+            self.assertEqual(released.events[-len(expected):], expected, port)
 
     def test_read_returns_text_or_none_and_raises_port_gone(self):
         source = self.source()
@@ -543,7 +1462,7 @@ class SerialSourceTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             path = os.path.join(directory, "ttyACM0")
             clock = serial_fox.FakeClock()
-            source = serial_fox.SerialSource(path, sleep=clock.advance)
+            source = serial_fox.SerialSource(path, sleep=clock.advance, port=devices.Port(path, *CP210X))
             source.close()
             with self.assertRaises(RunError) as caught:
                 source.reopen(Deadline(1.0, clock))
@@ -553,7 +1472,27 @@ class SerialSourceTest(unittest.TestCase):
                 pass
             source.reopen(Deadline(1.0, clock))
             self.assertIsNotNone(source.serial)
-            self.assertEqual(FakeSerial.instances[-1].events, [("dtr", True), ("rts", True), ("open",)])
+            self.assertEqual(FakeSerial.instances[-1].events, OPEN)
+
+
+class DownloadModeTest(unittest.TestCase):
+    """The ROM's download-mode lines, as the boards print them."""
+
+    def test_rom_lines(self):
+        self.assertEqual(serial_fox.download_mode_line(
+            "rst:0x1 (POWERON),boot:0x0 (DOWNLOAD(USB/UART0))\r"), serial_fox.BOOT_LINE)
+        self.assertEqual(serial_fox.download_mode_line(
+            "rst:0x15 (USB_UART_CHIP_RESET),boot:0x0 (DOWNLOAD(USB/UART0))"), serial_fox.BOOT_LINE)
+        self.assertEqual(serial_fox.download_mode_line(
+            "rst:0x1 (POWERON_RESET),boot:0x3 (DOWNLOAD_BOOT(UART0/UART1/SDIO_REI_REO_V2))"), serial_fox.BOOT_LINE)
+        self.assertEqual(serial_fox.download_mode_line("waiting for download\r"), serial_fox.WAITING_LINE)
+        for line in ("rst:0x1 (POWERON),boot:0xc (SPI_FAST_FLASH_BOOT)", "rst:0x1 (POWERON),boot:0x8 (SPI_FAST_FLASH_BOOT)",
+                     "rst:0x1 (POWERON_RESET),boot:0x13 (SPI_FAST_FLASH_BOOT)", "Initializing...",
+                     "Fox: iBeacon EASY", "entry 0x4084bb20"):
+            self.assertIsNone(serial_fox.download_mode_line(line), line)
+        for name in TRANSCRIPTS:
+            for line in transcript(name).splitlines():
+                self.assertIsNone(serial_fox.download_mode_line(line), (name, line))
 
 
 if __name__ == "__main__":

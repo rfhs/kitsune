@@ -12,6 +12,9 @@
 #define MINOR               88
 #define SIGNAL_POWER        0xc5
 #define MAC_ADDR            {0xF2, 0xFB, 0x13, 0xA9, 0x3A, 0x87}
+#define TIME_TO_WAKE        300
+#define TIME_TO_SLEEP       0
+#define TXPOWER             ESP_PWR_LVL_P9
 
 #elif defined(MEDIUM)
 #define DEVICE_NAME         "Apophis BLE Medium Fox"
@@ -20,6 +23,9 @@
 #define MINOR               88
 #define SIGNAL_POWER        0xc5
 #define MAC_ADDR            {0xF2, 0x88, 0xF9, 0x9E, 0x80, 0xBF}
+#define TIME_TO_WAKE        5
+#define TIME_TO_SLEEP       5
+#define TXPOWER             ESP_PWR_LVL_N0
 
 #elif defined(DIFFICULT)
 #define DEVICE_NAME         "Anubis BLE Hard Fox"
@@ -28,5 +34,8 @@
 #define MINOR               88
 #define SIGNAL_POWER        0xc5
 #define MAC_ADDR            {0xF2, 0xCF, 0x16, 0x41, 0x3C, 0x4B}
+#define TIME_TO_WAKE        10
+#define TIME_TO_SLEEP       30
+#define TXPOWER             ESP_PWR_LVL_N12
 
 #endif

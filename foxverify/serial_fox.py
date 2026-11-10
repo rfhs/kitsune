@@ -2,32 +2,57 @@
 
 Every fox prints at 115200 baud. After its radio is up it prints the banner
 ``Fox: <project> <DIFFICULTY> [<MODE>]`` and then its readback lines, one
-value per line, in the formats of the firmware's ``printf`` calls. ``LINES``
-holds one regex per line the four projects print; ``Readback.feed`` matches
-them and keeps the captured values under the field names in ``LINES``.
+value per line, in the formats of the firmware's ``printf`` calls, the
+device address first and "Awake and screaming" last. ``LINES`` holds one
+regex per line the four projects print; ``Readback.feed`` matches them and
+keeps the captured values under the field names in ``LINES``. A Wi-Fi access
+point or Zigbee fox also prints ``Starting on channel N`` the moment its
+channel is final and before its radio starts, so a sniffer can be on that
+channel for the first frame; the line is best effort, since a native USB
+board's host may not have the port open that early, and the ``Operating
+channel`` readback after the start remains the record. ``read_fox`` hands
+every field to ``on_field`` as it arrives, which is how a run tunes its
+sniffer on the early line while the rest of the readback is still coming.
 
-Reset. The pulse is esptool's HardReset: DTR low with RTS high for 0.1 s, then
-RTS low. On a USB-UART board (CP210x, CH910x) RTS drives EN and DTR drives IO0
-through the usual two transistors, so the chip reboots into the application.
-On a board with ``ARDUINO_USB_MODE=1`` (M5 AtomS3 and StampS3, Seeed XIAO
-ESP32-C5) the USB-Serial-JTAG peripheral emulates that circuit in hardware and
-the Arduino core's ``HWCDC.cpp`` never looks at the line state, so the same
-pulse reboots it. On the Arduino Nano ESP32 the TinyUSB stack is in charge and
-``USBCDC.cpp`` only knows a four step line-state sequence that enters the
-bootloader, which this pulse never completes; the Nano ignores it and the
-reset button is the fallback. After another 0.1 s the pulse ends with DTR and
-RTS asserted again, DTR first, because TinyUSB's ``write()`` drops output
-while DTR is low and raising RTS before DTR would pulse EN a second time.
+Reset. ``SerialSource`` opens and resets the port with the line sequences of
+``usbstack``, chosen by the port's USB id: esptool's hard reset for a UART
+bridge (the M5 Atom) and for the USB-Serial-JTAG peripheral (M5 AtomS3 and
+StampS3, Seeed XIAO ESP32-C5), nothing for the Arduino Nano ESP32, whose
+TinyUSB stack has no way to restart the application; ``read_fox`` then says
+so and waits for the fox's own wake as with ``reset=False``. Opening a port
+never resets a running fox on any stack, and on a USB-Serial-JTAG port it
+never arms the bootloader either: the port rests with both lines asserted
+and is only ever written by the reset. After the reset a native USB device
+may re-enumerate; ``SerialSource.read`` raises ``PortGone`` and ``read_fox``
+reopens the same by-id path, which lands on the same resting state. The wall
+clock moment the reset was released is kept in ``Readback.reset_time``, and
+the banner's arrival in ``Readback.banner_time``, for the FIRST_FRAME row and
+the cycle measurement.
 
-After the reset the device may re-enumerate; ``SerialSource.read`` raises
-``PortGone`` and ``read_fox`` reopens the same by-id path.
+A reset that lands the chip in the ROM's download mode, which the ROM
+announces with a ``boot:`` line naming ``DOWNLOAD`` and then ``waiting for
+download``, is answered once by another reset, which boots the application
+once the ROM has consumed a download flag another program armed; a second
+download banner ends the run with the reset-button hint, since the ROM never
+leaves download mode on its own.
+
+``Follower`` reads the port after the readback while the sniffer listens
+through the fox's sleeps. It watches for ``Going to sleep``, the exact end of
+a wake, and takes the port vanishing, as a native USB board's does in deep
+sleep, as the same signal. The lines after a sleep belong to the next wake
+and are parsed into that wake's own ``Readback``, so a random-channel fox's
+channel line, ``Starting on channel`` when the host caught it and
+``Operating channel`` otherwise, can retune the sniffer for each wake and its
+``Last cycle`` line gives the fox's own cycle figure; a vanished port is
+opened again on every poll when the run follows the fox past its first
+sleep.
 
 Not-a-fox outcomes after the reset, each a ``RunError`` (exit 2) with the text
 in the constants below: nothing at all within 10 s, or output without a banner
 within 15 s of the first byte. The 10 s mark prints the reset-button hint and
-keeps waiting until the deadline, so a fox whose USB stack ignores the pulse
-still gets its turn. With ``reset=False`` the script waits for the fox's own
-wake cycle until the deadline instead.
+keeps waiting until the deadline, so a fox whose bridge does not wire the
+pulse still gets its turn. With ``reset=False`` the script waits for the
+fox's own wake cycle until the deadline instead.
 """
 from __future__ import annotations
 
@@ -37,20 +62,18 @@ import re
 import time
 from typing import Callable, Dict, List, NamedTuple, Optional, Tuple
 
+from . import devices, usbstack
 from .conf import Block, ConfError, defined_for, select
 from .report import Deadline, RunError
 
 BAUD = 115200
 NO_OUTPUT_SECONDS = 10.0
 NO_BANNER_SECONDS = 15.0
-RESET_PULSE_SECONDS = 0.1
 # Seconds without a new line after the banner before the readback counts as
-# complete when no project specific last line was seen.
+# complete when the awake line was not seen.
 QUIET_SECONDS = 2.0
-# Seconds the read goes on after the project's last line, so the mismatch and
-# PANIC lines a fox prints right after it are still taken. Classic prints
-# nothing else for TIME_TO_WAKE seconds after its address, so the read cannot
-# wait for a later line there.
+# Seconds the read goes on after the awake line, which ends the readback
+# burst, so a line a fox prints on its heels is still taken.
 DRAIN_SECONDS = 0.5
 # How often a vanished serial device is polled for while it re-enumerates.
 REOPEN_POLL_SECONDS = 0.2
@@ -66,6 +89,17 @@ NO_BANNER_NO_RESET = ("device prints but did not identify as a fox before the de
                       "cycle longer than the deadline")
 DIFFERENT_HEADER = "fox was built from a different conference header than src/current_conf.h"
 PORT_GONE = "the fox's serial device went away and did not come back before the deadline"
+NO_SERIAL_RESET = ("the Arduino Nano ESP32 cannot be reset over its serial port; "
+                   "waiting for the fox's next wake")
+IN_BOOTLOADER = "the reset left the fox in the bootloader; resetting it again"
+STILL_IN_BOOTLOADER = "the reset left the fox in the bootloader again; press the board's reset button"
+
+# What the ROM prints after a reset into download mode: its boot-mode line,
+# ``rst:0x1 (POWERON),boot:0x0 (DOWNLOAD(USB/UART0))`` on an ESP32-S3 or
+# ESP32-C5 and ``boot:0x3 (DOWNLOAD_BOOT(UART0/UART1/SDIO_REI_REO_V2))`` on an
+# ESP32, then ``waiting for download``, the line esptool keys on.
+DOWNLOAD_BOOT = re.compile(r"^rst:0x[0-9A-Fa-f]+ \([^)]*\),boot:0x[0-9A-Fa-f]+ \(DOWNLOAD")
+WAITING_FOR_DOWNLOAD = "waiting for download"
 
 # Project name in the banner -> directory of its verify script.
 PROJECT_DIRS = {
@@ -75,13 +109,14 @@ PROJECT_DIRS = {
     "zigbee_coordinator": "zigbee/zigbee_coordinator",
 }
 
-# The field whose line ends a project's readback on the success path.
-LAST_FIELD = {
-    "classic_discoverable": "address",
-    "iBeacon": "advertising",
-    "wifi_ap_client": "awake",
-    "zigbee_coordinator": "awake",
-}
+# The field whose line ends every fox's readback on the success path: the
+# radio header's checks are printed and then "Awake and screaming".
+LAST_FIELD = "awake"
+# The labels of the two lines that name a Wi-Fi AP or Zigbee fox's channel,
+# in the order the fox prints them: the early line before the radio starts
+# and the readback once it is up.
+STARTING_CHANNEL = "Starting on channel"
+OPERATING_CHANNEL = "Operating channel"
 
 
 def wrong_project(project: str) -> str:
@@ -105,64 +140,77 @@ class Banner(NamedTuple):
 
 BANNER = re.compile(r"^Fox: (\S+) (EASY|MEDIUM|HARD|FIVEEASY|FIVEHARD)(?: (AP|CLIENT))?$")
 
-_MAC6 = r"((?:[0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2})"
+# Six colon separated bytes for a Bluetooth or Wi-Fi address, eight for the
+# Zigbee EUI-64 and the extended PAN ID.
+_MAC6_OR_8 = r"((?:[0-9A-Fa-f]{2}:){5}(?:(?:[0-9A-Fa-f]{2}:){2})?[0-9A-Fa-f]{2})"
 _MAC8 = r"((?:[0-9A-Fa-f]{2}:){7}[0-9A-Fa-f]{2})"
 _U16 = r"(0x[0-9A-Fa-f]{4})"
 
 # (field, regex) for every line a fox prints, in the firmware's own formats.
-# A field with several lines (mac, sleeping) is written by whichever appears.
+# A field with several lines (tx_power) is written by whichever appears.
 # Group 1 is the value kept; a regex without groups keeps the whole line.
 LINES: List[Tuple[str, "re.Pattern[str]"]] = [
-    # include/rfhssleeptimers.h and every main.cpp
+    # include/rfhsfox.h and include/rfhssleeptimers.h, the same in every fox.
+    # "Last cycle" comes with a timer wake-up and "Cycle behind" when a
+    # fox with a non-zero TIME_TO_SLEEP ran past its cycle. The first boot's
+    # readback has neither; the Follower reads a later wake's "Last cycle"
+    # for the serial column of the CYCLE_TIME row.
     ("initializing", re.compile(r"^Initializing\.\.\.$")),
     ("boot_count", re.compile(r"^ESP32 boot count: (\d+)$")),
     ("sleep_stats", re.compile(r"^Sleep stats: (-?\d+s since cold boot, -?\d+s since last wakeup)$")),
+    ("last_cycle", re.compile(r"^Last cycle: (\d+\.\d+s, target \d+s)$")),
+    ("setting_up", re.compile(r"^Setting up (.+)\.\.\.$")),
     ("mac_set", re.compile(r"^MAC address set (successfully)$")),
-    ("awake", re.compile(r"^(Awake and screaming)$")),
-    ("sleeping", re.compile(r"^(Going to sleep)$")),
-    ("sleeping", re.compile(r"^(entering deep sleep)$")),
-    ("setting_up", re.compile(r"^Setting up (.+?)\u2026?$")),
-    ("tx_power_status", re.compile(r"^Set power status: (ok|failed)$")),
     ("time_to_wake", re.compile(r"^Time to wake: (\d+)s$")),
     ("time_to_sleep", re.compile(r"^Time to sleep: (\d+)s$")),
-    # include/rfhswifi.h and include/rfhszigbee.h; Wi-Fi prints the
-    # WIFI_POWER_* name, Zigbee a dBm number.
+    ("awake", re.compile(r"^(Awake and screaming)$")),
+    ("sleeping", re.compile(r"^(Going to sleep)$")),
+    ("cycle_behind", re.compile(r"^Cycle behind by (\d+\.\d+)s, rebooting at once$")),
+    # include/rfhsconfcheck.h: the first readback line of every fox.
+    ("address", re.compile(r"^Device address: " + _MAC6_OR_8 + "$")),
+    # include/rfhswifi.h, include/rfhszigbee.h and include/rfhsibeacon.h;
+    # Wi-Fi prints the WIFI_POWER_* name, Zigbee a dBm number, iBeacon the
+    # ESP_PWR_LVL_* name with its dBm in parentheses.
+    ("tx_power_status", re.compile(r"^Set power status: (ok|failed)$")),
     ("psk", re.compile(r"^Operating PSK: (.*)$")),
     ("ssid_hidden", re.compile(r"^Hidden SSID: ([01])$")),
     ("max_clients", re.compile(r"^Max clients: (\d+)$")),
     ("tx_power", re.compile(r"^Tx power: (\S+?)(?: dBm)?$")),
-    # include/rfhszigbee.h and wifi/wifi_ap_client/src/main.cpp
-    ("mac", re.compile(r"^Started Coordinator with MAC Address: " + _MAC8 + "$")),
-    ("mac", re.compile(r"^Started AP with MAC Address: " + _MAC6 + "$")),
-    ("mac", re.compile(r"^Started Client with MAC Address: " + _MAC6 + "$")),
+    ("tx_power", re.compile(r"^Tx power: (ESP_PWR_LVL_\w+) \(-?\d+ dBm\)$")),
+    # include/rfhswifi.h (AP) and include/rfhszigbee.h: the channel the fox
+    # is about to start its radio on, printed before the start so a sniffer
+    # can be on it for the first frame, then the channel read back from the
+    # stack once the radio is up.
+    ("starting_channel", re.compile(r"^Starting on channel (\d+)$")),
     ("channel", re.compile(r"^Operating channel: (\d+)$")),
     ("pan_id", re.compile(r"^Operating PAN ID: " + _U16 + "$")),
     ("ext_pan_id", re.compile(r"^Extended PAN ID: " + _MAC8 + "$")),
     ("short_address", re.compile(r"^Short address: " + _U16 + "$")),
     ("packet_interval", re.compile(r"^Packet interval: (\d+)s$")),
     ("ssid", re.compile(r"^Operating SSID: (.*)$")),
-    # include/rfhsbt.h, rfhsclassicdiscoverable.h and rfhsibeacon.h
+    # include/rfhsclassicdiscoverable.h and include/rfhsibeacon.h
     ("name", re.compile(r"^Device name: (.*)$")),
-    ("address", re.compile(r"^Device address: " + _MAC6 + "$")),
     ("uuid", re.compile(r"^Beacon UUID: ([0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-"
                         r"[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12})$")),
     ("major", re.compile(r"^Major: 0x[0-9A-Fa-f]{4} \((\d+)\)$")),
     ("minor", re.compile(r"^Minor: 0x[0-9A-Fa-f]{4} \((\d+)\)$")),
     ("signal_power", re.compile(r"^Signal power: (-?\d+)$")),
-    ("adv_power", re.compile(r"^Advertising power: (-?\d+) dBm \(level \d+\)$")),
-    ("adv_power_level", re.compile(r"^Advertising power: -?\d+ dBm \(level (\d+)\)$")),
-    ("advertising", re.compile(r"^(iBeacon advertising!)$")),
 ]
+# The first regex of each field, for code that looks for one line.
+LINES_BY_FIELD: Dict[str, "re.Pattern[str]"] = {}
+for _field, _pattern in LINES:
+    LINES_BY_FIELD.setdefault(_field, _pattern)
 
 # Lines that mean the fox refused to run or is not healthy. The firmware
-# prints one of these, then halts on the fatal LED and prints PANIC.
+# prints one of these, then "Fatal <code>: <reason>" and PANIC before it
+# halts on the blinking LED.
 PROBLEMS = [
     re.compile(r"^.* != .*$"),
     re.compile(r"^Error .*$"),
     re.compile(r"^Device address: unavailable.*$"),
     re.compile(r"^Beacon data is \d+ bytes, not 25$"),
+    re.compile(r"^Fatal \d+: "),
     re.compile(r"^PANIC$"),
-    re.compile(r"^Entered loop, we are broken$"),
 ]
 
 # "Requested <what>: <value>" accompanies a mismatch; kept under requested:<what>.
@@ -178,6 +226,11 @@ class Readback:
         self.fields: Dict[str, str] = {}
         self.problems: List[str] = []
         self.unmatched: List[str] = []
+        # Wall clock times of the reset's release, None when the fox was not
+        # reset, and of the banner's arrival, which the fox prints once its
+        # radio is up.
+        self.reset_time: Optional[float] = None
+        self.banner_time: Optional[float] = None
 
     def feed(self, line: str) -> Optional[str]:
         """Record one complete line; return the field it set, if any."""
@@ -229,14 +282,31 @@ class Readback:
     def halted(self) -> bool:
         return bool(self.problems)
 
+    def channel_line(self) -> Optional[Tuple[int, str]]:
+        """The channel the fox named and the label of the line that named it:
+        the early ``Starting on channel`` line when the host caught it, else
+        the ``Operating channel`` readback; None before either."""
+        starting = self.integer("starting_channel")
+        if starting is not None:
+            return starting, STARTING_CHANNEL
+        channel = self.integer("channel")
+        return None if channel is None else (channel, OPERATING_CHANNEL)
+
+    def channel_mismatch(self) -> Optional[str]:
+        """The serial column of the CHANNEL row when the fox's two channel
+        lines disagree, both values shown; None when they agree or only one
+        was seen. The firmware halts when its readback differs from the
+        channel it started on, so a healthy fox never prints two values."""
+        starting, channel = self.integer("starting_channel"), self.integer("channel")
+        if starting is None or channel is None or starting == channel:
+            return None
+        return "%d (%s %d)" % (channel, STARTING_CHANNEL, starting)
+
     def complete(self) -> bool:
-        """True once the project's last readback line or a problem was seen."""
+        """True once the awake line or a problem was seen after the banner."""
         if self.banner is None:
             return False
-        if self.problems:
-            return True
-        last = LAST_FIELD.get(self.banner.project)
-        return last is not None and last in self.fields
+        return bool(self.problems) or LAST_FIELD in self.fields
 
     def transcript(self) -> str:
         return "\n".join(self.lines) + ("\n" if self.lines else "")
@@ -253,12 +323,24 @@ class PortGone(Exception):
 
 
 class SerialSource:
-    """A pyserial port read in chunks, with the reset pulse and reopening."""
+    """A pyserial port read in chunks, with the hard reset of the port's USB
+    stack and reopening.
 
-    def __init__(self, path: str, baud: int = BAUD, sleep: Callable[[float], None] = time.sleep):
+    ``port`` is the ``devices.Port`` of ``path``, whose USB id picks the line
+    sequences; when it is not given the port is looked up among the serial
+    ports pyserial lists. A path without a USB id gets the UART bridge
+    sequences.
+    """
+
+    def __init__(self, path: str, baud: int = BAUD, sleep: Callable[[float], None] = time.sleep,
+                 port: Optional[devices.Port] = None):
         self.path = path
         self.baud = baud
         self.sleep = sleep
+        if port is None:
+            port = devices.find_port(path, devices.list_ports())
+        self.port = port
+        self.stack = usbstack.usb_stack(port)
         self.serial = None
         self._decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
         self.open()
@@ -269,11 +351,7 @@ class SerialSource:
         port.port = self.path
         port.baudrate = self.baud
         port.timeout = 0
-        # pyserial asserts DTR before RTS when it opens, which leaves EN high
-        # throughout on the auto-reset circuit.
-        port.dtr = True
-        port.rts = True
-        port.open()
+        usbstack.open_port(port)
         self.serial = port
         self._decoder.reset()
 
@@ -285,28 +363,22 @@ class SerialSource:
                 pass
             self.serial = None
 
-    def reset(self) -> None:
-        """esptool's HardReset, ending with both lines asserted again.
+    def reset(self, wall: Callable[[], float] = time.time) -> Optional[float]:
+        """The hard reset of the port's USB stack: the moment the chip left
+        reset on ``wall``, or None when the stack has no reset.
 
-        The chip samples IO0 when EN rises, so the pause after RTS drops keeps
-        the brief IO0 dip of raising DTR alone away from that moment. A native
-        USB board may already have dropped off the bus by then; ``reopen``
-        asserts the lines again in the same order.
+        A USB-Serial-JTAG chip that dropped off the bus during the reset
+        leaves a port that cannot be used; it is closed so that the next
+        ``read`` raises ``PortGone`` and the caller opens the path again.
         """
-        port = self.serial
-        # RTS is asserted from open(), so on the USB-Serial-JTAG circuit this
-        # first change already pulls EN low and the device can be gone before
-        # the next line-state call.
-        port.dtr = False
         try:
-            port.rts = True
-            self.sleep(RESET_PULSE_SECONDS)
-            port.rts = False
-            self.sleep(RESET_PULSE_SECONDS)
-            port.dtr = True
-            port.rts = True
+            done = usbstack.hard_reset(self.serial, self.stack, self.sleep, wall)
         except OSError:
-            pass
+            self.close()
+            return wall()
+        if done.dropped:
+            self.close()
+        return done.released
 
     def read(self, timeout: float) -> Optional[str]:
         """Text that arrived within ``timeout`` seconds, or None when nothing did."""
@@ -328,17 +400,24 @@ class SerialSource:
             raise PortGone("%s: %s" % (self.path, error))
         return self._decoder.decode(data)
 
+    def try_open(self) -> bool:
+        """One attempt to open the device path again; False when it is not
+        back yet."""
+        import serial
+        if not os.path.exists(self.path):
+            return False
+        try:
+            self.open()
+        except (serial.SerialException, OSError):
+            return False
+        return True
+
     def reopen(self, deadline: Deadline) -> None:
         """Wait for the device path to come back and open it again."""
-        import serial
         self.close()
         while True:
-            if os.path.exists(self.path):
-                try:
-                    self.open()
-                    return
-                except (serial.SerialException, OSError):
-                    pass
+            if self.try_open():
+                return
             if deadline.expired():
                 raise RunError(PORT_GONE)
             self.sleep(min(REOPEN_POLL_SECONDS, deadline.remaining()))
@@ -349,9 +428,12 @@ class TranscriptSource:
     for a serial-only run against a saved transcript.
 
     ``items`` are lines, each optionally preceded by a delay in seconds as
-    ``(delay, line)``. ``read`` advances ``clock`` by the delay of the next
-    line when the clock is a ``FakeClock``; with the real clock it sleeps.
-    After the last line every read times out.
+    ``(delay, line)``. With a ``FakeClock`` a line is due its delay after the
+    previous line was due, ``read`` moves the clock to the due time of the
+    next line when that is within the timeout, and a line whose moment has
+    passed is delivered at once, so a poll with a zero timeout catches up
+    with lines the clock has moved past. With the real clock ``read`` sleeps
+    the delay. After the last line every read times out.
     """
 
     def __init__(self, items, clock=None, sleep: Callable[[float], None] = time.sleep,
@@ -367,6 +449,8 @@ class TranscriptSource:
         self.sleep = sleep
         self.resets = 0
         self.reopens = 0
+        # On a fake clock, the time the next line's delay counts from.
+        self._ref: Optional[float] = clock() if hasattr(clock, "advance") else None
 
     @classmethod
     def from_file(cls, path: str, **kwargs) -> "TranscriptSource":
@@ -379,16 +463,27 @@ class TranscriptSource:
         elif seconds > 0:
             self.sleep(seconds)
 
-    def reset(self) -> None:
+    def reset(self, wall: Callable[[], float] = time.time) -> Optional[float]:
         self.resets += 1
+        return wall()
 
     def reopen(self, deadline: Deadline) -> None:
         self.reopens += 1
 
+    def try_open(self) -> bool:
+        self.reopens += 1
+        return True
+
     def close(self) -> None:
         pass
 
+    @staticmethod
+    def _line(text: str) -> str:
+        return text if text.endswith("\n") else text + "\n"
+
     def read(self, timeout: float) -> Optional[str]:
+        if self._ref is not None:
+            return self._read_on_clock(timeout)
         if not self.items:
             self._advance(timeout)
             return None
@@ -399,9 +494,23 @@ class TranscriptSource:
             return None
         self.items.pop(0)
         self._advance(delay)
-        if not line.endswith("\n"):
-            line += "\n"
-        return line
+        return self._line(line)
+
+    def _read_on_clock(self, timeout: float) -> Optional[str]:
+        now = self.clock()
+        if not self.items:
+            self.clock.advance(timeout)
+            return None
+        delay, line = self.items[0]
+        due = self._ref + delay
+        if due > now + timeout:
+            self.clock.advance(timeout)
+            return None
+        self.items.pop(0)
+        if due > now:
+            self.clock.advance(due - now)
+        self._ref = due
+        return self._line(line)
 
 
 class FakeClock:
@@ -419,24 +528,43 @@ class FakeClock:
 
 def read_fox(source, deadline: Deadline, reset: bool = True,
              say: Callable[[str], None] = lambda text: None,
-             debug: Callable[[str], None] = lambda text: None) -> Readback:
+             debug: Callable[[str], None] = lambda text: None,
+             wall: Callable[[], float] = time.time,
+             on_field: Optional[Callable[[str, Readback], None]] = None) -> Readback:
     """Reset the fox, wait for its banner, read its readback lines.
 
-    Returns the ``Readback`` once a problem line, the project's last line plus
+    Returns the ``Readback`` once a problem line, the awake line plus
     ``DRAIN_SECONDS``, a quiet spell after the banner or the deadline ends it.
-    Raises ``RunError`` with the not-a-fox texts when no banner arrives.
+    A fox whose radio start failed prints its "Error ..." line before the
+    banner; the read goes on to the banner and stops there. Raises
+    ``RunError`` with the not-a-fox texts when no banner arrives. ``wall`` is
+    the clock the sniffers stamp frames with; the reset is stamped on it.
+    ``on_field`` is called with the field name and the readback so far for
+    every line a regex in ``LINES`` matched, the moment it arrives, so a
+    caller can act on the fox's ``Starting on channel`` line before the
+    readback is complete.
+
+    A source whose USB stack cannot reset the fox (``reset`` returns None)
+    is read as with ``reset=False`` after saying so. A reset that leaves the
+    chip in the ROM's download mode is seen in the ROM's lines and answered
+    with one more reset; the second time the run ends with the hint to press
+    the board's reset button.
     """
     readback = Readback()
     buffer = ""
     clock = deadline.now
     if reset:
         debug("resetting the fox on %s" % source.path)
-        source.reset()
+        readback.reset_time = source.reset(wall)
+        if readback.reset_time is None:
+            say(NO_SERIAL_RESET)
+            reset = False
     started = clock()
     first_output: Optional[float] = None
     last_line: Optional[float] = None
     drain_until: Optional[float] = None
     hinted = False
+    reset_again = reset
     while True:
         now = clock()
         if readback.banner is not None:
@@ -489,11 +617,175 @@ def read_fox(source, deadline: Deadline, reset: bool = True,
                 continue
             last_line = now
             debug("serial: " + line.rstrip("\r"))
-            if readback.feed(line) == "banner":
+            rom = download_mode_line(line) if reset and readback.banner is None else None
+            # The ROM's boot line opens every boot's output, so it is a fresh
+            # verdict whenever it comes. Its waiting line alone is taken only
+            # before the second reset: after it, that line can still be the
+            # first boot's, in flight while the chip was reset again.
+            if rom == BOOT_LINE or (rom == WAITING_LINE and reset_again):
+                if not reset_again:
+                    raise RunError(STILL_IN_BOOTLOADER)
+                # The ROM never leaves download mode on its own; the reset
+                # is repeated once and the wait starts over.
+                say(IN_BOOTLOADER)
+                readback.feed(line)
+                reset_again = False
+                readback.reset_time = source.reset(wall)
+                started = clock()
+                first_output = None
+                buffer = ""
+                break
+            field = readback.feed(line)
+            if field == "banner":
+                readback.banner_time = wall()
                 say(readback.banner.text())
+            elif field in LINES_BY_FIELD and on_field is not None:
+                on_field(field, readback)
     if buffer.strip():
         readback.feed(buffer)
     return readback
+
+
+BOOT_LINE = "boot"
+WAITING_LINE = "waiting"
+
+
+def download_mode_line(line: str) -> Optional[str]:
+    """``BOOT_LINE`` for the ROM's boot-mode line naming download mode,
+    ``WAITING_LINE`` for its ``waiting for download``, None for anything else."""
+    line = line.rstrip("\r")
+    if DOWNLOAD_BOOT.match(line):
+        return BOOT_LINE
+    if WAITING_FOR_DOWNLOAD in line:
+        return WAITING_LINE
+    return None
+
+
+class Follower:
+    """Reads the fox's port after the readback, without blocking, while the
+    sniffer listens through the fox's sleeps.
+
+    ``poll`` takes whatever arrived. The ``Going to sleep`` line ends the wake
+    the port is printing and is stamped on ``clock``; the port vanishing, as
+    a native USB board's does in deep sleep, is stamped the same way unless
+    the sleep line already ended that wake. ``boundaries`` lists those
+    instants in order, one per sleep. The ``Cycle behind`` line, which the
+    fox prints while going to sleep, still belongs to the ending wake; any
+    other line after a sleep opens the next wake and goes into that wake's
+    ``Readback``, which ``channel``, ``pan_id`` and ``last_cycle`` answer
+    from. With ``reopen`` the port is tried again on every poll after it
+    vanished, which is how a native USB board's later wakes are read; without
+    it a vanished port is left alone.
+    """
+
+    def __init__(self, source, clock: Callable[[], float] = time.time, reopen: bool = False,
+                 debug: Callable[[str], None] = lambda text: None):
+        self.source = source
+        self.clock = clock
+        self.reopen = reopen
+        self.debug = debug
+        # The readbacks of wake 2 onwards, in order.
+        self.wakes: List[Readback] = []
+        self._sleeps: List[float] = []
+        # True from a Going to sleep line until a line of the next wake, so
+        # that the port vanishing for the same sleep is not a second end.
+        self._line_ended_wake = False
+        self.gone = False
+        self.reopened = False
+        self._buffer = ""
+
+    def poll(self) -> None:
+        if self.gone:
+            if not self.reopen or not self.source.try_open():
+                return
+            self.gone = False
+            self.reopened = True
+            self._buffer = ""
+            self.debug("serial device is back, reading wake %d" % (len(self._sleeps) + 1))
+        try:
+            chunk = self.source.read(0.0)
+        except PortGone:
+            self.gone = True
+            if not self._line_ended_wake:
+                self._sleeps.append(self.clock())
+                self.debug("serial device gone, taking it as the end of wake %d" % len(self._sleeps))
+            return
+        if chunk is None:
+            return
+        self._buffer += chunk
+        while "\n" in self._buffer:
+            line, self._buffer = self._buffer.split("\n", 1)
+            line = line.rstrip("\r")
+            if line.strip():
+                self._line(line)
+
+    def _line(self, line: str) -> None:
+        self.debug("serial: " + line)
+        if LINES_BY_FIELD["sleeping"].match(line):
+            self._sleeps.append(self.clock())
+            self._line_ended_wake = True
+            return
+        if LINES_BY_FIELD["cycle_behind"].match(line):
+            return
+        self._line_ended_wake = False
+        # The first line after a sleep opens the next wake; a wake whose
+        # lines were all missed gets an empty readback, so every wake keeps
+        # its place.
+        while len(self.wakes) < len(self._sleeps):
+            self.wakes.append(Readback())
+        if self.wakes:
+            self.wakes[-1].feed(line)
+
+    def boundaries(self) -> List[float]:
+        """When each wake ended, by the sleep line or the port vanishing, in
+        order."""
+        return list(self._sleeps)
+
+    def boundary(self) -> Optional[float]:
+        """When wake 1 ended, None while it goes on."""
+        return self._sleeps[0] if self._sleeps else None
+
+    def readback(self, wake: int) -> Optional[Readback]:
+        """What wake ``wake``, 2 or later, has printed so far; None before
+        its first line."""
+        index = wake - 2
+        return self.wakes[index] if 0 <= index < len(self.wakes) else None
+
+    @property
+    def wake2(self) -> Readback:
+        return self.readback(2) or Readback()
+
+    def channel(self, wake: int = 2) -> Optional[int]:
+        """Wake ``wake``'s channel once the fox named it, on its ``Starting
+        on channel`` line when the host caught it, else on its ``Operating
+        channel`` readback."""
+        line = self._channel_line(wake)
+        return None if line is None else line[0]
+
+    def channel_label(self, wake: int = 2) -> Optional[str]:
+        """The label of the line that named wake ``wake``'s channel."""
+        line = self._channel_line(wake)
+        return None if line is None else line[1]
+
+    def _channel_line(self, wake: int) -> Optional[Tuple[int, str]]:
+        readback = self.readback(wake)
+        return readback.channel_line() if readback is not None else None
+
+    def pan_id(self, wake: int = 2) -> Optional[int]:
+        readback = self.readback(wake)
+        return readback.integer("pan_id") if readback is not None else None
+
+    def pan_ids(self) -> List[int]:
+        """Every PAN ID printed by wake 2 onwards."""
+        pans = [readback.integer("pan_id") for readback in self.wakes]
+        return [pan for pan in pans if pan is not None]
+
+    def last_cycle(self, wake: int) -> Optional[float]:
+        """The seconds of the ``Last cycle`` line wake ``wake`` printed, the
+        fox's own measure of the cycle that ended with its boot."""
+        readback = self.readback(wake)
+        text = readback.get("last_cycle") if readback is not None else None
+        return None if text is None else float(text.split("s", 1)[0])
 
 
 def block_for(readback: Readback, project: str, header_text: str) -> Block:

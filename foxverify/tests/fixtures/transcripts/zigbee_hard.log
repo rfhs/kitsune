@@ -1,13 +1,14 @@
-MAC address set successfully
-
 Initializing...
 ESP32 boot count: 5
-Sleep stats: 1505s since cold boot, 301s since last wakeup
-Setting up Zigbee Coordinator…
+Sleep stats: 1521s since cold boot, 304s since last wakeup
+Last cycle: 304.2s, target 300s
+Setting up Zigbee Coordinator...
+MAC address set successfully
+Starting on channel 11
 Fox: zigbee_coordinator HARD
 Time to wake: 300s
-Time to sleep: 1s
-Started Coordinator with MAC Address: F2:A7:19:62:C3:08:BE:35
+Time to sleep: 0s
+Device address: F2:A7:19:62:C3:08:BE:35
 Operating channel: 11
 Operating PAN ID: 0xDEAD
 Extended PAN ID: F2:A7:19:62:C3:08:BE:35

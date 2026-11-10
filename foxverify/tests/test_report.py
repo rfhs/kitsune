@@ -52,10 +52,28 @@ class VerdictTest(unittest.TestCase):
         self.assertEqual(row.verdict, report.FAIL)
         self.assertTrue(self.report.failed())
 
-    def test_serial_for_values_not_on_air(self):
+    def test_serial_only_for_values_not_on_air(self):
         row = self.report.check("TIME_TO_WAKE", 300, 300, on_air=False)
         self.assertEqual(row.verdict, report.SERIAL)
+        self.assertEqual(report.SERIAL, "serial only")
         self.assertEqual(row.air, report.EMPTY)
+        self.assertEqual(row.cells()[4], "serial only")
+
+    def test_serial_only_row_with_a_reason_and_an_air_text(self):
+        row = self.report.check("EXT_PAN_ID", "F2:5A:3C:91:0E:7B:44:D8", "F2:5A:3C:91:0E:7B:44:D8",
+                                on_air=False, reason="only in beacons")
+        self.assertEqual(row.cells()[4], "serial only: only in beacons")
+        self.assertEqual(row.air, report.EMPTY)
+        row = self.report.check("TXPOWER", "WIFI_POWER_17dBm", "WIFI_POWER_17dBm",
+                                "median -42 dBm over 38 frames", on_air=False)
+        self.assertEqual(row.verdict, report.SERIAL)
+        self.assertEqual(row.air, "median -42 dBm over 38 frames")
+        self.assertEqual(row.cells()[4], "serial only")
+        self.assertEqual(self.report.exit_code(), report.EXIT_OK)
+        # A disagreement is a FAIL whatever the air column would have shown.
+        row = self.report.check("TXPOWER", "WIFI_POWER_17dBm", "WIFI_POWER_7dBm",
+                                "median -42 dBm over 38 frames", on_air=False)
+        self.assertEqual(row.verdict, report.FAIL)
 
     def test_unverified_with_reason(self):
         row = self.report.check("PACKET_INTERVAL", 15, 15, None, reason="two frames need 30 s, 12 s left")
@@ -95,24 +113,44 @@ class RenderTest(unittest.TestCase):
         rep.check("MAC_ADDR", "F2:81:5A:C1:A3:26", "F2:81:5A:C1:A3:26", "F2:81:5A:C1:A3:26")
         rep.check("TIME_TO_WAKE", 300, 300, on_air=False)
         rep.check("NAME", "Demo Molly BTC Easy Fox", "Demo Molly BTC Easy Fox", None, reason="no inquiry reply")
+        rep.line("first transmission: 2.3 s after reset")
         rep.note("no sniffer given, serial-only run")
         clock.now = 12.5
         code = rep.emit()
         lines = out.getvalue().splitlines()
         self.assertEqual(lines[0], "value        | header                  | serial                  | air               | verdict")
         self.assertEqual(lines[1], "MAC_ADDR     | F2:81:5A:C1:A3:26       | F2:81:5A:C1:A3:26       | F2:81:5A:C1:A3:26 | pass")
-        self.assertEqual(lines[2], "TIME_TO_WAKE | 300                     | 300                     | -                 | serial")
+        self.assertEqual(lines[2], "TIME_TO_WAKE | 300                     | 300                     | -                 | serial only")
         self.assertEqual(lines[3], "NAME         | Demo Molly BTC Easy Fox | Demo Molly BTC Easy Fox | -                 | unverified: no inquiry reply")
-        self.assertEqual(lines[4], "note: no sniffer given, serial-only run")
-        self.assertEqual(lines[5], "pass: 1 pass, 0 FAIL, 1 serial, 1 unverified, 12.5 s of 60 s")
-        self.assertEqual(len(lines), 6)
+        self.assertEqual(lines[4], "first transmission: 2.3 s after reset")
+        self.assertEqual(lines[5], "note: no sniffer given, serial-only run")
+        self.assertEqual(lines[6], "pass: 1 pass, 0 FAIL, 1 serial only, 1 unverified, 12.5 s of 60 s")
+        self.assertEqual(len(lines), 7)
         self.assertEqual(code, report.EXIT_OK)
 
     def test_summary_says_fail(self):
         rep = report.Report(out=io.StringIO())
         rep.check("CHANNEL", 1, 6, 6)
-        self.assertEqual(rep.summary(), "FAIL: 0 pass, 1 FAIL, 0 serial, 0 unverified")
+        self.assertEqual(rep.summary(), "FAIL: 0 pass, 1 FAIL, 0 serial only, 0 unverified")
         self.assertEqual(rep.emit(), report.EXIT_FAIL)
+
+    def test_suggestion_follows_the_summary(self):
+        out = io.StringIO()
+        rep = report.Report(out=out)
+        rep.add("CYCLE_TIME", 300, None, "first boot: 301.8 s", report.PASS)
+        rep.suggest("run with --timeout 605 for the exact cycle time; this run judged the first boot with wider tolerances")
+        rep.emit()
+        lines = out.getvalue().splitlines()
+        self.assertEqual(lines[1], "CYCLE_TIME | 300    | -      | first boot: 301.8 s | pass")
+        self.assertEqual(lines[2], "pass: 1 pass, 0 FAIL, 0 serial only, 0 unverified")
+        self.assertEqual(lines[3], "run with --timeout 605 for the exact cycle time; this run judged the first boot "
+                                   "with wider tolerances")
+        self.assertEqual(len(lines), 4)
+        rep.suggest(None)
+        out.truncate(0)
+        out.seek(0)
+        rep.emit()
+        self.assertEqual(len(out.getvalue().splitlines()), 3)
 
     def test_say_and_debug(self):
         out = io.StringIO()

@@ -65,7 +65,10 @@ ESP = (0x303A, 0x1001, "USB JTAG/serial debug unit", "F4:12:FA:00:11:22")
 CP210X = (0x10C4, 0xEA60, "CP2104 USB to UART Bridge Controller", "0123ABCD")
 CH9102 = (0x1A86, 0x55D4, "USB Single Serial", "5698001234")
 FTDI = (0x0403, 0x6001, "FT232R USB UART", "A50285BI")
+NANO = (0x2341, 0x0070, "Arduino Nano ESP32", "DC:DA:0C:21:5E:E8")
 NRF = (0x1915, 0x154A, "nRF Sniffer for 802.15.4", "F1D2E3C4B5A6")
+NRF_080 = (0x1915, 0x154B, "nRF Sniffer for 802.15.4", "A6B5C4D3E2F1")
+NORDIC_OTHER = (0x1915, 0x520F, "nRF52 USB CDC", "C0FFEE")
 OTHER = (0x1234, 0x5678, "Some modem", "X1")
 
 
@@ -106,6 +109,24 @@ class ClassifyTest(DevicesTestCase):
         self.assertEqual(device.path, os.path.join(self.tree.by_id,
                                                    "usb-ZEPHYR_nRF_Sniffer_for_802.15.4_F1D2E3C4B5A6-if00"))
 
+    def test_both_sniffer_firmware_ids_are_the_sniffer(self):
+        """The 0.7.x firmware enumerates as 1915:154A, 0.8.0 as 1915:154B; another
+        Nordic product id is not the sniffer."""
+        old = self.tree.port("ttyACM3", *NRF)
+        new = self.tree.port("ttyACM4", *NRF_080)
+        nordic = self.tree.port("ttyACM5", *NORDIC_OTHER)
+        ports = [old, new, nordic]
+        self.assertEqual(self.classify(old.device, ports).kind, devices.SNIFFER)
+        self.assertEqual(self.classify(new.device, ports).kind, devices.SNIFFER)
+        self.assertEqual(self.classify(nordic.device, ports).kind, devices.FOX)
+        self.assertTrue(devices.Port(old.device, *NRF).is_sniffer())
+        self.assertTrue(devices.Port(new.device, *NRF_080).is_sniffer())
+        self.assertFalse(devices.Port(nordic.device, *NORDIC_OTHER).is_sniffer())
+        self.assertFalse(devices.Port(nordic.device, *NORDIC_OTHER).is_fox_candidate())
+        sniffer = devices.autodetect_sniffer(devices.list_ports(self.comports(new, nordic)), self.tree.by_id)
+        self.assertEqual(sniffer.kind, devices.SNIFFER)
+        self.assertEqual(sniffer.path, new.device)
+
     def test_any_other_serial_port_is_the_fox(self):
         fox = self.tree.port("ttyUSB0", *CP210X, link="usb-Silicon_Labs_CP2104_0123ABCD-if00-port0")
         other = self.tree.port("ttyUSB1", *OTHER)
@@ -123,6 +144,16 @@ class ClassifyTest(DevicesTestCase):
         self.assertEqual(by_name.path, by_link.path)
         self.assertEqual(by_name.port, by_link.port)
         self.assertEqual(by_name.port.device, fox.device)
+
+    def test_arduino_nano_esp32_is_a_fox_candidate(self):
+        """The Nano's TinyUSB stack enumerates with Arduino's vendor id, not Espressif's."""
+        nano = self.tree.port("ttyACM0", *NANO, link="usb-Arduino_NanoESP32_DC:DA:0C:21:5E:E8-if00")
+        device = self.classify(nano.device, [nano])
+        self.assertEqual(device.kind, devices.FOX)
+        self.assertEqual(device.path, os.path.join(self.tree.by_id, "usb-Arduino_NanoESP32_DC:DA:0C:21:5E:E8-if00"))
+        self.assertTrue(devices.Port(nano.device, *NANO).is_fox_candidate())
+        self.assertFalse(devices.Port(nano.device, *NANO).is_sniffer())
+        self.assertEqual(devices.FOX_VENDOR_IDS[0x2341], "Arduino")
 
     def test_serial_port_without_usb_info_is_the_fox(self):
         path = os.path.join(self.tree.dev, "ttyS0")
@@ -176,15 +207,27 @@ class AutodetectTest(DevicesTestCase):
             self.autodetect([], wait=30, deadline=deadline)
         self.assertEqual(self.clock.now, 1012.0)
 
+    def test_lone_nano_is_autodetected(self):
+        nano = self.tree.port("ttyACM0", *NANO, link="usb-Arduino_NanoESP32_DC:DA:0C:21:5E:E8-if00")
+        other = self.tree.port("ttyUSB9", *OTHER)
+        device = self.autodetect([other, nano])
+        self.assertEqual(device.kind, devices.FOX)
+        self.assertEqual(device.port.vid, 0x2341)
+        self.assertEqual(device.path, os.path.join(self.tree.by_id, "usb-Arduino_NanoESP32_DC:DA:0C:21:5E:E8-if00"))
+        self.assertEqual(self.clock.now, 1000.0)
+
     def test_several_candidates_are_listed(self):
         a = self.tree.port("ttyUSB0", *CP210X, link="usb-Silicon_Labs_CP2104_0123ABCD-if00-port0")
         b = self.tree.port("ttyACM0", *ESP)
         c = self.tree.port("ttyUSB1", *FTDI)
         d = self.tree.port("ttyACM1", *CH9102)
+        e = self.tree.port("ttyACM2", *NANO)
         with self.assertRaises(RunError) as caught:
-            self.autodetect([a, b, c, d])
+            self.autodetect([a, b, c, d, e])
         text = str(caught.exception)
-        self.assertIn("4 ESP32 serial devices found", text)
+        self.assertIn("5 ESP32 serial devices found", text)
+        self.assertIn("2341:0070", text)
+        self.assertIn("Arduino Nano ESP32", text)
         self.assertIn(os.path.join(self.tree.by_id, "usb-Silicon_Labs_CP2104_0123ABCD-if00-port0"), text)
         self.assertIn("10C4:EA60", text)
         self.assertIn("CP2104 USB to UART Bridge Controller", text)
@@ -217,18 +260,20 @@ class AutodetectTest(DevicesTestCase):
         self.assertEqual(sniffer.kind, devices.SNIFFER)
         self.assertEqual(sniffer.path, nrf.device)
 
-    def test_sniffer_only_when_unambiguous(self):
+    def test_sniffer_picks_the_first_of_several(self):
         a = self.tree.port("ttyACM0", *NRF)
         b = self.tree.port("ttyACM1", *NRF)
-        self.assertIsNone(devices.autodetect_sniffer(devices.list_ports(self.comports(a, b))))
-        self.assertIsNone(devices.autodetect_sniffer(devices.list_ports(self.comports())))
+        sniffer = devices.autodetect_sniffer(devices.list_ports(self.comports(a, b)), self.tree.by_id)
+        self.assertEqual(sniffer.kind, devices.SNIFFER)
+        self.assertEqual(sniffer.path, a.device)
+        self.assertIsNone(devices.autodetect_sniffer(devices.list_ports(self.comports()), self.tree.by_id))
 
-    def test_hci_only_when_exactly_one_adapter(self):
+    def test_hci_picks_the_first_of_several(self):
         self.assertIsNone(devices.autodetect_hci(self.tree.bluetooth))
         self.tree.adapter("hci0")
         self.assertEqual(devices.autodetect_hci(self.tree.bluetooth).path, "hci0")
         self.tree.adapter("hci1")
-        self.assertIsNone(devices.autodetect_hci(self.tree.bluetooth))
+        self.assertEqual(devices.autodetect_hci(self.tree.bluetooth).path, "hci0")
         self.assertEqual(devices.hci_adapters(self.tree.bluetooth), ["hci0", "hci1"])
         self.assertEqual(devices.hci_adapters(os.path.join(self.tree.root, "missing")), [])
 

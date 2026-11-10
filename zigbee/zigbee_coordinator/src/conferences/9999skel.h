@@ -30,8 +30,9 @@
 // Seconds awake, at least 1. Keep it to a few minutes so the startup
 // checks and the LED run often
 #define TIME_TO_WAKE 300
-// Seconds asleep, 0 reboots at once
-#define TIME_TO_SLEEP 1
+// Seconds off the air, 0 reboots at once. The fox shortens its sleep by its
+// boot time so one cycle is exactly TIME_TO_WAKE + TIME_TO_SLEEP
+#define TIME_TO_SLEEP 0
 // Seconds between packets, 1-255 and less than TIME_TO_WAKE. Zigbee's default is 15
 #define PACKET_INTERVAL 1
 // dBm, -15 to 20
@@ -57,8 +58,9 @@
 // Seconds awake, at least 1. Keep it to a few minutes so the startup
 // checks and the LED run often
 #define TIME_TO_WAKE 300
-// Seconds asleep, 0 reboots at once
-#define TIME_TO_SLEEP 1
+// Seconds off the air, 0 reboots at once. The fox shortens its sleep by its
+// boot time so one cycle is exactly TIME_TO_WAKE + TIME_TO_SLEEP
+#define TIME_TO_SLEEP 0
 // Seconds between packets, 1-255 and less than TIME_TO_WAKE. Zigbee's default is 15
 #define PACKET_INTERVAL 15
 // dBm, -15 to 20

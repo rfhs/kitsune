@@ -9,6 +9,9 @@
 #define MINOR               88
 #define SIGNAL_POWER        0xc5
 #define MAC_ADDR            {0xF2, 0xca, 0x5c, 0x5b, 0x03, 0xcd}
+#define TIME_TO_WAKE        300
+#define TIME_TO_SLEEP       0
+#define TXPOWER             ESP_PWR_LVL_P9
 
 #elif defined(MEDIUM)
 #define DEVICE_NAME         "EctoGoggles"
@@ -17,6 +20,9 @@
 #define MINOR               88
 #define SIGNAL_POWER        0xc5
 #define MAC_ADDR            {0xF2, 0xDA, 0xAB, 0x99, 0x68, 0x3E}
+#define TIME_TO_WAKE        5
+#define TIME_TO_SLEEP       5
+#define TXPOWER             ESP_PWR_LVL_N0
 
 #elif defined(DIFFICULT)
 #define DEVICE_NAME         "PKEMeter"
@@ -25,5 +31,8 @@
 #define MINOR               88
 #define SIGNAL_POWER        0xc5
 #define MAC_ADDR            {0xF2, 0x39, 0xC7, 0xCE, 0xC5, 0xAA}
+#define TIME_TO_WAKE        10
+#define TIME_TO_SLEEP       30
+#define TXPOWER             ESP_PWR_LVL_N12
 
 #endif

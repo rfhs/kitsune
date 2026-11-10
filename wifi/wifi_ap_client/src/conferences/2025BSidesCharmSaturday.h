@@ -68,7 +68,7 @@
 // running no longer than a few minutes to force
 // checks to run and led to update
 #define TIME_TO_WAKE 300
-#define TIME_TO_SLEEP 1
+#define TIME_TO_SLEEP 0
 #define TXPOWER WIFI_POWER_17dBm
 #endif
 

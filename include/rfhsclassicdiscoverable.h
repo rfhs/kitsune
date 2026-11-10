@@ -1,9 +1,12 @@
 #include "BluetoothSerial.h"
 #include <rfhsbt.h>
 
-// This check seems wrong because it passes on hardware which doesn't support BT Classic
-#if !defined(CONFIG_BT_ENABLED) || !defined(CONFIG_BLUEDROID_ENABLED)
-#error Bluetooth is not enabled! Please run `make menuconfig` to and enable it
+// Only the original ESP32 has a BR/EDR controller, and only its core
+// defines CONFIG_BT_CLASSIC_ENABLED. CONFIG_BT_ENABLED and
+// CONFIG_BLUEDROID_ENABLED are set for the ESP32-S3 as well, so they do
+// not tell the chips apart.
+#ifndef CONFIG_BT_CLASSIC_ENABLED
+#error "Bluetooth Classic needs the original ESP32; this chip's core has no BR/EDR controller"
 #endif
 
 // Exactly one difficulty, so exactly one block of the conference header
@@ -21,29 +24,37 @@ static_assert(sizeof(NAME) - 1 >= 1 && sizeof(NAME) - 1 <= 32, "NAME must be 1-3
 // A general inquiry takes 10.24 seconds and the fox answers about 2 seconds
 // after it boots, so a shorter wake can end before an inquiry that started
 // as the fox woke has reached it. rfhssleeptimers.h checks the upper bound.
-#if !defined(TIME_TO_WAKE) || !defined(TIME_TO_SLEEP)
-#error "TIME_TO_WAKE and TIME_TO_SLEEP must be defined in the conference header, in seconds"
-#elif TIME_TO_WAKE < 15
+#if TIME_TO_WAKE < 15
 #error "TIME_TO_WAKE must be at least 15 seconds: a Bluetooth inquiry takes 10.24 seconds and the fox needs about 2 seconds after boot to answer one"
 #endif
 
+// The awake LED colour: deep blue for Bluetooth Classic.
+#define RFHS_AWAKE_COLOR 0x0000FF
+constexpr uint32_t rfhs_awake_color = RFHS_AWAKE_COLOR;
+
 BluetoothSerial SerialBT;
 
-void rfhssetbtclassicname() {
-  // String localName=String(), bool isMaster=false
-  SerialBT.begin(NAME, false); //Bluetooth device name
+// Sets the address, then starts the stack discoverable under NAME; the false
+// makes the fox wait for connections rather than initiate them.
+bool rfhsstartradio() {
+  if (!rfhsmacset(rfhssetbtmac())) {
+    return false;
+  }
+  return SerialBT.begin(NAME, false);
 }
 
-void rfhsstartclassicdiscoverable() {
-  rfhssetbtmac();
-  rfhssetbtclassicname();
-}
-
-// Prints the name and address hunters see and refuses to run when the
+// Prints the address and name hunters see and refuses to run when the
 // address differs from the conference header. Bluedroid in Arduino core
 // 2.x has no call that returns the Classic device name, so the configured
 // NAME is printed; the address is read back from the stack.
-bool rfhscheckclassicdiscoverable() {
+bool rfhscheckradio() {
+  if (!rfhscheckbtaddress(esp_bt_dev_get_address())) {
+    return false;
+  }
   Serial.println("Device name: " NAME);
-  return rfhscheckbtaddress(esp_bt_dev_get_address());
+  return true;
+}
+
+void rfhsstopradio() {
+  SerialBT.end();
 }

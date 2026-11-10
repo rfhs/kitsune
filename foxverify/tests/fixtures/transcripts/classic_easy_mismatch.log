@@ -11,11 +11,13 @@ entry 0x400805f0
 Initializing...
 ESP32 boot count: 0
 Sleep stats: 0s since cold boot, 0s since last wakeup
+Setting up Bluetooth Classic...
+MAC address set successfully
 Fox: classic_discoverable EASY
 Time to wake: 300s
 Time to sleep: 0s
-Device name: Demo Molly BTC Easy Fox
 Device address: F2:81:5A:C1:A3:28
 Requested address: F2:81:5A:C1:A3:26
 Device address != Requested address
+Fatal 2: readback mismatch
 PANIC

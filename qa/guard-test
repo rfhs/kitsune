@@ -3,7 +3,8 @@
 # kind of mistake a user can make, write it into a scratch copy of 9999demo.h,
 # build one environment, and require the build to fail with the guard's own
 # message. A guard that stops firing shows up here as "built anyway" or
-# "failed for another reason".
+# "failed for another reason". The demo is also built with the RFHS_TEST_FATAL
+# hook, which no platformio.ini sets, so that build cannot rot unnoticed.
 #
 # Usage: qa/guard-test            every case
 #        qa/guard-test <project>  the cases for one project
@@ -87,6 +88,20 @@ expect_pass() {
   fi
 }
 
+## expect_build <project> <env> <extra build flags>: the unmodified demo must
+## also build with these flags, which is how a build-time hook that no
+## platformio.ini sets is kept compiling. It follows an expect_pass of the
+## same environment, which installed the packages.
+expect_build() {
+  ln -snf conferences/9999demo.h "${1}/src/current_conf.h"
+  if build "${1}" "${2}" "${3}"; then
+    record ok "${1}" "${2}" "demo builds with ${3}"
+  else
+    record FAIL "${1}" "${2}" "demo does not build with ${3}"
+    explain
+  fi
+}
+
 ## expect_error <project> <env> <sed script> <text the compiler must print> [extra build flags]
 ## The sed script turns 9999demo.h into the broken conference.
 expect_error() {
@@ -113,6 +128,9 @@ first() {
 if [ -z "${want_project}" ] || [ "${want_project}" = bluetooth/classic_discoverable ]; then
   p=bluetooth/classic_discoverable; e=m5atom-easy
   expect_pass "${p}" "${e}"
+  ## The RFHS_TEST_FATAL hook in include/rfhsbanner.h is shared by every
+  ## project; the quickest environment proves it still compiles.
+  expect_build "${p}" "${e}" '-D RFHS_TEST_FATAL=2'
   expect_error "${p}" "${e}" "$(first NAME '""')"                                            'NAME must be 1-32 characters'
   expect_error "${p}" "${e}" "$(first NAME '"123456789012345678901234567890123"')"            'NAME must be 1-32 characters'
   expect_error "${p}" "${e}" "$(first MAC_ADDR '{0xF2, 0x01, 0x02, 0x03, 0x04}')"             'MAC_ADDR must be exactly 6 bytes'
@@ -142,13 +160,12 @@ if [ -z "${want_project}" ] || [ "${want_project}" = bluetooth/iBeacon ]; then
   expect_error "${p}" "${e}" "$(first SIGNAL_POWER -129)"                                       'SIGNAL_POWER must be -128 to 127'
   expect_error "${p}" "${e}" "$(first MAC_ADDR '{0x01, 0x01, 0x02, 0x03, 0x04, 0x05}')"        'bit 0 of the first byte (I/G) must be 0'
   expect_error "${p}" "${e}" "$(first MAC_ADDR '{0xF2, 0x01, 0x02, 0x9E, 0x8B, 0x00}')"        'Bluetooth inquiry access codes'
+  expect_error "${p}" "${e}" "$(first TIME_TO_WAKE 4)"                                          'TIME_TO_WAKE must be at least 5 seconds'
+  expect_error "${p}" "${e}" "$(first TXPOWER 7)"                                               'TXPOWER must be an ESP_PWR_LVL_* name'
+  ## ESP_PWR_LVL_N14 is an alias of ESP_PWR_LVL_N12 in the ESP32 core: a real
+  ## level name with the same number, which only the check on the text refuses.
+  expect_error "${p}" "${e}" "$(first TXPOWER ESP_PWR_LVL_N14)"                                 'TXPOWER must be one of ESP_PWR_LVL_N12'
   expect_error "${p}" "${e}" 's/^$//'                                                           'exactly one of -D EASY, -D MEDIUM or -D HARD' '-D MEDIUM'
-  ## The advertising window is hard-coded per difficulty in rfhsibeacon.h
-  ## and only a build flag can shorten it, so the guard is proved on a
-  ## sleeping (MEDIUM) environment with the demo header untouched.
-  e=m5atom-medium
-  expect_pass "${p}" "${e}"
-  expect_error "${p}" "${e}" 's/^$//'                                                           'ADVERTISING_DURATION must be at least 5 seconds when DEEP_SLEEP is defined' '-D ADVERTISING_DURATION=4'
 fi
 
 if [ -z "${want_project}" ] || [ "${want_project}" = wifi/wifi_ap_client ]; then

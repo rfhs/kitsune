@@ -1,6 +1,6 @@
 ESP-ROM:esp32s3-20210327
 Build:Mar 27 2021
-rst:0x1 (POWERON),boot:0x8 (SPI_FAST_FLASH_BOOT)
+rst:0x5 (DSLEEP),boot:0x8 (SPI_FAST_FLASH_BOOT)
 SPIWP:0xee
 mode:DIO, clock div:1
 load:0x3fce3808,len:0x44c
@@ -9,14 +9,19 @@ load:0x403cc700,len:0x2a38
 entry 0x403c98d4
 Initializing...
 ESP32 boot count: 2
-Sleep stats: 82s since cold boot, 41s since last wakeup
+Sleep stats: 81s since cold boot, 40s since last wakeup
+Last cycle: 40.0s, target 40s
+Setting up iBeacon...
+MAC address set successfully
 Fox: iBeacon HARD
+Time to wake: 10s
+Time to sleep: 30s
+Device address: F2:AC:87:05:0A:C7
 Device name: Demo 3Jane BLE Hard Fox
 Beacon UUID: DB6A0ED0-1DC3-4348-BD78-E997A0C082A3
 Major: 0x0005 (5)
 Minor: 0x0058 (88)
 Signal power: -59
-Device address: F2:AC:87:05:0A:C7
-Advertising power: -12 dBm (level 0)
-iBeacon advertising!
-entering deep sleep
+Tx power: ESP_PWR_LVL_N12 (-12 dBm)
+Awake and screaming
+Going to sleep

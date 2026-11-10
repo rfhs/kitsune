@@ -4,18 +4,20 @@ A positional DEVICE argument is a plain name and is classified by what it is:
 
 - ``/sys/class/net/<name>`` exists: a Wi-Fi interface.
 - ``hci[0-9]+``: a Bluetooth adapter.
-- a serial port whose USB id is ``1915:154A``: the nRF 802.15.4 sniffer.
+- a serial port whose USB id is ``1915:154A`` or ``1915:154B``: the nRF
+  802.15.4 sniffer.
 - any other serial port: the fox.
 
-When no fox is given, the serial ports with an Espressif, Silicon Labs CP210x,
-WCH or FTDI vendor id are the candidates. Exactly one is used. None means the
+When no fox is given, the serial ports with an Espressif, Arduino, Silicon
+Labs CP210x, WCH or FTDI vendor id are the candidates. Exactly one is used. None means the
 script waits up to ``--wait-for-fox`` seconds for one to appear, because a
 native USB board in deep sleep has no serial device, then gives up with "no
 ESP32 serial device found". Several are listed with path, VID:PID, product and
-serial number and the user is asked to name one. A sniffer is autodetected only
-when it is unambiguous: an nRF by USB id, ``hciN`` when there is exactly one
-adapter. A Wi-Fi interface is never guessed, because putting the wrong card
-into monitor mode takes the laptop offline.
+serial number and the user is asked to name one. A sniffer is autodetected by
+kind, taking the first when several of a kind are present since any one of a
+kind serves: an nRF by its USB id, an ``hciN`` adapter by name. A Wi-Fi
+interface is never guessed, because putting the wrong card into monitor mode
+takes the laptop offline.
 
 Serial devices are always referred to by their ``/dev/serial/by-id/`` path when
 one exists: a native USB board re-enumerates after deep sleep and its raw
@@ -38,12 +40,16 @@ HCI = "hci"
 SNIFFER = "sniffer"
 FOX = "fox"
 
-NRF_SNIFFER_ID = (0x1915, 0x154A)
+# Nordic's 802.15.4 sniffer firmware enumerates as 1915:154A up to the 0.7.x
+# releases and as 1915:154B from 0.8.0; both speak the same serial protocol.
+NRF_SNIFFER_IDS = {(0x1915, 0x154A), (0x1915, 0x154B)}
 # Vendor ids of the USB serial bridges and native USB stacks the foxes use:
-# Espressif (native USB, also the Arduino Nano ESP32 in TinyUSB mode), Silicon
-# Labs CP210x, WCH CH910x and FTDI.
+# Espressif (the USB-Serial-JTAG peripheral of the M5 AtomS3, StampS3 and Seeed
+# XIAO ESP32-C5), Arduino (the Nano ESP32's TinyUSB stack enumerates as
+# 2341:0070), Silicon Labs CP210x, WCH CH910x and FTDI.
 FOX_VENDOR_IDS = {
     0x303A: "Espressif",
+    0x2341: "Arduino",
     0x10C4: "Silicon Labs",
     0x1A86: "WCH",
     0x0403: "FTDI",
@@ -80,7 +86,7 @@ class Port(NamedTuple):
                                    self.serial_number or "no serial number")
 
     def is_sniffer(self) -> bool:
-        return (self.vid, self.pid) == NRF_SNIFFER_ID
+        return (self.vid, self.pid) in NRF_SNIFFER_IDS
 
     def is_fox_candidate(self) -> bool:
         return self.vid in FOX_VENDOR_IDS
@@ -192,9 +198,11 @@ def autodetect_fox(wait_seconds: float, deadline: Optional[Deadline] = None,
 
 
 def autodetect_sniffer(ports: Sequence[Port], by_id_dir: str = BY_ID_DIR) -> Optional[Device]:
-    """The nRF sniffer when exactly one is plugged in."""
+    """The nRF sniffer; the first by port path when several are plugged in,
+    since any one of them sniffs the same channel equally well. None when
+    none is plugged in."""
     sniffers = [port for port in ports if port.is_sniffer()]
-    if len(sniffers) != 1:
+    if not sniffers:
         return None
     return Device(SNIFFER, by_id_path(sniffers[0].device, by_id_dir), sniffers[0])
 
@@ -208,9 +216,10 @@ def hci_adapters(bluetooth_dir: str = BLUETOOTH_DIR) -> List[str]:
 
 
 def autodetect_hci(bluetooth_dir: str = BLUETOOTH_DIR) -> Optional[Device]:
-    """The Bluetooth adapter when exactly one exists."""
+    """The Bluetooth adapter; the first by name when several exist, since any
+    one scans the same. None when there is none."""
     adapters = hci_adapters(bluetooth_dir)
-    if len(adapters) != 1:
+    if not adapters:
         return None
     return Device(HCI, adapters[0], None)
 

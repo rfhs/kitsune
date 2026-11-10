@@ -215,6 +215,37 @@ class ScanTest(unittest.TestCase):
         seen = scan.result(report.Deadline(2))
         self.assertEqual(seen, {})
 
+    def test_every_packet_is_logged_with_its_rssi_and_time(self):
+        import time
+        times = iter([10.0, 11.0, 12.0, 13.0, 14.0])
+        scan = ble.BleScan("hci0", [self.FOX, self.OTHER_FOX], report.Deadline(5), remove_cached=False,
+                           clock=lambda: next(times))
+        scan.start()
+        time.sleep(0.2)
+        scan.set_target(self.FOX)
+        scan.result()
+        # The clock is read for candidate addresses only: the phone's packet
+        # takes no time, the other fox's takes 10.0, the fox's 11.0 and 12.0.
+        self.assertEqual(scan.take_heard(self.FOX), [ble.Heard(11.0, -50), ble.Heard(12.0, -50)])
+        self.assertEqual(scan.take_heard(self.FOX), [])
+        self.assertEqual(scan.take_heard(self.OTHER_FOX.lower())[0], ble.Heard(10.0, -50))
+        self.assertTrue(scan.complete(self.FOX))
+        self.assertFalse(scan.complete("00:11:22:33:44:55"))
+
+    def test_keep_scanning_runs_past_the_complete_target(self):
+        import time
+        scan = ble.BleScan("hci0", self.FOX, report.Deadline(5), remove_cached=False)
+        scan.keep_scanning = True
+        scan.set_target(self.FOX)
+        scan.start()
+        time.sleep(0.4)
+        self.assertTrue(scan.complete(self.FOX))
+        self.assertTrue(scan.is_alive())
+        scan.keep_scanning = False
+        seen = scan.result(report.Deadline(2))
+        self.assertFalse(scan.is_alive())
+        self.assertTrue(seen[self.FOX].complete())
+
 
 class RowsTest(unittest.TestCase):
     def setUp(self):

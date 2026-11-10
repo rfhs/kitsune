@@ -20,10 +20,11 @@ the conference headers and the report scripts have to agree exactly.
 ## Build and verify
 
 - A clean build is necessary, not sufficient. The serial readback checks
-  in the shared headers (`rfhscheckzigbee()` and friends) are the test a
-  tunable gets on the device: every value is read back from the stack
-  after it is applied and a mismatch halts the fox on the fatal LED. Keep
-  that pattern for anything you add.
+  in the shared headers (`rfhscheckradio()` in each radio header, built
+  from the helpers in `include/rfhsconfcheck.h`) are the test a tunable
+  gets on the device: every value is read back from the stack after it is
+  applied and a mismatch halts the fox on fatal code 2. Keep that pattern
+  for anything you add.
 - Say what you verified and how, and what you could not. Don't describe
   an untested path as working.
 - `pio` must be on PATH. The pioarduino platform needs Python 3.10 or

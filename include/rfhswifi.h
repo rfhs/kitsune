@@ -1,5 +1,6 @@
 #include <WiFi.h>
 #include <esp_wifi.h>
+#include <esp_system.h>
 #include <type_traits>
 #include <rfhsconfcheck.h>
 
@@ -33,9 +34,7 @@ static_assert(sizeof(PSK) - 1 >= 8 && sizeof(PSK) - 1 <= 63, "PSK must be 8-63 c
 #error "MAC_ADDR must be defined in the conference header, 6 bytes"
 #endif
 constexpr uint8_t rfhs_wifi_mac[] = MAC_ADDR;
-static_assert(sizeof(rfhs_wifi_mac) == 6, "MAC_ADDR must be exactly 6 bytes");
-static_assert((rfhs_wifi_mac[0] & 0x01) == 0, "MAC_ADDR: bit 0 of the first byte (I/G) must be 0, use an even first byte");
-static_assert(!rfhs_all_bytes(rfhs_wifi_mac, 6, 0x00), "MAC_ADDR must not be all zeros");
+RFHS_CHECK_ADDRESS(rfhs_wifi_mac, 6);
 
 // TXPOWER is one of the WIFI_POWER_* names. Only the values every supported
 // core has are allowed; the newer core adds 20, 20.5 and 21 dBm names that
@@ -49,10 +48,6 @@ static_assert(TXPOWER == WIFI_POWER_19_5dBm || TXPOWER == WIFI_POWER_19dBm || TX
            || TXPOWER == WIFI_POWER_11dBm || TXPOWER == WIFI_POWER_8_5dBm || TXPOWER == WIFI_POWER_7dBm
            || TXPOWER == WIFI_POWER_5dBm || TXPOWER == WIFI_POWER_2dBm || TXPOWER == WIFI_POWER_MINUS_1dBm,
     "TXPOWER must be between WIFI_POWER_19_5dBm and WIFI_POWER_MINUS_1dBm");
-
-#if !defined(TIME_TO_WAKE) || !defined(TIME_TO_SLEEP)
-#error "TIME_TO_WAKE and TIME_TO_SLEEP must be defined in the conference header, in seconds"
-#endif
 
 #if defined(AP)
 // CHANNEL: 0 picks a random channel every wake. The firmware sets country
@@ -97,56 +92,146 @@ static_assert(TXPOWER == WIFI_POWER_19_5dBm || TXPOWER == WIFI_POWER_19dBm || TX
 #error "CHANNEL, SSID_HIDDEN and MAX_CLIENTS only apply to AP mode, remove them from the CLIENT block"
 #endif
 
-// Prints the configuration the stack is running with and refuses to run
-// when it differs from the conference header. The values come from
-// esp_wifi_get_config(), the call WiFi.softAPSSID() reads the SSID through:
-// for the AP the PSK, the hidden flag and the client limit (main.cpp checks
-// the AP's SSID and channel), for the client the SSID and the PSK. The SSID
-// field is 32 bytes without a terminator when the name is 32 characters
-// long, so it is copied out before it is printed. TXPOWER is printed as
-// configured: the PHY maps the requested level to the nearest step it
-// supports, so the controller's own value can differ on a working fox.
-bool rfhscheckwificonfig() {
-  wifi_config_t conf;
+// The awake LED colour: green for an access point, orange for a client.
 #if defined(AP)
+#define RFHS_AWAKE_COLOR 0x00FF00
+#else
+#define RFHS_AWAKE_COLOR 0xFF8C00
+#endif
+constexpr uint32_t rfhs_awake_color = RFHS_AWAKE_COLOR;
+
+#if defined(AP)
+// The channel the access point was started on, for the readback.
+static int set_channel;
+#endif
+
+// Starts the driver, sets the address, applies the country, picks the
+// channel and starts the access point or the client, then applies TXPOWER.
+// WiFi.mode() starts the driver before the address is set and
+// esp_wifi_init() runs once more after it.
+bool rfhsstartradio() {
+  wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
+#if defined(AP)
+  WiFi.mode(WIFI_AP);
+  wifi_interface_t interface = WIFI_IF_AP;
+#elif defined(CLIENT)
+  WiFi.mode(WIFI_STA);
+  wifi_interface_t interface = WIFI_IF_STA;
+#endif
+  esp_wifi_init(&cfg);
+
+  uint8_t mac_addr[6] = MAC_ADDR;
+  if (!rfhsmacset(esp_wifi_set_mac(interface, mac_addr) == ESP_OK)) {
+    return false;
+  }
+
+  // Keeping the configuration in RAM has to come after the address set;
+  // before it, the address set fails on the ESP32-C5.
+  esp_wifi_set_storage(WIFI_STORAGE_RAM);
+
+  // The regulatory domain is set before the network starts, as the two
+  // letter ISO code; the true has the driver enforce the country's rules.
+  esp_err_t err = esp_wifi_set_country_code("US", true);
+  if (err != ESP_OK) {
+    Serial.printf("Error setting country code: %s\r\n", esp_err_to_name(err));
+    return false;
+  }
+
+#if defined(AP)
+#if CHANNEL > 0
+  set_channel = CHANNEL;
+#else
+#if defined(FIVEEASY) || defined(FIVEHARD)
+  // The US 5 GHz channels that need no radar detection.
+  static constexpr uint8_t CHANNEL_LIST_5G[] = {
+    36, 40, 44, 48, 149, 153, 157, 161, 165
+  };
+  constexpr size_t total_elements = sizeof(CHANNEL_LIST_5G) / sizeof(CHANNEL_LIST_5G[0]);
+  size_t random_index = esp_random() % total_elements;
+  set_channel = CHANNEL_LIST_5G[random_index];
+#else
+  // Only the 2.4 GHz channels every country allows, 1-11.
+  set_channel = esp_random() % 11;
+  set_channel++;
+#endif
+#endif
+  // The channel goes out before the radio starts, so a sniffer that reads
+  // it over serial can be on the channel for the first beacon. The flush
+  // moves the line out of the UART or the USB FIFO before the start. On a
+  // native USB board the host may not have the port open this early, so the
+  // Operating channel readback after the start remains the record.
+  Serial.printf("Starting on channel %d\r\n", set_channel);
+  Serial.flush();
+  WiFi.mode(WIFI_AP);
+  if (!WiFi.softAP(FSSID, PSK, set_channel, SSID_HIDDEN, MAX_CLIENTS)) {
+    return false;
+  }
+  // The access point needs a moment before anything reads it back.
+  delay(100);
+#elif defined(CLIENT)
+  WiFi.mode(WIFI_STA);
+  if (WiFi.begin(FSSID, PSK) == WL_CONNECT_FAILED) {
+    return false;
+  }
+  // The client needs a moment before anything reads it back.
+  delay(100);
+#endif
+  bool power_set = WiFi.setTxPower(TXPOWER);
+  Serial.printf("Set power status: %s\r\n", power_set ? "ok" : "failed");
+  return power_set;
+}
+
+// Prints the configuration the stack is running with and refuses to run
+// when it differs from the conference header. The address comes from
+// esp_wifi_get_mac() and the channel from the driver; the SSID, the PSK and,
+// for the AP, the hidden flag and the client limit come from
+// esp_wifi_get_config(). The SSID field is 32 bytes without a terminator
+// when the name is 32 characters long, so it is copied out before it is
+// printed. TXPOWER is printed as configured: WiFi.getTxPower() returns the
+// PHY's own maximum, which the driver documents as a step below several of
+// the WIFI_POWER_* values (68 reads back as 66, 78 as 72), so a readback
+// compared with the name would halt a working fox. A refused set is caught
+// in rfhsstartradio() instead.
+bool rfhscheckradio() {
+  wifi_config_t conf;
+  uint8_t mac[6];
+#if defined(AP)
+  esp_wifi_get_mac(WIFI_IF_AP, mac);
   esp_err_t err = esp_wifi_get_config(WIFI_IF_AP, &conf);
+  const uint8_t *ssid_field = conf.ap.ssid;
   const char *psk = (const char *)conf.ap.password;
 #elif defined(CLIENT)
+  esp_wifi_get_mac(WIFI_IF_STA, mac);
   esp_err_t err = esp_wifi_get_config(WIFI_IF_STA, &conf);
+  const uint8_t *ssid_field = conf.sta.ssid;
   const char *psk = (const char *)conf.sta.password;
 #endif
+  if (!rfhscheckaddress(mac, rfhs_wifi_mac, sizeof(rfhs_wifi_mac), false)) {
+    return false;
+  }
   if (err != ESP_OK) {
     Serial.printf("Error reading the Wi-Fi configuration: %s\r\n", esp_err_to_name(err));
     return false;
   }
-#if defined(CLIENT)
-  char ssid[sizeof(conf.sta.ssid) + 1];
-  memcpy(ssid, conf.sta.ssid, sizeof(conf.sta.ssid));
-  ssid[sizeof(conf.sta.ssid)] = '\0';
-  Serial.printf("Operating SSID: %s\r\n", ssid);
-  if (strcmp(ssid, FSSID) != 0) {
-    Serial.println("Requested SSID: " FSSID);
-    Serial.println("Operating SSID != Requested SSID");
+  char ssid[sizeof(conf.ap.ssid) + 1];
+  memcpy(ssid, ssid_field, sizeof(conf.ap.ssid));
+  ssid[sizeof(conf.ap.ssid)] = '\0';
+#if defined(AP)
+  if (!rfhscheckint("Operating channel", "channel", WiFi.channel(), set_channel, "")) {
     return false;
   }
 #endif
-  Serial.printf("Operating PSK: %s\r\n", psk);
-  if (strcmp(psk, PSK) != 0) {
-    Serial.println("Requested PSK: " PSK);
-    Serial.println("Operating PSK != Requested PSK");
+  if (!rfhscheckstr("Operating SSID", "SSID", ssid, FSSID, false)) {
+    return false;
+  }
+  if (!rfhscheckstr("Operating PSK", "PSK", psk, PSK, false)) {
     return false;
   }
 #if defined(AP)
-  Serial.printf("Hidden SSID: %d\r\n", conf.ap.ssid_hidden);
-  if (conf.ap.ssid_hidden != SSID_HIDDEN) {
-    Serial.printf("Requested hidden SSID: %d\r\n", SSID_HIDDEN);
-    Serial.println("Hidden SSID != Requested hidden SSID");
+  if (!rfhscheckint("Hidden SSID", "hidden SSID", conf.ap.ssid_hidden, SSID_HIDDEN, "")) {
     return false;
   }
-  Serial.printf("Max clients: %d\r\n", conf.ap.max_connection);
-  if (conf.ap.max_connection != MAX_CLIENTS) {
-    Serial.printf("Requested max clients: %d\r\n", MAX_CLIENTS);
-    Serial.println("Max clients != Requested max clients");
+  if (!rfhscheckint("Max clients", "max clients", conf.ap.max_connection, MAX_CLIENTS, "")) {
     return false;
   }
 #endif
@@ -154,8 +239,9 @@ bool rfhscheckwificonfig() {
   return true;
 }
 
-void disableWiFi() {
- // fixes a noisy log error when monitoring
+// Takes the network down and the driver with it, which also silences a log
+// error the driver prints otherwise.
+void rfhsstopradio() {
 #if defined(AP)
   WiFi.softAPdisconnect(true);
 #elif defined(CLIENT)

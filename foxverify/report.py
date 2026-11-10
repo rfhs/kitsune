@@ -5,10 +5,18 @@ and verdict, then one summary line. The verdicts are:
 
 - ``pass``: header, serial and air agree.
 - ``FAIL``: any disagreement; all three values are in the row.
-- ``serial``: header and serial agree and the value is not observable on air
-  by design (sleep timers, the PSK text, MAX_CLIENTS, TXPOWER, EXT_PAN_ID).
+- ``serial only``: header and serial agree and the value is not confirmed on
+  the air (the PSK text, MAX_CLIENTS, TXPOWER, EXT_PAN_ID, and the sleep
+  timers when the run's budget does not cover one cycle); the verdict column
+  may carry the reason, and the air column may carry what was heard without
+  it deciding the verdict, such as the median RSSI under TXPOWER.
 - ``unverified``: observable on air but not seen within the budget; the
   verdict column carries the reason.
+
+A line added with ``line`` is printed between the table and the notes, which
+is where the first wake figures go. A line given to ``suggest`` is
+printed after the summary, which is where a run whose budget was too short
+for the exact cycle time names the ``--timeout`` that measures it.
 
 The exit code is 0 when nothing FAILed, 1 when any row FAILed and 2 when the
 run could not happen at all (no fox, not a fox, a missing tool or privilege);
@@ -29,7 +37,7 @@ EXIT_NO_RUN = 2
 
 PASS = "pass"
 FAIL = "FAIL"
-SERIAL = "serial"
+SERIAL = "serial only"
 UNVERIFIED = "unverified"
 
 COLUMNS = ("value", "header", "serial", "air", "verdict")
@@ -102,7 +110,9 @@ class Report:
         self.out = out
         self.verbose = verbose
         self.rows: List[Row] = []
+        self.lines: List[str] = []
         self.notes: List[str] = []
+        self.suggestion: Optional[str] = None
 
     def add(self, value: str, header: Optional[object], serial: Optional[object],
             air: Optional[object], verdict: str, reason: str = "") -> Row:
@@ -120,11 +130,12 @@ class Report:
         whether they match, which is how a random CHANNEL or PAN ID accepts
         whatever the fox picked. ``air`` is compared against what the fox
         printed, or against the header when the fox printed nothing for this
-        value. ``on_air=False`` marks a value that cannot be observed and
-        gives ``serial`` instead of ``unverified``; ``air=None`` with
-        ``on_air=True`` means the value was not seen and ``reason`` says why.
-        A FAIL row carries no reason, its values speak, except that a header
-        value the fox did not print says ``NOT_PRINTED``.
+        value. ``on_air=False`` marks a value the air does not decide and
+        gives ``serial only`` instead of ``unverified``, with ``reason`` and
+        ``air`` shown as given; ``air=None`` with ``on_air=True`` means the
+        value was not seen and ``reason`` says why. A FAIL row carries no
+        reason, its values speak, except that a header value the fox did not
+        print says ``NOT_PRINTED``.
         """
         if agree is None:
             agree = header is not None and serial is not None and _text(header) == _text(serial)
@@ -132,7 +143,7 @@ class Report:
             missing = serial is None and header is not None
             return self.add(value, header, serial, air, FAIL, NOT_PRINTED if missing else "")
         if not on_air:
-            return self.add(value, header, serial, None, SERIAL, reason)
+            return self.add(value, header, serial, air, SERIAL, reason)
         if air is None:
             return self.add(value, header, serial, None, UNVERIFIED, reason or "not seen")
         expected = serial if serial is not None else header
@@ -140,9 +151,17 @@ class Report:
             return self.add(value, header, serial, air, FAIL, "")
         return self.add(value, header, serial, air, PASS, "")
 
+    def line(self, text: str) -> None:
+        """A plain line printed between the table and the notes."""
+        self.lines.append(text)
+
     def note(self, text: str) -> None:
-        """A line printed between the table and the summary."""
+        """A line printed between the table and the summary, marked ``note:``."""
         self.notes.append(text)
+
+    def suggest(self, text: Optional[str]) -> None:
+        """The one line printed after the summary; None prints nothing."""
+        self.suggestion = text
 
     def say(self, text: str) -> None:
         """Progress the user always sees."""
@@ -176,20 +195,24 @@ class Report:
     def summary(self) -> str:
         """One line: the overall verdict, the counts and the time used."""
         word = FAIL if self.failed() else PASS
-        text = "%s: %d pass, %d FAIL, %d serial, %d unverified" % (
-            word, self.count(PASS), self.count(FAIL), self.count(SERIAL), self.count(UNVERIFIED))
+        text = "%s: %d pass, %d FAIL, %d %s, %d unverified" % (
+            word, self.count(PASS), self.count(FAIL), self.count(SERIAL), SERIAL, self.count(UNVERIFIED))
         if self.deadline is not None:
             text += ", %.1f s of %.0f s" % (self.deadline.elapsed(), self.deadline.seconds)
         return text
 
     def render(self) -> str:
         parts = [self.table()]
+        parts.extend(self.lines)
         parts.extend("note: " + note for note in self.notes)
         parts.append(self.summary())
+        if self.suggestion is not None:
+            parts.append(self.suggestion)
         return "\n".join(parts) + "\n"
 
     def emit(self) -> int:
-        """Print the table, the notes and the summary; return the exit code."""
+        """Print the table, the notes, the summary and the suggestion; return
+        the exit code."""
         self.out.write(self.render())
         self.out.flush()
         return self.exit_code()

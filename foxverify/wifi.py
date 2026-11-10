@@ -7,18 +7,29 @@ laptop's card in monitor mode. ``ip`` and ``iw`` do the switching; both need
 root or CAP_NET_ADMIN, which ``privileges`` checks before anything changes.
 
 AP fox: one beacon from the fox's BSSID, caught with tshark on the fox's
-channel. The channel is the header's ``CHANNEL``, or the one the fox printed on
-serial when the header says 0 (random), so the serial readback comes first and
-the card is tuned after it. A beacon gives the BSSID, the SSID (zero length
-when ``SSID_HIDDEN`` is 1, in which case the name is only checked on serial),
-the channel both as the DS Parameter Set or HT Operation element claims it and
-as the radiotap frequency the frame was received on, and the RSN element,
-which must say WPA2-PSK with CCMP because the fox always has a ``PSK``.
+channel. The card is tuned and tshark started the moment the serial port
+names the channel (``ApCapture``): on the fox's ``Starting on channel`` line,
+printed before its radio starts, when the host caught it, so the sniffer is on
+the channel for the first beacon; otherwise after the readback, from the
+header's ``CHANNEL`` or the ``Operating channel`` the fox printed when the
+header says 0 (random). A capture started before the banner is filtered to
+every MAC_ADDR of the header, since the block is not known yet; the beacons
+are then read once the readback is in, with the timestamps tshark gave them.
+A beacon gives the BSSID, the SSID (zero length when ``SSID_HIDDEN`` is 1, in
+which case the name is only checked on serial), the channel both as the DS
+Parameter Set or HT Operation element claims it and as the radiotap frequency
+the frame was received on, and the RSN element, which must say WPA2-PSK with
+CCMP because the fox always has a ``PSK``.
 
 Client fox: probe requests from the fox's MAC carrying ``FSSID``. The station
 sends one on every 2.4 GHz channel each time it scans for the network, which
 takes about a second, so the card dwells on each channel at least that long:
 the header's ``CHANNEL`` when it has one, otherwise channels 1-11 in turn.
+
+Both captures feed every frame from the fox, with its ``radiotap.dbm_antsignal``
+RSSI, into the run's ``cycle.Cycle`` and go on through the fox's sleeps when
+the cycle is being measured, retuning a random-channel AP fox's card to the
+channel each later wake prints on serial.
 
 tshark prints ``wlan.ssid`` as text on most builds and as hex bytes on some, so
 an SSID cell is compared both ways. MACs are compared upper case.
@@ -34,6 +45,7 @@ from typing import Callable, Iterator, List, NamedTuple, Optional, Sequence
 
 from . import tshark
 from .conf import Block
+from .cycle import Cycle, Heard, listen
 from .report import Deadline, FAIL, PASS, Report, RunError, UNVERIFIED
 from .serial_fox import Readback
 
@@ -47,17 +59,22 @@ CIPHER_CCMP = 4
 WPA2_PSK_CCMP = "WPA2-PSK/CCMP"
 # Channels a 2.4 GHz client fox is listened for when the header has none.
 CLIENT_CHANNELS = tuple(range(1, 12))
-# Seconds the card stays on one channel while listening for a client's probes:
-# longer than one scan of the station across all channels.
-PROBE_DWELL = 3.0
+# Rough seconds an ESP32 client takes to probe every 2.4 GHz channel once while
+# it scans for its network. An estimate, to tell the user what to expect, not a
+# measured value.
+PROBE_SWEEP_SECONDS = 1.0
+# Seconds the card stays on one channel while listening for a client's probes.
+# 200 ms is what Kismet and other scanners hop at, so the card covers the band
+# the way a hunter's would rather than dwelling on one channel.
+PROBE_DWELL = 0.2
 # Seconds between checks of the tshark output while hopping.
-HOP_POLL = 0.25
+HOP_POLL = 0.2
 
 AP_FIELDS = ("frame.time_epoch", "wlan.fc.type_subtype", "wlan.bssid", "wlan.sa", "wlan.ssid",
              "wlan.ds.current_channel", "wlan.ht.info.primarychannel", "radiotap.channel.freq",
-             "wlan.rsn.akms.type", "wlan.rsn.pcs.type")
+             "wlan.rsn.akms.type", "wlan.rsn.pcs.type", "radiotap.dbm_antsignal")
 CLIENT_FIELDS = ("frame.time_epoch", "wlan.fc.type_subtype", "wlan.sa", "wlan.ssid",
-                 "radiotap.channel.freq")
+                 "radiotap.channel.freq", "radiotap.dbm_antsignal")
 
 
 def default_run(argv: Sequence[str]) -> subprocess.CompletedProcess:
@@ -235,6 +252,11 @@ class Beacon(NamedTuple):
     frequency: Optional[int]
     akms: List[int]
     ciphers: List[int]
+    rssi: Optional[int]
+
+    def heard(self) -> Optional[Heard]:
+        """The frame as the cycle records it, None without a timestamp."""
+        return None if self.time is None else Heard(self.time, self.rssi)
 
     def claimed_channel(self) -> Optional[int]:
         """The channel the AP says it is on: the DS Parameter Set, or the HT
@@ -287,7 +309,14 @@ def parse_beacon(record: tshark.Record) -> Beacon:
         tshark.dec_int(record.get("radiotap.channel.freq")),
         _ints(record, "wlan.rsn.akms.type"),
         _ints(record, "wlan.rsn.pcs.type"),
+        rssi(record),
     )
+
+
+def rssi(record: tshark.Record) -> Optional[int]:
+    """The frame's ``radiotap.dbm_antsignal``: the first antenna's value when
+    the card reports several."""
+    return tshark.dec_int(record.first("radiotap.dbm_antsignal"))
 
 
 def is_beacon_from(record: tshark.Record, bssid: str) -> bool:
@@ -295,8 +324,11 @@ def is_beacon_from(record: tshark.Record, bssid: str) -> bool:
             and norm_mac(record.get("wlan.bssid")) == norm_mac(bssid))
 
 
-def beacon_filter(bssid: str) -> str:
-    return "wlan.fc.type_subtype == 0x0008 && wlan.bssid == %s" % bssid.lower()
+def beacon_filter(*bssids: str) -> str:
+    """The tshark display filter for beacons from any of ``bssids``."""
+    clauses = ["wlan.bssid == %s" % bssid.lower() for bssid in bssids]
+    source = clauses[0] if len(clauses) == 1 else "(%s)" % " || ".join(clauses)
+    return "wlan.fc.type_subtype == 0x0008 && " + source
 
 
 def probe_filter(mac: str) -> str:
@@ -320,22 +352,88 @@ def probe_channels(block: Block) -> List[int]:
 
 
 def wait_for_beacon(reader: tshark.FieldReader, bssid: str, deadline: Deadline,
-                    debug: Callable[[str], None] = lambda text: None) -> Optional[Beacon]:
-    record = tshark.read_until(reader, deadline, lambda r: is_beacon_from(r, bssid), debug)
-    return None if record is None else parse_beacon(record)
+                    debug: Callable[[str], None] = lambda text: None, cycle: Optional[Cycle] = None,
+                    follower=None, retune: Optional[Callable[[int], None]] = None) -> Optional[Beacon]:
+    """The first beacon from ``bssid`` before the deadline, or None. Every
+    beacon from it is fed to ``cycle``, and with a cycle being measured the
+    read goes on through the fox's sleeps until the wake the cycle's tier
+    wants is heard; ``retune`` moves the card when ``follower`` reads a later
+    wake's channel."""
+    first: List[Beacon] = []
+
+    def read(timeout: float) -> List[Heard]:
+        record = reader.read(timeout)
+        if record is None:
+            if reader.eof:
+                raise RunError(reader.error())
+            return []
+        debug("tshark: " + "\t".join(record.as_dict().values()))
+        if not is_beacon_from(record, bssid):
+            return []
+        beacon = parse_beacon(record)
+        if not first:
+            first.append(beacon)
+        heard = beacon.heard()
+        return [heard] if heard is not None else []
+
+    listen(cycle, deadline, read, lambda: bool(first), follower, retune, debug)
+    return first[0] if first else None
+
+
+class ApCapture:
+    """A running capture of beacons on one channel of a monitor mode
+    interface, started the moment the fox names its channel and read later.
+
+    Opening it tunes ``interface`` to ``channel`` and starts tshark filtered
+    to beacons from any of ``bssids``, every MAC_ADDR of the header when the
+    banner has not yet chosen the block; tshark keeps what it hears until
+    ``wait`` reads it, with the frames' own timestamps, so a beacon sent
+    while the readback was still being read is not lost. ``retune`` moves
+    the card for a later wake of a random-channel fox and ``close`` stops
+    tshark. The interface is already in monitor mode (``monitor_mode``).
+    """
+
+    def __init__(self, interface: str, bssids: Sequence[str], channel: int, tshark_path: str,
+                 run: Callable = default_run, popen: Callable = subprocess.Popen,
+                 debug: Callable[[str], None] = lambda text: None):
+        self.interface = interface
+        self.channel = channel
+        self.run = run
+        self.debug = debug
+        set_channel(interface, channel, run)
+        argv = tshark.live_command(tshark_path, interface, AP_FIELDS, beacon_filter(*bssids))
+        debug("running: " + " ".join(argv))
+        self.reader = tshark.FieldReader(argv, AP_FIELDS, popen).start()
+
+    def retune(self, channel: int) -> None:
+        set_channel(self.interface, channel, self.run)
+
+    def wait(self, bssid: str, deadline: Deadline, cycle: Optional[Cycle] = None, follower=None,
+             random_channel: bool = False) -> Optional[Beacon]:
+        """The first beacon from ``bssid`` before the deadline, or None,
+        feeding ``cycle`` as ``wait_for_beacon`` says. With ``random_channel``
+        the card follows each later wake's channel from the serial port."""
+        return wait_for_beacon(self.reader, bssid, deadline, self.debug, cycle, follower,
+                               self.retune if random_channel else None)
+
+    def close(self) -> None:
+        self.reader.stop()
 
 
 def observe_ap(interface: str, bssid: str, channel: int, deadline: Deadline, tshark_path: str,
                run: Callable = default_run, popen: Callable = subprocess.Popen,
-               debug: Callable[[str], None] = lambda text: None) -> Optional[Beacon]:
+               debug: Callable[[str], None] = lambda text: None, cycle: Optional[Cycle] = None,
+               follower=None, random_channel: bool = False) -> Optional[Beacon]:
     """Tune the monitor interface to ``channel`` and return the first beacon
-    from ``bssid`` before the deadline, or None. The interface is already in
+    from ``bssid`` before the deadline, or None, feeding ``cycle`` as
+    ``wait_for_beacon`` says. With ``random_channel`` the card follows each
+    later wake's channel from the serial port. The interface is already in
     monitor mode (``monitor_mode``)."""
-    set_channel(interface, channel, run)
-    argv = tshark.live_command(tshark_path, interface, AP_FIELDS, beacon_filter(bssid))
-    debug("running: " + " ".join(argv))
-    with tshark.FieldReader(argv, AP_FIELDS, popen) as reader:
-        return wait_for_beacon(reader, bssid, deadline, debug)
+    capture = ApCapture(interface, [bssid], channel, tshark_path, run, popen, debug)
+    try:
+        return capture.wait(bssid, deadline, cycle, follower, random_channel)
+    finally:
+        capture.close()
 
 
 class Probes(NamedTuple):
@@ -367,43 +465,40 @@ class Probes(NamedTuple):
 def collect_probes(reader: tshark.FieldReader, mac: str, ssid: str, deadline: Deadline,
                    channels: Sequence[int], tune: Callable[[int], None],
                    dwell: float = PROBE_DWELL, clock: Callable[[], float] = time.monotonic,
-                   debug: Callable[[str], None] = lambda text: None) -> Probes:
+                   debug: Callable[[str], None] = lambda text: None, cycle: Optional[Cycle] = None,
+                   follower=None) -> Probes:
     """Read probe requests from ``mac`` until one carries ``ssid`` or the
     deadline passes, moving the card through ``channels`` every ``dwell``
-    seconds. A single channel is never changed."""
+    seconds. A single channel is never changed. Every probe from the fox is
+    fed to ``cycle``; with a cycle being measured the read goes on through
+    the sleep, still hopping, since the station probes on every channel."""
     want = norm_mac(mac)
-    seen_mac: Optional[str] = None
+    state = {"mac": None, "count": 0, "first_time": None, "carried": False, "index": 0,
+             "next_hop": clock() + dwell}
     ssids: List[Optional[str]] = []
     seen_channels: List[int] = []
-    count = 0
-    first_time: Optional[float] = None
-    index = 0
     tune(channels[0])
-    next_hop = clock() + dwell
-    while True:
-        remaining = deadline.remaining()
-        if remaining <= 0:
-            break
-        timeout = remaining
+
+    def read(timeout: float) -> List[Heard]:
         if len(channels) > 1:
-            timeout = min(remaining, max(0.0, next_hop - clock()), HOP_POLL)
+            timeout = min(timeout, max(0.0, state["next_hop"] - clock()), HOP_POLL)
         record = reader.read(timeout)
         now = clock()
-        if len(channels) > 1 and now >= next_hop:
-            index = (index + 1) % len(channels)
-            tune(channels[index])
-            next_hop = now + dwell
+        if len(channels) > 1 and now >= state["next_hop"]:
+            state["index"] = (state["index"] + 1) % len(channels)
+            tune(channels[state["index"]])
+            state["next_hop"] = now + dwell
         if record is None:
             if reader.eof:
                 raise RunError(reader.error())
-            continue
+            return []
         if tshark.hex_int(record.first("wlan.fc.type_subtype")) != PROBE_REQUEST:
-            continue
+            return []
         source = norm_mac(record.get("wlan.sa"))
         if source != want:
-            continue
-        seen_mac = source
-        count += 1
+            return []
+        state["mac"] = source
+        state["count"] += 1
         cell = record.get("wlan.ssid")
         debug("probe request from %s for %r" % (want, cell))
         ssids.append(cell)
@@ -411,20 +506,27 @@ def collect_probes(reader: tshark.FieldReader, mac: str, ssid: str, deadline: De
         if channel is not None and channel not in seen_channels:
             seen_channels.append(channel)
         time_text = record.first("frame.time_epoch")
-        if first_time is None and time_text:
-            first_time = float(time_text)
+        if not time_text:
+            return []
+        when = float(time_text)
+        if state["first_time"] is None:
+            state["first_time"] = when
         if ssid_matches(cell, ssid):
-            break
-    return Probes(seen_mac, count, ssids, seen_channels, first_time)
+            state["carried"] = True
+        return [Heard(when, rssi(record))]
+
+    listen(cycle, deadline, read, lambda: state["carried"], follower, debug=debug)
+    return Probes(state["mac"], state["count"], ssids, seen_channels, state["first_time"])
 
 
 def observe_client(interface: str, mac: str, ssid: str, channels: Sequence[int], deadline: Deadline,
                    tshark_path: str, run: Callable = default_run, popen: Callable = subprocess.Popen,
                    dwell: float = PROBE_DWELL,
-                   debug: Callable[[str], None] = lambda text: None) -> Probes:
+                   debug: Callable[[str], None] = lambda text: None, cycle: Optional[Cycle] = None,
+                   follower=None) -> Probes:
     """Listen for the client fox's probe requests on ``channels`` until one
-    carries ``ssid`` or the deadline passes. The interface is already in
-    monitor mode."""
+    carries ``ssid`` or the deadline passes, feeding ``cycle`` as
+    ``collect_probes`` says. The interface is already in monitor mode."""
     argv = tshark.live_command(tshark_path, interface, CLIENT_FIELDS, probe_filter(mac))
     debug("running: " + " ".join(argv))
 
@@ -433,7 +535,8 @@ def observe_client(interface: str, mac: str, ssid: str, channels: Sequence[int],
         set_channel(interface, channel, run)
 
     with tshark.FieldReader(argv, CLIENT_FIELDS, popen) as reader:
-        return collect_probes(reader, mac, ssid, deadline, list(channels), tune, dwell, debug=debug)
+        return collect_probes(reader, mac, ssid, deadline, list(channels), tune, dwell, debug=debug,
+                              cycle=cycle, follower=follower)
 
 
 def _channel_header(block: Block) -> Optional[object]:
@@ -451,16 +554,22 @@ def ap_rows(report: Report, block: Block, readback: Readback, beacon: Optional[B
     and ``reason`` says why; the serial-only values (PSK text, MAX_CLIENTS,
     the timers, TXPOWER) are the caller's rows."""
     header_mac = block.mac("MAC_ADDR")
-    serial_mac = readback.upper("mac")
+    serial_mac = readback.upper("address")
     report.check("MAC_ADDR", header_mac, serial_mac, beacon.bssid if beacon else None,
                  reason=reason)
 
     channel_header = _channel_header(block)
     serial_channel = readback.integer("channel")
-    report.check("CHANNEL", channel_header, serial_channel,
-                 beacon.channel_text() if beacon else None,
-                 agree=(serial_channel is not None and channel_header == "random") or None,
-                 reason=reason)
+    air_channel = beacon.channel_text() if beacon else None
+    mismatch = readback.channel_mismatch()
+    if mismatch is not None:
+        # The fox named one channel before its radio started and read back
+        # another; both are shown.
+        report.add("CHANNEL", channel_header, mismatch, air_channel, FAIL)
+    else:
+        report.check("CHANNEL", channel_header, serial_channel, air_channel,
+                     agree=(serial_channel is not None and channel_header == "random") or None,
+                     reason=reason)
 
     ssid = block.string("FSSID")
     hidden = bool(block.integer("SSID_HIDDEN")) if "SSID_HIDDEN" in block else False
@@ -487,7 +596,7 @@ def client_rows(report: Report, block: Block, readback: Readback, probes: Option
     """The on-air rows of a client fox: MAC_ADDR from the probe requests'
     source and FSSID from the SSID they carry."""
     header_mac = block.mac("MAC_ADDR")
-    serial_mac = readback.upper("mac")
+    serial_mac = readback.upper("address")
     ssid = block.string("FSSID")
     serial_ssid = readback.get("ssid")
     if probes is None or not probes.seen():

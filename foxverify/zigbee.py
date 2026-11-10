@@ -1,7 +1,8 @@
 """The nRF52840 802.15.4 sniffer, a pcap stream for tshark and the Zigbee checks.
 
-The dongle runs Nordic's 802.15.4 sniffer firmware (USB id 1915:154A), the one
-Kismet and Wireshark's extcap drive. It speaks plain text over its serial port:
+The dongle runs Nordic's 802.15.4 sniffer firmware (USB id 1915:154A or
+1915:154B, depending on the firmware release), the one Kismet and Wireshark's
+extcap drive. It speaks plain text over its serial port:
 ``channel N``, ``receive`` and ``sleep``, each ending in CRLF, and reports every
 frame it hears as one line::
 
@@ -28,6 +29,26 @@ NWK header's extended source, or the NWK security header's source.
 full interval, the second one interval later. ``interval_fits`` decides before
 the capture whether that fits in the time left and gives the reason for the
 ``unverified`` row when it does not.
+
+The capture (``Capture``) is started the moment the serial port names the
+channel: on the fox's ``Starting on channel`` line, printed before its radio
+starts, when the host caught it, so the dongle is on the channel for the
+network formation; otherwise after the readback, from its ``Operating
+channel`` line. The frames tshark decodes in the meantime wait in its output
+with their own timestamps until ``collect`` reads them.
+
+Every frame from the fox, with the RSSI the TAP header carries
+(``wpan-tap.rss``), feeds the run's ``cycle.Cycle``; when the cycle is being
+measured the capture goes on through the fox's sleeps, and the channel each
+later wake of a random-channel fox prints on its serial port retunes the
+dongle with the ``channel`` command, which the sniffer firmware takes while
+receiving.
+
+``EXT_PAN_ID`` is never checked on the air, and its row says ``serial only:
+unable to trigger``: a coordinator sends its extended PAN ID only in a
+beacon, only in reply to a beacon request, and the nRF sniffer firmware has
+no transmit path (its commands are ``channel``, ``receive`` and ``sleep``),
+so nothing here can ask for one.
 """
 from __future__ import annotations
 
@@ -43,6 +64,7 @@ from typing import Callable, List, NamedTuple, Optional
 
 from . import tshark
 from .conf import Block, format_u16
+from .cycle import Cycle, Heard, listen
 from .report import Deadline, FAIL, NOT_PRINTED, PASS, Report, RunError, UNVERIFIED
 from .serial_fox import Readback
 
@@ -70,7 +92,11 @@ COORDINATOR_SHORT = 0x0000
 
 FIELDS = ("frame.time_epoch", "wpan-tap.ch_num", "wpan.src_pan", "wpan.dst_pan", "wpan.src16",
           "wpan.src64", "zbee_nwk.frame_type", "zbee_nwk.cmd.id", "zbee_nwk.src", "zbee_nwk.dst",
-          "zbee_nwk.src64", "zbee.sec.src64")
+          "zbee_nwk.src64", "zbee.sec.src64", "wpan-tap.rss")
+
+# The reason the EXT_PAN_ID row stays serial only; the module docstring says
+# why the sniffer cannot ask for the beacon that carries it.
+EXT_PAN_ID_REASON = "unable to trigger"
 
 RECEIVED = re.compile(r"received:\s+([0-9a-fA-F]+)\s+power:\s+(-?\d+)\s+lqi:\s+(\d+)\s+time:\s+(-?\d+)")
 
@@ -176,6 +202,13 @@ class Pump(threading.Thread):
         except Exception as error:  # the main thread reports it as a RunError
             self.error = error
 
+    def retune(self, channel: int) -> None:
+        """Move the dongle to ``channel`` while it receives; the records
+        written from then on carry the new channel."""
+        self.channel = channel
+        self.port.write(command_line("channel %d" % channel))
+        self.port.write(command_line("receive"))
+
     def stop(self) -> None:
         self._stopping.set()
         if self.is_alive():
@@ -219,9 +252,24 @@ class Frame(NamedTuple):
     command: Optional[int]
     nwk_src: Optional[int]
     nwk_dst: Optional[int]
+    rssi: Optional[int]
 
     def from_coordinator(self) -> bool:
         return self.short == COORDINATOR_SHORT
+
+    def from_fox(self, mac: Optional[str], pans: List[Optional[int]]) -> bool:
+        """True when the frame is the fox's: its extended address when the
+        frame carries one, else a coordinator's short address in one of the
+        fox's PANs (any PAN when ``pans`` has none)."""
+        if not self.from_coordinator():
+            return False
+        if self.mac is not None and mac is not None:
+            return self.mac == mac.upper()
+        known = [pan for pan in pans if pan is not None]
+        return not known or self.pan in known
+
+    def heard(self) -> Optional[Heard]:
+        return None if self.time is None else Heard(self.time, self.rssi)
 
     def is_link_status(self) -> bool:
         if self.command is not None:
@@ -250,7 +298,19 @@ def parse_frame(record: tshark.Record) -> Frame:
         tshark.hex_int(record.first("zbee_nwk.cmd.id")),
         tshark.hex_int(record.first("zbee_nwk.src")),
         tshark.hex_int(record.first("zbee_nwk.dst")),
+        rss_dbm(record.first("wpan-tap.rss")),
     )
+
+
+def rss_dbm(text: Optional[str]) -> Optional[int]:
+    """The TAP header's RSS, a float tshark prints as ``-45`` or ``-45.0``,
+    rounded to whole dBm."""
+    if text is None or not text.strip():
+        return None
+    try:
+        return int(round(float(text.strip())))
+    except ValueError:
+        return None
 
 
 def interval_fits(interval: int, remaining: float) -> Optional[str]:
@@ -289,84 +349,137 @@ class Observation(NamedTuple):
 
 
 def collect(reader: tshark.FieldReader, deadline: Deadline, pan_id: Optional[int],
-            want_link_status: int, debug: Callable[[str], None] = lambda text: None) -> Observation:
+            want_link_status: int, debug: Callable[[str], None] = lambda text: None,
+            cycle: Optional[Cycle] = None, follower=None, retune: Optional[Callable[[int], None]] = None,
+            mac: Optional[str] = None) -> Observation:
     """Read coordinator frames until ``want_link_status`` Link Status frames
-    from ``pan_id`` (any PAN when None) arrived or the deadline passed."""
+    from ``pan_id`` (any PAN when None) arrived or the deadline passed. Every
+    frame from the fox, told by ``mac`` and by ``pan_id`` or a PAN a later
+    wake prints, feeds ``cycle``; with a cycle being measured the read goes
+    on through the fox's sleeps, and ``retune`` moves the dongle to each
+    later wake's channel."""
     frames: List[Frame] = []
     link_status: List[Frame] = []
-    while True:
-        remaining = deadline.remaining()
-        if remaining <= 0:
-            break
-        record = reader.read(remaining)
+
+    def read(timeout: float) -> List[Heard]:
+        record = reader.read(timeout)
         if record is None:
             if reader.eof:
                 raise RunError(reader.error())
-            continue
+            return []
         frame = parse_frame(record)
         if not frame.from_coordinator():
-            continue
-        debug("frame: pan %s short %s mac %s cmd %s" % (
+            return []
+        debug("frame: pan %s short %s mac %s cmd %s rssi %s" % (
             format_u16(frame.pan) if frame.pan is not None else "-",
             format_u16(frame.short) if frame.short is not None else "-",
-            frame.mac or "-", frame.command))
+            frame.mac or "-", frame.command, frame.rssi))
         frames.append(frame)
         if frame.is_link_status() and (pan_id is None or frame.pan == pan_id):
             link_status.append(frame)
-            if len(link_status) >= want_link_status:
-                break
+        pans: List[Optional[int]] = [pan_id]
+        if follower is not None:
+            pans.extend(follower.pan_ids())
+        heard = frame.heard()
+        return [heard] if heard is not None and frame.from_fox(mac, pans) else []
+
+    listen(cycle, deadline, read, lambda: len(link_status) >= want_link_status, follower, retune, debug)
     return Observation(frames, link_status)
+
+
+class Capture:
+    """A running capture on one channel with the sniffer at ``sniffer_path``,
+    started the moment the fox names its channel and read later.
+
+    Opening it starts tshark on a pcap FIFO in a temporary directory, puts
+    the dongle on ``channel`` and starts the pump that writes every frame
+    the dongle reports to the FIFO; tshark keeps what it decodes until
+    ``collect`` reads it, with the frames' own timestamps. ``retune`` moves
+    the dongle for a later wake of a random-channel fox. ``close`` puts the
+    dongle to sleep, stops tshark and removes the directory, on every exit
+    path.
+    """
+
+    def __init__(self, sniffer_path: str, channel: int, deadline: Deadline, tshark_path: str,
+                 open_port: Callable = open_sniffer, popen: Callable = subprocess.Popen,
+                 debug: Callable[[str], None] = lambda text: None):
+        self.sniffer_path = sniffer_path
+        self.channel = channel
+        self.debug = debug
+        self.workdir = tempfile.mkdtemp(prefix="foxverify-")
+        self.fifo = os.path.join(self.workdir, "sniffer.pcap")
+        os.mkfifo(self.fifo, stat.S_IRUSR | stat.S_IWUSR)
+        argv = tshark.file_command(tshark_path, self.fifo, FIELDS)
+        debug("running: " + " ".join(argv))
+        self.reader = tshark.FieldReader(argv, FIELDS, popen).start()
+        self.sink = None
+        self.pump: Optional[Pump] = None
+        try:
+            self.sink = open_fifo_for_tshark(self.fifo, self.reader, deadline)
+            self.sink.write(pcap_global_header())
+            self.sink.flush()
+            try:
+                port = open_port(sniffer_path)
+                self.pump = Pump(port, self.sink, channel, debug=debug)
+                self.pump.start()
+            except OSError as error:
+                raise RunError("sniffer %s: %s" % (sniffer_path, error))
+        except BaseException:
+            self.close()
+            raise
+
+    def retune(self, channel: int) -> None:
+        self.pump.retune(channel)
+
+    def collect(self, deadline: Deadline, pan_id: Optional[int], want_link_status: int,
+                cycle: Optional[Cycle] = None, follower=None, random_channel: bool = False,
+                mac: Optional[str] = None) -> Observation:
+        """Read until the wanted Link Status frames arrived or the deadline
+        passed, feeding ``cycle`` as ``collect`` says; with ``random_channel``
+        the dongle follows each later wake's channel from the serial port. A
+        failure on the dongle's port is a ``RunError``."""
+        observation = collect(self.reader, deadline, pan_id, want_link_status, self.debug, cycle, follower,
+                              self.retune if random_channel else None, mac)
+        if self.pump.error is not None:
+            raise RunError("sniffer %s: %s" % (self.sniffer_path, self.pump.error))
+        self.debug("sniffer reported %d frames" % self.pump.frames)
+        return observation
+
+    def close(self) -> None:
+        if self.pump is not None:
+            self.pump.stop()
+            try:
+                self.pump.port.close()
+            except Exception:
+                pass
+        if self.sink is not None:
+            try:
+                self.sink.close()
+            except OSError:
+                pass
+        self.reader.stop()
+        try:
+            os.unlink(self.fifo)
+            os.rmdir(self.workdir)
+        except OSError:
+            pass
 
 
 def observe(sniffer_path: str, channel: int, deadline: Deadline, tshark_path: str,
             pan_id: Optional[int] = None, want_link_status: int = 2,
             open_port: Callable = open_sniffer, popen: Callable = subprocess.Popen,
-            debug: Callable[[str], None] = lambda text: None) -> Observation:
+            debug: Callable[[str], None] = lambda text: None, cycle: Optional[Cycle] = None,
+            follower=None, random_channel: bool = False, mac: Optional[str] = None) -> Observation:
     """Capture on ``channel`` with the sniffer at ``sniffer_path`` until the
-    wanted Link Status frames arrived or the deadline passed. tshark reads the
-    pcap stream from a FIFO in a temporary directory; the dongle is put to
-    sleep and the directory removed on every exit path."""
-    workdir = tempfile.mkdtemp(prefix="foxverify-")
-    fifo = os.path.join(workdir, "sniffer.pcap")
-    os.mkfifo(fifo, stat.S_IRUSR | stat.S_IWUSR)
-    argv = tshark.file_command(tshark_path, fifo, FIELDS)
-    debug("running: " + " ".join(argv))
-    reader = tshark.FieldReader(argv, FIELDS, popen).start()
-    sink = None
-    pump = None
+    wanted Link Status frames arrived or the deadline passed, feeding
+    ``cycle`` as ``collect`` says; with ``random_channel`` the dongle follows
+    each later wake's channel from the serial port. The dongle is put to
+    sleep and the capture's directory removed on every exit path."""
+    capture = Capture(sniffer_path, channel, deadline, tshark_path, open_port, popen, debug)
     try:
-        sink = open_fifo_for_tshark(fifo, reader, deadline)
-        sink.write(pcap_global_header())
-        sink.flush()
-        try:
-            port = open_port(sniffer_path)
-            pump = Pump(port, sink, channel, debug=debug)
-            pump.start()
-        except OSError as error:
-            raise RunError("sniffer %s: %s" % (sniffer_path, error))
-        observation = collect(reader, deadline, pan_id, want_link_status, debug)
-        if pump.error is not None:
-            raise RunError("sniffer %s: %s" % (sniffer_path, pump.error))
-        debug("sniffer reported %d frames" % pump.frames)
-        return observation
+        return capture.collect(deadline, pan_id, want_link_status, cycle, follower, random_channel, mac)
     finally:
-        if pump is not None:
-            pump.stop()
-            try:
-                pump.port.close()
-            except Exception:
-                pass
-        if sink is not None:
-            try:
-                sink.close()
-            except OSError:
-                pass
-        reader.stop()
-        try:
-            os.unlink(fifo)
-            os.rmdir(workdir)
-        except OSError:
-            pass
+        capture.close()
 
 
 def _u16(value: Optional[int]) -> Optional[str]:
@@ -379,19 +492,26 @@ def rows(report: Report, block: Block, readback: Readback, observation: Optional
     address and PACKET_INTERVAL. ``observation`` None means nothing was
     captured and ``reason`` says why; ``interval_reason`` is the budget
     decision from ``interval_fits``. EXT_PAN_ID, the timers and TXPOWER are
-    the caller's serial-only rows."""
+    the caller's rows."""
     frame = observation.first() if observation else None
     if frame is None and not reason:
         reason = "no frame from a coordinator heard"
 
-    report.check("MAC_ADDR", block.mac("MAC_ADDR"), readback.upper("mac"),
+    report.check("MAC_ADDR", block.mac("MAC_ADDR"), readback.upper("address"),
                  frame.mac if frame else None, reason=reason)
 
     channel = block.integer("CHANNEL")
     channel_header = "random" if channel == 0 else channel
     serial_channel = readback.integer("channel")
-    report.check("CHANNEL", channel_header, serial_channel, frame.channel if frame else None,
-                 agree=(serial_channel is not None and channel == 0) or None, reason=reason)
+    air_channel = frame.channel if frame else None
+    mismatch = readback.channel_mismatch()
+    if mismatch is not None:
+        # The fox named one channel before its radio started and read back
+        # another; both are shown.
+        report.add("CHANNEL", channel_header, mismatch, air_channel, FAIL)
+    else:
+        report.check("CHANNEL", channel_header, serial_channel, air_channel,
+                     agree=(serial_channel is not None and channel == 0) or None, reason=reason)
 
     pan_random = block.is_bare_zero("PAN_ID")
     pan_header = "random" if pan_random else format_u16(block.integer("PAN_ID"))

@@ -7,6 +7,9 @@
 #define MINOR               88
 #define SIGNAL_POWER        0xc5
 #define MAC_ADDR            {0xF2, 0xC4, 0xBD, 0x76, 0x16, 0xB3}
+#define TIME_TO_WAKE        300
+#define TIME_TO_SLEEP       0
+#define TXPOWER             ESP_PWR_LVL_P9
 
 #elif defined(MEDIUM)
 // RFHS_CHALLENGE_NAME "BLE Medium Fox"
@@ -17,6 +20,9 @@
 #define MINOR               88
 #define SIGNAL_POWER        0xc5
 #define MAC_ADDR            {0xF2, 0x64, 0xA0, 0x14, 0xCB, 0x52}
+#define TIME_TO_WAKE        5
+#define TIME_TO_SLEEP       5
+#define TXPOWER             ESP_PWR_LVL_N0
 
 #elif defined(HARD)
 // RFHS_CHALLENGE_NAME "BLE Hard Fox"
@@ -27,5 +33,8 @@
 #define MINOR               88
 #define SIGNAL_POWER        0xc5
 #define MAC_ADDR            {0xF2, 0xF8, 0x20, 0xA7, 0x78, 0xA5}
+#define TIME_TO_WAKE        10
+#define TIME_TO_SLEEP       30
+#define TXPOWER             ESP_PWR_LVL_N12
 
 #endif

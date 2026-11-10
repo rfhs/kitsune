@@ -2,6 +2,7 @@ import io
 import unittest
 
 from foxverify import btclassic, conf, report
+from foxverify.cycle import Heard
 from foxverify.report import RunError
 from foxverify.serial_fox import parse_transcript
 from foxverify.tests import frozen_text, read_fixture
@@ -163,6 +164,95 @@ class InquiryTest(unittest.TestCase):
         self.assertLess(time.monotonic() - started, 3.0)
         self.assertEqual(parser.get(FOX).name, "Demo Case BTC Hard Fox")
         self.assertFalse(scan.is_alive())
+
+    def test_responses_are_logged_per_address_with_rssi_and_time(self):
+        import subprocess
+        import sys
+        dl = report.Deadline(30)
+        times = iter([10.0, 11.0, 12.0])
+        heard = btclassic.HeardLog()
+
+        def popen(argv, **kwargs):
+            return subprocess.Popen([sys.executable, "-c", "import sys; sys.stdout.write(%r)" % WITH_NAME], **kwargs)
+
+        btclassic.run_inquiry(["btmgmt"], dl, lambda: None, popen, heard=heard, clock=lambda: next(times))
+        # The speaker answers first in the recording, the fox second.
+        self.assertEqual(heard.take("70:10:5c:11:22:33"), [Heard(10.0, -72)])
+        self.assertEqual(heard.take(FOX), [Heard(11.0, -61)])
+        self.assertEqual(heard.take(FOX), [])
+
+    def test_keep_runs_inquiries_back_to_back_until_stopped(self):
+        """With keep() true a named target ends nothing: every inquiry runs to
+        its end and the next starts at once, until stop or the deadline."""
+        import subprocess
+        import sys
+        import threading
+        import time
+        dl = report.Deadline(30)
+        calls = []
+        stop = threading.Event()
+        keep = [True]
+
+        def popen(argv, **kwargs):
+            calls.append(list(argv))
+            if len(calls) == 4:
+                stop.set()
+            return subprocess.Popen([sys.executable, "-c", "import sys; sys.stdout.write(%r)" % WITH_NAME], **kwargs)
+
+        parser = btclassic.BtmgmtParser()
+        heard = btclassic.HeardLog()
+        started = time.monotonic()
+        btclassic.inquiry("hci0", dl, "btmgmt", lambda: FOX, popen, stop=stop, parser=parser, heard=heard,
+                          keep=lambda: keep[0])
+        self.assertEqual(len(calls), 4)
+        self.assertEqual(calls[0], ["btmgmt", "--index", "0", "find", "-b"])
+        # The fourth inquiry is stopped before its output is read.
+        self.assertEqual(len(heard.take(FOX)), 3)
+        self.assertEqual(parser.get(FOX).name, "Demo Case BTC Hard Fox")
+        self.assertLess(time.monotonic() - started, 10.0)
+
+    def test_keep_stops_at_the_deadline(self):
+        import subprocess
+        import sys
+        dl = report.Deadline(1.5)
+        calls = []
+
+        def popen(argv, **kwargs):
+            calls.append(argv)
+            return subprocess.Popen([sys.executable, "-c",
+                                     "import sys, time; sys.stdout.write(%r); sys.stdout.flush(); time.sleep(0.4)" % WITHOUT_NAME],
+                                    **kwargs)
+
+        btclassic.inquiry("hci0", dl, "btmgmt", lambda: FOX, popen, keep=lambda: True)
+        self.assertTrue(dl.expired())
+        self.assertGreaterEqual(len(calls), 2)
+
+    def test_inquiry_thread_keep_going_and_live_parser(self):
+        import subprocess
+        import sys
+        import time
+        dl = report.Deadline(30)
+        calls = []
+
+        def popen(argv, **kwargs):
+            calls.append(argv)
+            return subprocess.Popen([sys.executable, "-c",
+                                     "import sys, time; sys.stdout.write(%r); sys.stdout.flush(); time.sleep(0.3)" % WITH_NAME],
+                                    **kwargs)
+
+        scan = btclassic.Inquiry("hci0", dl, "btmgmt", popen)
+        scan.keep_going = True
+        scan.set_target(FOX)
+        scan.start()
+        time.sleep(1.0)
+        self.assertTrue(scan.is_alive())
+        self.assertTrue(scan.named(FOX))
+        self.assertGreaterEqual(len(calls), 2)
+        self.assertGreaterEqual(len(scan.take_heard(FOX)), 2)
+        scan.stop()
+        parser = scan.result(report.Deadline(3))
+        self.assertFalse(scan.is_alive())
+        self.assertEqual(parser.get(FOX).name, "Demo Case BTC Hard Fox")
 
     def test_inquiry_thread_stop_and_error(self):
         import subprocess

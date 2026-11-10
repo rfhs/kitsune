@@ -1,44 +1,25 @@
 #include <Arduino.h>
-
 #include "current_conf.h"
-#include <rfhsledmacros.h>
-#include <rfhssleeptimers.h>
-#include <rfhsbanner.h>
+#define RFHS_PROJECT "classic_discoverable"
+#include <rfhsfox.h>
 #include <rfhsclassicdiscoverable.h>
 
 void setup() {
-  Serial.begin(115200);
-  rfhsledinit();
-  Serial.println("Initializing...");
-  rfhsboottimer();
-
-  rfhsstartclassicdiscoverable();
-  // The radio is up, so the host has had time to open the port; see rfhsbanner.h.
-  RFHS_BANNER("classic_discoverable");
+  rfhsboot("Bluetooth Classic");
+  rfhsled(RFHS_LED_AWAKE);
+  if (!rfhsstartradio()) {
+    rfhsfatal(RFHS_FATAL_RADIO);
+  }
+  RFHS_BANNER();
   rfhsprintsleeptimers();
-  if (!rfhscheckclassicdiscoverable()) {
-    Serial.flush();
-    SerialBT.end();
-    rfhsledfatal();
+  if (!rfhscheckradio()) {
+    rfhsfatal(RFHS_FATAL_READBACK);
   }
-
-  ledcolor(0x0000FF); // BLUE
-  delay(TIME_TO_WAKE * mS_TO_S);
-  Serial.println("Going to sleep");
-  ledcolor(0xff0000);  // RED
-  delay(75);  // adjust the esp_deep_sleep if you change this
-  // subtract sleep time on line 44
-  int sleepy_tyme = uS_TO_S * TIME_TO_SLEEP - 75;
-  if (sleepy_tyme < 100 ) {
-    sleepy_tyme = 100;
-  }
-  esp_deep_sleep(sleepy_tyme);
-  // This line should never run so it's a canary for sleep failed
-  rfhsledfatal();
+  rfhsawake(TIME_TO_WAKE);
+  rfhsstopradio();
+  rfhssleep(TIME_TO_SLEEP);
 }
 
 void loop() {
-  // setup should sleep then restart so this should also never run.
-  Serial.println("Entered loop, we are broken");
-  rfhsledfatal();
+  rfhsfatal(RFHS_FATAL_LOOP);
 }

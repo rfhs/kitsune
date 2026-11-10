@@ -1,8 +1,8 @@
 #!/bin/sh
 # Check every line of a generated conference report against a known format.
-# Catches comment text or junk leaking in through the grep in create_report
-# and make_conference_full, identifier values that don't look right, and
-# with the source headers, fields that never made it into the report.
+# Catches comment text or junk leaking in through the grep in create_report,
+# identifier values that don't look right, and with the source headers,
+# fields that never made it into the report.
 #
 # Usage: qa/verify-report <conference>.txt [conference header...]
 set -e

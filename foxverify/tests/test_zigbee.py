@@ -6,7 +6,8 @@ import subprocess
 import tempfile
 import unittest
 
-from foxverify import conf, report, tshark, zigbee
+from foxverify import conf, report, serial_fox, tshark, zigbee
+from foxverify.cycle import NONE, ONE_CYCLE, Cycle, Heard
 from foxverify.report import RunError
 from foxverify.serial_fox import parse_transcript
 from foxverify.tests import frozen_text, read_fixture
@@ -118,6 +119,22 @@ class PumpTest(unittest.TestCase):
         self.assertEqual(data[:len(zigbee.pcap_record(zigbee.parse_received(RECEIVED[1]), 15, 1730000010.5))],
                          zigbee.pcap_record(zigbee.parse_received(RECEIVED[1]), 15, 1730000010.5))
 
+    def test_retune_sends_the_channel_and_stamps_later_records_with_it(self):
+        port = FakePort([])
+        sink = io.BytesIO()
+        pump = zigbee.Pump(port, sink, 15, clock=lambda: 1730000010.5)
+        pump.start()
+        pump.retune(22)
+        self.assertEqual(port.written, [b"channel 15\r\n", b"receive\r\n", b"channel 22\r\n", b"receive\r\n"])
+        self.assertEqual(pump.channel, 22)
+        port.lines.append(RECEIVED[1])
+        for _ in range(100):
+            if pump.frames == 1:
+                break
+            pump.join(0.05)
+        pump.stop()
+        self.assertEqual(sink.getvalue(), zigbee.pcap_record(zigbee.parse_received(RECEIVED[1]), 22, 1730000010.5))
+
 
 class FrameTest(unittest.TestCase):
     def test_link_status_in_the_clear(self):
@@ -136,6 +153,30 @@ class FrameTest(unittest.TestCase):
         self.assertIsNone(f.command)
         self.assertTrue(f.is_link_status())
         self.assertEqual(f.mac, MAC)
+
+    def test_rss_from_the_tap_header(self):
+        self.assertEqual(frame(0).rssi, -45)
+        self.assertEqual(frame(2).rssi, -45)
+        self.assertEqual(frame(3).rssi, -47)
+        self.assertEqual(zigbee.rss_dbm("-45.5"), -46)
+        self.assertEqual(zigbee.rss_dbm("-44.5"), -44)
+        self.assertIsNone(zigbee.rss_dbm(""))
+        self.assertIsNone(zigbee.rss_dbm(None))
+        self.assertIsNone(zigbee.rss_dbm("x"))
+        self.assertEqual(zigbee.FIELDS[-1], "wpan-tap.rss")
+        self.assertEqual(frame(2).heard(), Heard(1730000010.5, -45))
+
+    def test_from_fox_by_address_or_pan(self):
+        self.assertTrue(frame(2).from_fox(MAC, [0x1337]))
+        self.assertTrue(frame(2).from_fox(MAC.lower(), [0xBEEF]))
+        self.assertFalse(frame(2).from_fox("F2:00:00:00:00:00:00:01", [0x1337]))
+        self.assertFalse(frame(1).from_fox(MAC, [0x1337]))
+        short_only = frame(2)._replace(mac=None)
+        self.assertTrue(short_only.from_fox(MAC, [0x1337]))
+        self.assertTrue(short_only.from_fox(MAC, [None, 0x1337]))
+        self.assertTrue(short_only.from_fox(MAC, [0xBEEF, 0x1337]))
+        self.assertFalse(short_only.from_fox(MAC, [0xBEEF]))
+        self.assertTrue(short_only.from_fox(MAC, [None]))
 
     def test_other_frames(self):
         beacon_like = frame(0)
@@ -177,6 +218,47 @@ class FrameTest(unittest.TestCase):
         reader = FakeReader(zigbee.FIELDS, [(0.5, None)], clock)
         with self.assertRaises(RunError):
             zigbee.collect(reader, dl, None, 1)
+
+    def test_collect_feeds_the_cycle_through_the_sleep_and_retunes(self):
+        """A random-channel coordinator with PACKET_INTERVAL 1: Link Status
+        every second for a 10 s wake, the sleep line, wake 2's channel from
+        the serial port, the dongle retuned, wake 2's first frame."""
+        def link_status(when, rssi=-45, pan="0x1337"):
+            cells = FRAMES[2].split("\t")
+            cells[0] = "%.6f" % when
+            cells[3] = pan
+            cells[-1] = str(rssi)
+            return "\t".join(cells)
+
+        dl, clock = deadline(60, start=0.0)
+        wake1 = [(2.0, link_status(2.0))] + [(1.0, link_status(2.0 + i)) for i in range(1, 11)]
+        wake2 = [(5.0, link_status(17.0, -50, "0xbeef"))]
+        reader = FakeReader(zigbee.FIELDS, wake1 + wake2, clock)
+        source = serial_fox.TranscriptSource([(12.3, "Going to sleep\n"), (3.0, "Operating channel: 22\n"),
+                                              (0.1, "Operating PAN ID: 0xBEEF\n")], clock)
+        follower = serial_fox.Follower(source, clock)
+        one = Cycle(0.0, 1.0, ONE_CYCLE, wake=10, clock=clock)
+        tuned = []
+        observation = zigbee.collect(reader, dl, 0x1337, 2, cycle=one, follower=follower, retune=tuned.append,
+                                     mac=MAC)
+        # Every wake 1 Link Status is kept; the interval uses the first two.
+        self.assertEqual(len(observation.link_status), 11)
+        self.assertAlmostEqual(observation.gap(), 1.0)
+        self.assertEqual(tuned, [22])
+        self.assertTrue(one.complete())
+        self.assertEqual(len(one.wake1()), 11)
+        self.assertAlmostEqual(one.span(), 10.0)
+        self.assertAlmostEqual(one.gap(), 5.0)
+        self.assertEqual(one.rssi_text(), "median -45 dBm over 12 frames")
+
+    def test_collect_without_a_cycle_keeps_the_old_stop(self):
+        dl, clock = deadline(60)
+        reader = FakeReader(zigbee.FIELDS, [(0.5, line) for line in FRAMES], clock)
+        one = Cycle(1000.0, 1.0, NONE, clock=clock)
+        observation = zigbee.collect(reader, dl, 0x1337, 2, cycle=one, mac=MAC)
+        self.assertEqual(len(observation.link_status), 2)
+        # The frame from short address 0x1a2b is not the fox's.
+        self.assertEqual([f.rssi for f in one.frames], [-45, -45, -47])
 
 
 class RowsTest(unittest.TestCase):
@@ -237,6 +319,19 @@ class RowsTest(unittest.TestCase):
         self.assertEqual(self.rows()["PAN_ID"].verdict, "FAIL")
         self.assertEqual(self.rows()["PAN_ID"].air, "0xBEEF")
 
+    def test_early_line_and_readback_disagreeing_fails_the_channel_row(self):
+        """The fox said Starting on channel 20 and read back 15: the CHANNEL
+        row shows both and FAILs, for a fixed and for a random header channel."""
+        readback = parse_transcript(read_fixture("transcripts", "zigbee_easy.log").replace(
+            "Starting on channel 15\n", "Starting on channel 20\n"))
+        zigbee.rows(self.report, self.block, readback, zigbee.Observation([frame(2), frame(3)], [frame(2), frame(3)]))
+        self.assertEqual(self.rows()["CHANNEL"].cells(), ["CHANNEL", "15", "15 (Starting on channel 20)", "15", "FAIL"])
+        self.assertEqual(self.rows()["MAC_ADDR"].verdict, "pass")
+        self.report.rows = []
+        block = conf.select(HEADER.replace("#define CHANNEL 15", "#define CHANNEL 0"), ["COORDINATOR", "EASY"])
+        zigbee.rows(self.report, block, readback, zigbee.Observation([frame(2), frame(3)], [frame(2), frame(3)]))
+        self.assertEqual(self.rows()["CHANNEL"].cells()[1:], ["random", "15 (Starting on channel 20)", "15", "FAIL"])
+
 
 @unittest.skipIf(shutil.which("tshark") is None, "tshark is not installed; the pcap decode test needs it")
 class TsharkDecodeTest(unittest.TestCase):
@@ -270,6 +365,8 @@ class TsharkDecodeTest(unittest.TestCase):
         self.assertEqual(record.get("wpan.src16"), "0x0000")
         self.assertEqual(record.get("wpan-tap.ch_num"), "15")
         self.assertEqual(record.get("zbee_nwk.cmd.id"), "0x08")
+        # The RSS TLV the writer put in the TAP header comes back as dBm.
+        self.assertEqual(first.rssi, -45)
         # With PAN ID compression the frame carries one PAN ID, which
         # Wireshark files under the destination; the source PAN is the same.
         self.assertIn("0x1337", (record.get("wpan.src_pan"), record.get("wpan.dst_pan")))
