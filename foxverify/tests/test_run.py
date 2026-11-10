@@ -589,8 +589,8 @@ class AirRunTest(unittest.TestCase):
         self.assertEqual(result.verdicts, [("MAC_ADDR", "pass"), ("NAME", "pass"),
                                            ("TIME_TO_WAKE", "serial only"), ("TIME_TO_SLEEP", "serial only")])
         self.assertEqual(result.notes, [])
-        self.assertIn("TIME_TO_WAKE and TIME_TO_SLEEP serial only (--timeout 60 is under the 65 s one cycle of "
-                      "60 s plus the 5 s boot allowance needs)\n", result.out)
+        self.assertIn("TIME_TO_WAKE and TIME_TO_SLEEP serial only (--timeout 60 is under the 125 s needed to "
+                      "measure the cycle time: two cycles of 60 s plus the 5 s boot allowance)\n", result.out)
         self.assertIn("first transmission: 2.0 s after reset\n", result.out)
         self.assertNotIn("first wake:", result.out)
         self.assertTrue(result.summary.startswith("pass: 2 pass, 0 FAIL, 2 serial only, 0 unverified"))
@@ -940,8 +940,8 @@ class AirRunTest(unittest.TestCase):
         self.assertNotIn("CYCLE_TIME", result.out)
         self.assertEqual(rows["TXPOWER"][3], "median -42 dBm over 1 frame")
         self.assertEqual(result.notes, [])
-        self.assertIn("TIME_TO_WAKE and TIME_TO_SLEEP serial only (--timeout 24 is under the 25 s one cycle of 20 s "
-                      "plus the 5 s boot allowance needs)\n", result.out)
+        self.assertIn("TIME_TO_WAKE and TIME_TO_SLEEP serial only (--timeout 24 is under the 45 s needed to "
+                      "measure the cycle time: two cycles of 20 s plus the 5 s boot allowance)\n", result.out)
         self.assertIn("first transmission: 1.5 s after reset\n", result.out)
         self.assertNotIn("through the first", result.out)
         self.assertTrue(result.summary.startswith("pass: 5 pass, 0 FAIL, 5 serial only, 0 unverified"), result.summary)
@@ -1305,8 +1305,8 @@ class AirRunTest(unittest.TestCase):
         self.assertEqual(rows["MAC_ADDR"][4], "pass")
         self.assertEqual(rows["FSSID"][4], "pass")
         self.assertEqual(rows["TXPOWER"][3], "median -38 dBm over 1 frame")
-        self.assertIn("TIME_TO_WAKE and TIME_TO_SLEEP serial only (--timeout 60 is under the 305 s one cycle of 300 s "
-                      "plus the 5 s boot allowance needs)\n", out.getvalue())
+        self.assertIn("TIME_TO_WAKE and TIME_TO_SLEEP serial only (--timeout 60 is under the 605 s needed to "
+                      "measure the cycle time: two cycles of 300 s plus the 5 s boot allowance)\n", out.getvalue())
         self.assertNotIn("note:", out.getvalue())
         self.assertTrue(out.getvalue().endswith("run with --timeout 605 to measure the cycle time\n"), out.getvalue())
 
@@ -1344,8 +1344,8 @@ class AirRunTest(unittest.TestCase):
             self.assertIn("| serial only: unable to trigger\n", result.out)
             self.assertNotIn("beacon", result.out)
             self.assertEqual(result.notes, [])
-            self.assertIn("TIME_TO_WAKE and TIME_TO_SLEEP serial only (--timeout 60 is under the 305 s one cycle of "
-                          "300 s plus the 5 s boot allowance needs)\n", result.out)
+            self.assertIn("TIME_TO_WAKE and TIME_TO_SLEEP serial only (--timeout 60 is under the 605 s needed to "
+                          "measure the cycle time: two cycles of 300 s plus the 5 s boot allowance)\n", result.out)
             self.assertEqual(result.suggestion, "run with --timeout 605 to measure the cycle time")
             # The run ended with the identity rows, long before the deadline.
             self.assertTrue(result.summary.endswith(" s of 60 s"), result.summary)

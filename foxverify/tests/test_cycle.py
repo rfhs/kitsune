@@ -106,11 +106,11 @@ class TierTest(unittest.TestCase):
                          "judging the first boot with wider tolerances (--timeout 305 covers one cycle of 300 s "
                          "plus the 5 s boot allowance; two cycles need 605)")
         self.assertEqual(cycle.tier_line(NONE, 300, 0, 60),
-                         "TIME_TO_WAKE and TIME_TO_SLEEP serial only (--timeout 60 is under the 305 s one "
-                         "cycle of 300 s plus the 5 s boot allowance needs)")
+                         "TIME_TO_WAKE and TIME_TO_SLEEP serial only (--timeout 60 is under the 605 s needed to "
+                         "measure the cycle time: two cycles of 300 s plus the 5 s boot allowance)")
         self.assertEqual(cycle.tier_line(NONE, 15, 5, 24.5),
-                         "TIME_TO_WAKE and TIME_TO_SLEEP serial only (--timeout 24.5 is under the 25 s one "
-                         "cycle of 20 s plus the 5 s boot allowance needs)")
+                         "TIME_TO_WAKE and TIME_TO_SLEEP serial only (--timeout 24.5 is under the 45 s needed to "
+                         "measure the cycle time: two cycles of 20 s plus the 5 s boot allowance)")
 
 
 class BoundaryTest(unittest.TestCase):

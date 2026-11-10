@@ -95,7 +95,7 @@ run with --timeout 605 for the exact cycle time; this run judged the first boot 
 The Classic HARD demo at the default `--timeout 60`:
 ```
 Fox: classic_discoverable HARD
-TIME_TO_WAKE and TIME_TO_SLEEP serial only (--timeout 60 is under the 65 s one cycle of 60 s plus the 5 s boot allowance needs)
+TIME_TO_WAKE and TIME_TO_SLEEP serial only (--timeout 60 is under the 125 s needed to measure the cycle time: two cycles of 60 s plus the 5 s boot allowance)
 value         | header                 | serial                 | air                    | verdict
 MAC_ADDR      | F2:F6:6D:BC:2A:80      | F2:F6:6D:BC:2A:80      | F2:F6:6D:BC:2A:80      | pass
 NAME          | Demo Case BTC Hard Fox | Demo Case BTC Hard Fox | Demo Case BTC Hard Fox | pass

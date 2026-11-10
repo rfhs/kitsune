@@ -260,11 +260,13 @@ class AutodetectTest(DevicesTestCase):
         self.assertEqual(sniffer.kind, devices.SNIFFER)
         self.assertEqual(sniffer.path, nrf.device)
 
-    def test_sniffer_only_when_unambiguous(self):
+    def test_sniffer_picks_the_first_of_several(self):
         a = self.tree.port("ttyACM0", *NRF)
         b = self.tree.port("ttyACM1", *NRF)
-        self.assertIsNone(devices.autodetect_sniffer(devices.list_ports(self.comports(a, b))))
-        self.assertIsNone(devices.autodetect_sniffer(devices.list_ports(self.comports())))
+        sniffer = devices.autodetect_sniffer(devices.list_ports(self.comports(a, b)), self.tree.by_id)
+        self.assertEqual(sniffer.kind, devices.SNIFFER)
+        self.assertEqual(sniffer.path, a.device)
+        self.assertIsNone(devices.autodetect_sniffer(devices.list_ports(self.comports()), self.tree.by_id))
 
     def test_hci_only_when_exactly_one_adapter(self):
         self.assertIsNone(devices.autodetect_hci(self.tree.bluetooth))

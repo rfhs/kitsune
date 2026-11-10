@@ -106,7 +106,7 @@ EPILOG = """\
 DEVICE is a plain name: a network interface (wlan1), a Bluetooth adapter
 (hci0) or a serial port (/dev/ttyACM1). A serial port with the nRF52840
 sniffer's USB id is the 802.15.4 sniffer, any other serial port is the fox.
-Without a fox the one ESP32 serial device is used; without a sniffer the
+Without a fox the one ESP32 serial device is used; without a sniffer an
 nRF sniffer or the only hciN adapter is used. A Wi-Fi interface is never
 guessed. Exit 0 when nothing FAILed, 1 on any FAIL, 2 when the run could
 not happen."""
@@ -646,7 +646,7 @@ class ZigbeeRun(Run):
 
     def start_air(self, selection, candidates):
         if selection.sniffer is None:
-            self.no_sniffer("no nRF52840 sniffer given and not exactly one found")
+            self.no_sniffer("no nRF52840 802.15.4 sniffer found (plug one in or name its serial port)")
             return None
         self.check_privileges(selection)
         self.tshark = shutil.which("tshark")

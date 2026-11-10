@@ -13,10 +13,10 @@ Labs CP210x, WCH or FTDI vendor id are the candidates. Exactly one is used. None
 script waits up to ``--wait-for-fox`` seconds for one to appear, because a
 native USB board in deep sleep has no serial device, then gives up with "no
 ESP32 serial device found". Several are listed with path, VID:PID, product and
-serial number and the user is asked to name one. A sniffer is autodetected only
-when it is unambiguous: an nRF by USB id, ``hciN`` when there is exactly one
-adapter. A Wi-Fi interface is never guessed, because putting the wrong card
-into monitor mode takes the laptop offline.
+serial number and the user is asked to name one. A sniffer is autodetected by
+kind: an nRF by its USB id, the first by port path when several are plugged in;
+``hciN`` when there is exactly one adapter. A Wi-Fi interface is never guessed,
+because putting the wrong card into monitor mode takes the laptop offline.
 
 Serial devices are always referred to by their ``/dev/serial/by-id/`` path when
 one exists: a native USB board re-enumerates after deep sleep and its raw
@@ -197,9 +197,11 @@ def autodetect_fox(wait_seconds: float, deadline: Optional[Deadline] = None,
 
 
 def autodetect_sniffer(ports: Sequence[Port], by_id_dir: str = BY_ID_DIR) -> Optional[Device]:
-    """The nRF sniffer when exactly one is plugged in."""
+    """The nRF sniffer; the first by port path when several are plugged in,
+    since any one of them sniffs the same channel equally well. None when
+    none is plugged in."""
     sniffers = [port for port in ports if port.is_sniffer()]
-    if len(sniffers) != 1:
+    if not sniffers:
         return None
     return Device(SNIFFER, by_id_path(sniffers[0].device, by_id_dir), sniffers[0])
 

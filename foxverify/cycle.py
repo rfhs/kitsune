@@ -154,8 +154,9 @@ def tier_line(which: str, wake: int, sleep: int, timeout: float) -> str:
         return ("judging the first boot with wider tolerances (--timeout %g covers one cycle of %d s plus "
                 "the %g s boot allowance; two cycles need %d)"
                 % (timeout, cycle_seconds, BOOT_ALLOWANCE, full_timeout(wake, sleep)))
-    return ("TIME_TO_WAKE and TIME_TO_SLEEP serial only (--timeout %g is under the %g s one cycle of %d s "
-            "plus the %g s boot allowance needs)" % (timeout, needed(wake, sleep, 1), cycle_seconds, BOOT_ALLOWANCE))
+    return ("TIME_TO_WAKE and TIME_TO_SLEEP serial only (--timeout %g is under the %d s needed to measure the "
+            "cycle time: two cycles of %d s plus the %g s boot allowance)"
+            % (timeout, full_timeout(wake, sleep), cycle_seconds, BOOT_ALLOWANCE))
 
 
 def suggestion(which: str, wake: int, sleep: int) -> Optional[str]:
