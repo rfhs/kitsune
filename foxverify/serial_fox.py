@@ -25,8 +25,9 @@ never arms the bootloader either: the port rests with both lines asserted
 and is only ever written by the reset. After the reset a native USB device
 may re-enumerate; ``SerialSource.read`` raises ``PortGone`` and ``read_fox``
 reopens the same by-id path, which lands on the same resting state. The wall
-clock moment the reset was released is kept in ``Readback.reset_time`` for
-the first transmission figure.
+clock moment the reset was released is kept in ``Readback.reset_time``, and
+the banner's arrival in ``Readback.banner_time``, for the FIRST_FRAME row and
+the cycle measurement.
 
 A reset that lands the chip in the ROM's download mode, which the ROM
 announces with a ``boot:`` line naming ``DOWNLOAD`` and then ``waiting for

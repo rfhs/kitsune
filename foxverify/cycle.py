@@ -1,6 +1,6 @@
 """The fox's wake and sleep cycle measured on the air: the budget tiers, the
-boot allowance, the frame log, the end of each wake, the three timer rows, the
-first transmission and first wake lines and the median RSSI.
+boot allowance, the frame log, the end of each wake, the FIRST_FRAME row, the
+three timer rows, the first wake line and the median RSSI.
 
 The firmware keeps one cycle, one wake-up to the next, at exactly
 ``TIME_TO_WAKE + TIME_TO_SLEEP`` seconds from the second wake on: the radio
@@ -53,8 +53,10 @@ names the channel: on the fox's ``Starting on channel`` line, printed before
 its radio starts, when the host caught it, else after the readback. Either
 way they begin ``late`` seconds after the reset, and a capture that began
 only after the readback may have missed frames the fox sent before it. The
-first transmission line says the figure is an upper bound when the fox was
-heard as soon as the capture began, and the first-boot rows allow for it.
+FIRST_FRAME row judges how soon after its banner, printed once the radio is
+up, the fox was heard; when the capture began after the banner and heard
+the fox as soon as it listened, the figure is only an upper bound, and the
+row and the first-boot rows allow for it.
 
 ``listen`` is the loop every backend runs: it reads frames, polls the serial
 follower, retunes the sniffer when a random-channel fox reports the channel
@@ -70,15 +72,16 @@ import time
 from typing import Callable, Dict, List, NamedTuple, Optional, Sequence, Tuple
 
 from .conf import Block
-from .report import FAIL, PASS, Report, UNVERIFIED
+from .report import FAIL, PASS, Report, SERIAL, UNVERIFIED
 from .serial_fox import Readback
 
 # Seconds from a reset to the first frame, which is also the whole off-air
 # gap of a TIME_TO_SLEEP 0 fox. Boot plus Arduino init is about 1 s on every
 # board, the Bluedroid stack about 1 s more, the Wi-Fi stack under 0.5 s, the
 # Zigbee stack 1-3 s to its first frame; 5 s holds with a margin on every fox.
-# The first transmission line shows the measured figure on every run, so this
-# constant can be corrected from evidence.
+# The FIRST_FRAME row also allows this long, plus one frame spacing, from the
+# banner to the first frame, and shows the banner's arrival after the reset
+# on every run, so this constant can be corrected from evidence.
 BOOT_ALLOWANCE = 5.0
 # Seconds between polls of the capture and the serial port in ``listen``.
 POLL = 0.25
@@ -179,8 +182,8 @@ class Cycle:
     seconds, or None to take the largest spacing seen in wake 1 (at least
     ``MIN_GRANULARITY``). ``tier`` says how far the capture goes: to wake 2's
     first frame in the one-cycle tier, to wake 3's in the two-cycle tier;
-    in the none tier the frames only feed the first transmission line and
-    the median RSSI. ``wake`` is the block's TIME_TO_WAKE, which bounds where
+    in the none tier the frames only feed the FIRST_FRAME row and the
+    median RSSI. ``wake`` is the block's TIME_TO_WAKE, which bounds where
     silence may end a wake while a serial port is followed; ``serial`` says a
     port is followed. ``listen_time`` is when the capture began hearing the
     fox's channel: the reset time for a scan that was already running, and
@@ -326,18 +329,34 @@ class Cycle:
             return None
         return self.frames[0].time - self.reset_time
 
+    def first_frame_delay(self) -> Optional[float]:
+        """Seconds from the banner to the first frame, negative for a frame
+        the stack sent before the firmware printed the banner; None without
+        a banner time or a frame."""
+        if self.radio_time is None or not self.frames:
+            return None
+        return self.frames[0].time - self.radio_time
+
+    def listen_delay(self) -> float:
+        """Seconds between the banner and the start of the capture, during
+        which the fox may have been on the air unheard; 0 for a capture that
+        was listening before the banner, or when either instant is unknown."""
+        if self.listen_time is None or self.radio_time is None:
+            return 0.0
+        return max(0.0, self.listen_time - self.radio_time)
+
     def heard_at_once(self) -> bool:
-        """True when the first frame came within one frame spacing of the
-        capture starting late, so the fox was probably already on the air and
-        the first transmission figure is only an upper bound."""
-        if not self.frames or self.late() == 0.0:
+        """True when the capture began after the banner and the first frame
+        came within one frame spacing of its start, so the fox was probably
+        on the air already and the first frame delay is only an upper bound."""
+        if not self.frames or self.listen_delay() == 0.0:
             return False
         return self.frames[0].time - self.listen_time <= self.granularity()
 
     def boot_bound(self) -> Optional[float]:
         """The most the first boot can have taken from the reset to the first
-        frame: the first transmission figure, an upper bound when the capture
-        began late, plus the late start itself."""
+        frame: the reset to the first frame heard, an upper bound when the
+        capture began late, plus the late start itself."""
         seconds = self.first_transmission()
         return None if seconds is None else seconds + self.late()
 
@@ -412,32 +431,45 @@ def listen(cycle: Optional[Cycle], deadline, read: Callable[[float], Sequence[He
                 cycle.feed(frame)
 
 
-def first_transmission_line(cycle: Cycle, no_reset: bool) -> str:
-    """The line under the table: seconds from the reset to the first frame."""
-    if no_reset:
-        return "first transmission: not measured (--no-reset)"
-    if cycle.reset_time is None:
-        return "first transmission: not measured (the fox was not reset)"
-    seconds = cycle.first_transmission()
-    if seconds is None:
-        return "first transmission: none heard before the deadline"
+def first_frame_row(report: Report, cycle: Cycle, reason: str = "") -> None:
+    """The FIRST_FRAME row: how long after its banner, which the fox prints
+    once its radio is up, the fox was first heard on the air. The header
+    column is the boot allowance, the serial column the banner's arrival
+    after the reset, and the row passes within the allowance plus one frame
+    spacing, since a radio is not on the air sooner than its own cadence
+    after it starts: a Zigbee coordinator's first Link Status comes up to
+    PACKET_INTERVAL after formation. The boot and a Zigbee fox's network
+    formation come before the banner, so they do not count. A capture that
+    began after the banner and heard the fox as soon as it listened has only
+    an upper bound: within the allowance it passes, otherwise the row is
+    unverified. ``reason`` is why the fox was not reset by this run, which
+    leaves the row serial only like the timers."""
+    if reason:
+        report.add("FIRST_FRAME", None, None, None, SERIAL, reason)
+        return
+    allowance = "%g" % cycle.allowance
+    banner = None
+    if cycle.radio_time is not None and cycle.reset_time is not None:
+        banner = "banner %.1f s after reset" % (cycle.radio_time - cycle.reset_time)
+    delay = cycle.first_frame_delay()
+    if delay is None:
+        why = "no frame from the fox" if not cycle.frames else "the banner was not timed"
+        report.add("FIRST_FRAME", allowance, banner, None, UNVERIFIED, why)
+        return
+    bound = cycle.allowance + cycle.granularity()
     if cycle.heard_at_once():
-        # The fox was on the air when the capture began, so only an upper
-        # bound was observed; the banner, printed once the radio is up, says
-        # when the fox began transmitting.
-        text = "first transmission: by %.1f s after reset (the sniffer started listening at %.1f s" % (
-            seconds, cycle.late())
-        radio = None if cycle.radio_time is None else cycle.radio_time - cycle.reset_time
-        if radio is not None:
-            text += "; the radio was up at %.1f s by serial" % radio
-        text += ")"
-        if cycle.measure and radio is not None and radio > cycle.allowance:
-            text += ", over the %g s boot allowance" % cycle.allowance
-        return text
-    text = "first transmission: %.1f s after reset" % seconds
-    if cycle.measure and seconds > cycle.allowance:
-        text += ", over the %g s boot allowance" % cycle.allowance
-    return text
+        air = "by %.1f s after the banner (the sniffer began listening %.1f s after the banner)" % (
+            delay, cycle.listen_delay())
+        if delay <= bound:
+            report.add("FIRST_FRAME", allowance, banner, air, PASS)
+        else:
+            report.add("FIRST_FRAME", allowance, banner, air, UNVERIFIED, "heard as soon as the sniffer listened")
+        return
+    if delay <= -0.05:
+        air = "%.1f s before the banner" % -delay
+    else:
+        air = "%.1f s after the banner" % max(delay, 0.0)
+    report.add("FIRST_FRAME", allowance, banner, air, PASS if delay <= bound else FAIL)
 
 
 def first_wake_line(cycle: Cycle) -> Optional[str]:

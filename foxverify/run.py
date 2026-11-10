@@ -35,10 +35,9 @@ below takes what is left of it. The steps are the same for every project:
    cycle plus the allowance it listens to wake 2 and the three rows judge
    the first boot with wider tolerances; with less the two timer rows are
    ``serial only`` and the run ends with the identity rows.
-7. The table, the ``first transmission`` and ``first wake`` lines, the
-   notes, the summary and, below the two-cycle tier, the ``--timeout`` that
-   measures the exact cycle time; exit 0, 1 on any FAIL, 2 when the run
-   could not happen.
+7. The table, the ``first wake`` line, the notes, the summary and, below
+   the two-cycle tier, the ``--timeout`` that measures the exact cycle
+   time; exit 0, 1 on any FAIL, 2 when the run could not happen.
 
 Without a sniffer, or with ``--serial-only``, the on-air rows are
 ``unverified`` with that reason and a note says so.
@@ -237,12 +236,10 @@ class Run:
                 self.plan(block, readback)
             self.rows(block, readback, listen)
             self.serial_rows(block, readback)
-            if self.cycle is not None:
-                self.report.line(cycle.first_transmission_line(self.cycle, self.args.no_reset))
-                if self.cycle.tier == cycle.TWO_CYCLES:
-                    first_wake = cycle.first_wake_line(self.cycle)
-                    if first_wake is not None:
-                        self.report.line(first_wake)
+            if self.cycle is not None and self.cycle.tier == cycle.TWO_CYCLES:
+                first_wake = cycle.first_wake_line(self.cycle)
+                if first_wake is not None:
+                    self.report.line(first_wake)
         finally:
             self.stop_air(air)
             if self.source is not None:
@@ -255,8 +252,8 @@ class Run:
         this run, which ``--no-reset`` and a USB stack without a reset both
         rule out. The tier is announced before the table and, below two
         cycles, the ``--timeout`` for the exact cycle time is suggested after
-        the summary. Either way the frames heard feed the first transmission
-        line and the median RSSI."""
+        the summary. Either way the frames heard feed the FIRST_FRAME row and
+        the median RSSI."""
         tier = cycle.NONE
         wake = block.integer("TIME_TO_WAKE") if "TIME_TO_WAKE" in block else None
         sleep = block.integer("TIME_TO_SLEEP") if "TIME_TO_SLEEP" in block else None
@@ -396,9 +393,11 @@ class Run:
         self.report.check(name, block.display(name), serial, air, on_air=False, reason=reason)
 
     def timers(self, block: Block, readback: Readback) -> None:
-        """The TIME_TO_WAKE, TIME_TO_SLEEP and CYCLE_TIME rows when the run
-        listened past the first sleep; the two timer rows serial only
-        otherwise."""
+        """The FIRST_FRAME row when a sniffer listened, then the TIME_TO_WAKE,
+        TIME_TO_SLEEP and CYCLE_TIME rows when the run listened past the
+        first sleep; the two timer rows serial only otherwise."""
+        if self.cycle is not None:
+            cycle.first_frame_row(self.report, self.cycle, self.timer_reason)
         if self.measuring():
             cycle.rows(self.report, block, readback, self.cycle, self.random_channel(block, readback),
                        self.last_cycle())

@@ -14,7 +14,7 @@ and verdict, then one summary line. The verdicts are:
   verdict column carries the reason.
 
 A line added with ``line`` is printed between the table and the notes, which
-is where the first transmission figure goes. A line given to ``suggest`` is
+is where the first wake figures go. A line given to ``suggest`` is
 printed after the summary, which is where a run whose budget was too short
 for the exact cycle time names the ``--timeout`` that measures it.
 

@@ -2,7 +2,7 @@
 and their lines, the end of each wake by the serial port and by silence, the
 two-cycle rows from wake 2 and wake 3, the first-boot rows from wake 1 and the
 gap to wake 2, the FAIL texts for a wake that was not heard, the capture loop's
-early exit and retunes, the first transmission and first wake lines and the
+early exit and retunes, the FIRST_FRAME row, the first wake line and the
 median RSSI."""
 import io
 import unittest
@@ -224,52 +224,98 @@ class BoundaryTest(unittest.TestCase):
 
 
 class TextTest(unittest.TestCase):
-    def test_first_transmission(self):
-        one = fed(heard(2.3, 3, 1.0))
-        self.assertAlmostEqual(one.first_transmission(), 2.3)
-        self.assertEqual(cycle.first_transmission_line(one, False), "first transmission: 2.3 s after reset")
-        self.assertEqual(cycle.first_transmission_line(one, True), "first transmission: not measured (--no-reset)")
-        self.assertEqual(cycle.first_transmission_line(fed([]), False),
-                         "first transmission: none heard before the deadline")
+    def first_frame(self, one, reason=""):
+        rep = report.Report(out=io.StringIO())
+        cycle.first_frame_row(rep, one, reason)
+        self.assertEqual([row.value for row in rep.rows], ["FIRST_FRAME"])
+        return rep.rows[0].cells()
 
-    def test_first_transmission_over_the_allowance(self):
-        one = fed(heard(6.2, 3, 1.0))
-        self.assertEqual(cycle.first_transmission_line(one, False),
-                         "first transmission: 6.2 s after reset, over the 5 s boot allowance")
-        one = fed(heard(6.2, 3, 1.0), tier=NONE)
-        self.assertEqual(cycle.first_transmission_line(one, False), "first transmission: 6.2 s after reset")
+    def test_first_frame_from_the_banner(self):
+        """The row counts from the banner, not the reset: a fox whose radio
+        was up at 1.4 s and heard at 2.3 s passes at 0.9 s, and so does a
+        Zigbee fox that formed its network for 14.6 s before its banner."""
+        one = fed(heard(2.3, 3, 1.0), radio_time=1.4)
+        self.assertAlmostEqual(one.first_transmission(), 2.3)
+        self.assertAlmostEqual(one.first_frame_delay(), 0.9)
+        self.assertEqual(self.first_frame(one),
+                         ["FIRST_FRAME", "5", "banner 1.4 s after reset", "0.9 s after the banner", "pass"])
+        one = fed(heard(15.0, 3, 1.0), radio_time=14.6, listen_time=0.5, granularity=1.0)
+        self.assertEqual(self.first_frame(one),
+                         ["FIRST_FRAME", "5", "banner 14.6 s after reset", "0.4 s after the banner", "pass"])
+
+    def test_first_frame_over_the_allowance_fails(self):
+        """The allowance is the boot allowance plus one frame spacing: 6 s for
+        a 1 s radio, 65 s for a Zigbee fox with PACKET_INTERVAL 60, whose
+        first Link Status may come that long after formation."""
+        one = fed(heard(7.4, 3, 1.0), radio_time=1.4)
+        self.assertEqual(self.first_frame(one),
+                         ["FIRST_FRAME", "5", "banner 1.4 s after reset", "6.0 s after the banner", "pass"])
+        one = fed(heard(7.5, 3, 1.0), radio_time=1.4)
+        self.assertEqual(self.first_frame(one),
+                         ["FIRST_FRAME", "5", "banner 1.4 s after reset", "6.1 s after the banner", "FAIL"])
+        one = fed(heard(304.6, 3, 1.0), radio_time=1.4, tier=NONE)
+        self.assertEqual(self.first_frame(one),
+                         ["FIRST_FRAME", "5", "banner 1.4 s after reset", "303.2 s after the banner", "FAIL"])
+        one = fed(heard(74.0, 3, 60.0), radio_time=14.6, granularity=60.0)
+        self.assertEqual(self.first_frame(one)[3:], ["59.4 s after the banner", "pass"])
+        one = fed(heard(80.0, 3, 60.0), radio_time=14.6, granularity=60.0)
+        self.assertEqual(self.first_frame(one)[3:], ["65.4 s after the banner", "FAIL"])
+
+    def test_first_frame_before_the_banner(self):
+        """A beacon the stack sent before the banner reached the host counts
+        from the banner too; a frame within 50 ms either way reads 0.0 s."""
+        one = fed(heard(1.3, 3, 1.0), radio_time=1.4, listen_time=0.5)
+        self.assertEqual(self.first_frame(one)[3:], ["0.1 s before the banner", "pass"])
+        one = fed(heard(1.37, 3, 1.0), radio_time=1.4, listen_time=0.5)
+        self.assertEqual(self.first_frame(one)[3:], ["0.0 s after the banner", "pass"])
+
+    def test_first_frame_not_heard_or_not_reset(self):
+        self.assertEqual(self.first_frame(fed([], radio_time=1.4)),
+                         ["FIRST_FRAME", "5", "banner 1.4 s after reset", "-", "unverified: no frame from the fox"])
+        self.assertEqual(self.first_frame(fed(heard(2.0, 3, 1.0))),
+                         ["FIRST_FRAME", "5", "-", "-", "unverified: the banner was not timed"])
         one = fed(heard(2.0, 3, 1.0), reset_time=None)
         self.assertIsNone(one.first_transmission())
+        self.assertEqual(self.first_frame(one, "--no-reset"),
+                         ["FIRST_FRAME", "-", "-", "-", "serial only: --no-reset"])
+        self.assertEqual(self.first_frame(one, "the fox was not reset"),
+                         ["FIRST_FRAME", "-", "-", "-", "serial only: the fox was not reset"])
 
-    def test_first_transmission_of_a_fox_that_was_not_reset(self):
-        """A USB stack without a reset leaves no instant to measure from, and
-        the line says so without blaming --no-reset."""
-        one = fed(heard(2.0, 3, 1.0), reset_time=None)
-        self.assertEqual(cycle.first_transmission_line(one, False),
-                         "first transmission: not measured (the fox was not reset)")
-        self.assertEqual(cycle.first_transmission_line(one, True), "first transmission: not measured (--no-reset)")
-
-    def test_first_transmission_when_the_capture_began_late(self):
+    def test_first_frame_when_the_capture_began_after_the_banner(self):
+        """A capture tuned after the readback that hears the fox at once has
+        an upper bound: within the allowance it passes, beyond it the row is
+        unverified, since the fox may have been on the air unheard."""
         one = fed(heard(3.1, 3, 1.0), listen_time=3.0, radio_time=1.4)
-        self.assertEqual(cycle.first_transmission_line(one, False),
-                         "first transmission: by 3.1 s after reset (the sniffer started listening at 3.0 s; "
-                         "the radio was up at 1.4 s by serial)")
+        self.assertTrue(one.heard_at_once())
+        self.assertAlmostEqual(one.listen_delay(), 1.6)
+        self.assertEqual(self.first_frame(one)[3:],
+                         ["by 1.7 s after the banner (the sniffer began listening 1.6 s after the banner)", "pass"])
+        one = fed(heard(15.0, 3, 1.0), listen_time=15.0, radio_time=14.6)
+        self.assertEqual(self.first_frame(one)[3:],
+                         ["by 0.4 s after the banner (the sniffer began listening 0.4 s after the banner)", "pass"])
+        one = fed(heard(9.1, 3, 1.0), listen_time=9.0, radio_time=1.4)
+        self.assertEqual(self.first_frame(one)[3:],
+                         ["by 7.7 s after the banner (the sniffer began listening 7.6 s after the banner)",
+                          "unverified: heard as soon as the sniffer listened"])
+
+    def test_capture_listening_before_the_banner_hears_the_first_frame(self):
+        """A capture tuned on the Starting on channel line was listening
+        before the radio came up, so its first frame is exact even when it
+        came within one frame spacing of the capture starting."""
+        one = fed(heard(1.5, 3, 1.0), listen_time=0.5, radio_time=1.4)
+        self.assertFalse(one.heard_at_once())
+        self.assertEqual(one.listen_delay(), 0.0)
+        self.assertAlmostEqual(one.late(), 0.5)
+        self.assertEqual(self.first_frame(one)[3:], ["0.1 s after the banner", "pass"])
         one = fed(heard(3.1, 3, 1.0), listen_time=3.0)
-        self.assertEqual(cycle.first_transmission_line(one, False),
-                         "first transmission: by 3.1 s after reset (the sniffer started listening at 3.0 s)")
-        one = fed(heard(7.1, 3, 1.0), listen_time=7.0, radio_time=6.2)
-        self.assertEqual(cycle.first_transmission_line(one, False),
-                         "first transmission: by 7.1 s after reset (the sniffer started listening at 7.0 s; "
-                         "the radio was up at 6.2 s by serial), over the 5 s boot allowance")
-        one = fed(heard(7.1, 3, 1.0), listen_time=7.0, radio_time=6.2, tier=NONE)
-        self.assertNotIn("allowance", cycle.first_transmission_line(one, False))
+        self.assertFalse(one.heard_at_once())
 
     def test_fox_heard_after_the_capture_began_is_not_late(self):
-        one = fed(heard(4.5, 2, 15.0) + [Heard(24.5, -50)], listen_time=3.0)
+        one = fed(heard(4.5, 2, 15.0) + [Heard(24.5, -50)], listen_time=3.0, radio_time=1.4)
         self.assertFalse(one.heard_at_once())
         self.assertAlmostEqual(one.late(), 3.0)
         self.assertAlmostEqual(one.boot_bound(), 7.5)
-        self.assertEqual(cycle.first_transmission_line(one, False), "first transmission: 4.5 s after reset")
+        self.assertEqual(self.first_frame(one)[3:], ["3.1 s after the banner", "pass"])
 
     def test_boot_bound_is_the_first_transmission_plus_the_late_start(self):
         self.assertAlmostEqual(fed(heard(2.3, 3, 1.0)).boot_bound(), 2.3)
